@@ -176,6 +176,19 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         break :blk null;
     };
 
+    // extract tags
+    var tags_list: std.ArrayList([]const u8) = .{};
+    defer tags_list.deinit(allocator);
+    if (record.get("tags")) |tags_val| {
+        if (tags_val == .array) {
+            for (tags_val.array.items) |tag_item| {
+                if (tag_item == .string) {
+                    try tags_list.append(allocator, tag_item.string);
+                }
+            }
+        }
+    }
+
     var content_buf: std.ArrayList(u8) = .{};
     defer content_buf.deinit(allocator);
 
@@ -201,8 +214,8 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         return;
     }
 
-    try db.insertDocument(uri, did, rkey, title, content_buf.items, created_at, publication_uri);
-    std.debug.print("indexed document: {s} ({} chars)\n", .{ uri, content_buf.items.len });
+    try db.insertDocument(uri, did, rkey, title, content_buf.items, created_at, publication_uri, tags_list.items);
+    std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri, content_buf.items.len, tags_list.items.len });
 }
 
 fn extractPlaintextFromPage(allocator: Allocator, buf: *std.ArrayList(u8), page: json.ObjectMap) !void {

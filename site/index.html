@@ -8,138 +8,138 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: monospace;
       background: #0a0a0a;
-      color: #e5e5e5;
+      color: #ccc;
       min-height: 100vh;
-      padding: 2rem;
+      padding: 1rem;
+      font-size: 14px;
+      line-height: 1.6;
     }
 
     .container {
-      max-width: 800px;
+      max-width: 600px;
       margin: 0 auto;
     }
 
+    a { color: #1B7340; text-decoration: none; }
+    a:hover { color: #2a9d5c; }
+
     h1 {
-      font-size: 1.5rem;
-      font-weight: 400;
+      font-size: 12px;
+      font-weight: normal;
       margin-bottom: 1.5rem;
-      color: #a3a3a3;
     }
 
-    h1 span { color: #22c55e; }
-    h1 a.src { font-size: 0.7rem; color: #525252; margin-left: 0.5rem; }
-    h1 a.src:hover { color: #737373; }
+    h1 a.title {
+      color: #888;
+    }
+
+    h1 a.title:hover {
+      color: #fff;
+    }
+
+    h1 a.src {
+      font-size: 10px;
+      color: #444;
+    }
 
     .search-box {
       display: flex;
       gap: 0.5rem;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
     }
 
     input[type="text"] {
       flex: 1;
-      padding: 0.75rem 1rem;
-      font-size: 1rem;
-      background: #171717;
-      border: 1px solid #262626;
-      border-radius: 0.5rem;
-      color: #e5e5e5;
-      outline: none;
+      padding: 0.5rem;
+      font-family: monospace;
+      font-size: 14px;
+      background: #111;
+      border: 1px solid #333;
+      color: #ccc;
     }
 
-    input[type="text"]:focus {
-      border-color: #22c55e;
-    }
+    input[type="text"]:focus { outline: 1px solid #1B7340; }
 
     button {
-      padding: 0.75rem 1.5rem;
-      font-size: 1rem;
-      background: #22c55e;
-      color: #0a0a0a;
-      border: none;
-      border-radius: 0.5rem;
+      padding: 0.5rem 1rem;
+      font-family: monospace;
+      font-size: 14px;
+      background: #111;
+      border: 1px solid #333;
+      color: #ccc;
       cursor: pointer;
-      font-weight: 500;
     }
 
-    button:hover { background: #16a34a; }
-    button:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+    button:hover { background: #222; }
+    button:disabled { color: #555; cursor: not-allowed; }
 
     .results {
       display: flex;
       flex-direction: column;
-      gap: 1rem;
     }
 
     .result {
-      background: #171717;
-      border: 1px solid #262626;
-      border-radius: 0.5rem;
-      padding: 1rem;
+      border-bottom: 1px solid #222;
+      padding: 1rem 0;
     }
 
-    .result:hover { border-color: #404040; }
+    .result:hover { background: #111; margin: 0 -0.5rem; padding: 1rem 0.5rem; }
 
     .result-title {
-      font-size: 1.1rem;
+      color: #fff;
       margin-bottom: 0.5rem;
-      color: #f5f5f5;
     }
 
-    .result-title a {
-      color: inherit;
-      text-decoration: none;
-    }
-
-    .result-title a:hover { color: #22c55e; }
+    .result-title a { color: inherit; }
+    .result-title a:hover { color: #2a9d5c; }
 
     .result-snippet {
-      font-size: 0.9rem;
-      color: #a3a3a3;
+      font-size: 12px;
+      color: #888;
       margin-bottom: 0.5rem;
-      line-height: 1.4;
+      line-height: 1.5;
     }
 
     .result-snippet mark {
-      background: #22c55e33;
-      color: #22c55e;
+      background: rgba(27, 115, 64, 0.3);
+      color: #2a9d5c;
       padding: 0 2px;
-      border-radius: 2px;
     }
 
     .result-meta {
-      font-size: 0.75rem;
-      color: #525252;
+      font-size: 11px;
+      color: #555;
     }
 
     .status {
       padding: 1rem;
       text-align: center;
-      color: #737373;
+      color: #666;
     }
 
-    .error { color: #ef4444; }
+    .error { color: #c44; }
 
     .empty-state {
       text-align: center;
-      padding: 3rem;
-      color: #525252;
+      padding: 2rem;
+      color: #555;
     }
 
     .empty-state p { margin-bottom: 0.5rem; }
 
     .stats {
-      font-size: 0.75rem;
-      color: #525252;
-      margin-top: 2rem;
+      font-size: 11px;
+      color: #555;
+      margin-top: 1.5rem;
       text-align: center;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1><span>leaflet</span> search <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a></h1>
+    <h1><a href="/" class="title">leaflet search</a> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a></h1>
 
     <div class="search-box">
       <input type="text" id="query" placeholder="search content..." autofocus>
@@ -206,9 +206,10 @@
         </div>`;
 
         for (const doc of results) {
+          // published docs use basePath, unpublished use leaflet.pub/p/{did}/{rkey}
           const leafletUrl = doc.basePath && doc.rkey
             ? `https://${doc.basePath}/${doc.rkey}`
-            : null;
+            : (doc.did && doc.rkey ? `https://leaflet.pub/p/${doc.did}/${doc.rkey}` : null);
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           html += `
             <div class="result">
@@ -219,7 +220,9 @@
               </div>
               <div class="result-snippet">${doc.snippet || ''}</div>
               <div class="result-meta">
-                ${date ? `${date} | ` : ''}${doc.basePath ? doc.basePath : 'unpublished'}
+                ${date ? `${date} | ` : ''}${doc.basePath
+                  ? `<a href="https://${doc.basePath}" target="_blank">${doc.basePath}</a>`
+                  : `<a href="https://leaflet.pub" target="_blank">leaflet.pub</a>`}
               </div>
             </div>
           `;

@@ -4,6 +4,9 @@ const json = std.json;
 const http = std.http;
 const Allocator = mem.Allocator;
 
+const URL_BUF_SIZE = 512;
+const AUTH_BUF_SIZE = 512;
+
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 
 // initialized by init(), null until then
@@ -57,6 +60,18 @@ fn initSchema() !void {
         \\)
     , &.{});
 
+    _ = try execSql(
+        \\CREATE TABLE IF NOT EXISTS document_tags (
+        \\  document_uri TEXT NOT NULL,
+        \\  tag TEXT NOT NULL,
+        \\  PRIMARY KEY (document_uri, tag)
+        \\)
+    , &.{});
+
+    _ = execSql("CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag)", &.{}) catch |err| {
+        std.debug.print("create index error: {}\n", .{err});
+    };
+
     // migrate: add columns if missing (ignore "duplicate column" errors)
     _ = execSql("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch |err| {
         std.debug.print("migrate documents: {}\n", .{err});
@@ -68,7 +83,7 @@ fn initSchema() !void {
     std.debug.print("turso schema initialized with FTS5\n", .{});
 }
 
-pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title: []const u8, content: []const u8, created_at: ?[]const u8, publication_uri: ?[]const u8) !void {
+pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title: []const u8, content: []const u8, created_at: ?[]const u8, publication_uri: ?[]const u8, tags: []const []const u8) !void {
     _ = try execSql(
         "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri) VALUES (?, ?, ?, ?, ?, ?, ?)",
         &.{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "" },
@@ -85,6 +100,19 @@ pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title:
     ) catch |err| {
         std.debug.print("insert FTS error for {s}: {}\n", .{ uri, err });
     };
+
+    // update tags - delete old, insert new
+    _ = execSql("DELETE FROM document_tags WHERE document_uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete tags error for {s}: {}\n", .{ uri, err });
+    };
+    for (tags) |tag| {
+        _ = execSql(
+            "INSERT OR IGNORE INTO document_tags (document_uri, tag) VALUES (?, ?)",
+            &.{ uri, tag },
+        ) catch |err| {
+            std.debug.print("insert tag error for {s}: {}\n", .{ uri, err });
+        };
+    }
 }
 
 pub fn insertPublication(uri: []const u8, did: []const u8, rkey: []const u8, name: []const u8, description: ?[]const u8, base_path: ?[]const u8) !void {
@@ -121,25 +149,48 @@ const SearchCol = struct {
     const count = 7;
 };
 
-pub fn searchDocuments(alloc: Allocator, query: []const u8) ![]const u8 {
+pub fn searchDocuments(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
     const temp_alloc = gpa.allocator();
 
-    const result = execSql(
-        \\SELECT f.uri, d.did, d.title,
-        \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-        \\  d.created_at, d.rkey, p.base_path
-        \\FROM documents_fts f
-        \\JOIN documents d ON f.uri = d.uri
-        \\LEFT JOIN publications p ON d.publication_uri = p.uri
-        \\WHERE documents_fts MATCH ?
-        \\ORDER BY rank LIMIT 50
-    , &.{query}) catch {
-        try output.writer.writeAll("[]");
-        return try output.toOwnedSlice();
-    };
+    // normalize query to match FTS5 tokenization (dots become spaces)
+    const normalized_query = try alloc.dupe(u8, query);
+    for (normalized_query) |*c| {
+        if (c.* == '.') c.* = ' ';
+    }
+
+    // build query based on whether we have a tag filter
+    const result = if (tag_filter) |tag|
+        execSql(
+            \\SELECT f.uri, d.did, d.title,
+            \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+            \\  d.created_at, d.rkey, p.base_path
+            \\FROM documents_fts f
+            \\JOIN documents d ON f.uri = d.uri
+            \\LEFT JOIN publications p ON d.publication_uri = p.uri
+            \\JOIN document_tags dt ON d.uri = dt.document_uri
+            \\WHERE documents_fts MATCH ? AND dt.tag = ?
+            \\ORDER BY rank LIMIT 50
+        , &.{ normalized_query, tag }) catch {
+            try output.writer.writeAll("[]");
+            return try output.toOwnedSlice();
+        }
+    else
+        execSql(
+            \\SELECT f.uri, d.did, d.title,
+            \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+            \\  d.created_at, d.rkey, p.base_path
+            \\FROM documents_fts f
+            \\JOIN documents d ON f.uri = d.uri
+            \\LEFT JOIN publications p ON d.publication_uri = p.uri
+            \\WHERE documents_fts MATCH ?
+            \\ORDER BY rank LIMIT 50
+        , &.{normalized_query}) catch {
+            try output.writer.writeAll("[]");
+            return try output.toOwnedSlice();
+        };
     defer temp_alloc.free(result);
 
     // parse JSON response - keep parsed alive while iterating rows
@@ -226,7 +277,7 @@ fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
     else
         url_value;
 
-    var url_buf: [512]u8 = undefined;
+    var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{host}) catch return error.UrlTooLong;
 
     // build request body
@@ -271,7 +322,7 @@ fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
     try jw.endArray();
     try jw.endObject();
 
-    var auth_buf: [512]u8 = undefined;
+    var auth_buf: [AUTH_BUF_SIZE]u8 = undefined;
     const auth_header = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token_value}) catch return error.AuthTooLong;
 
     var client: http.Client = .{ .allocator = alloc };
@@ -300,6 +351,67 @@ fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
     }
 
     return try response_body.toOwnedSlice();
+}
+
+pub fn getTags(alloc: Allocator) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    const temp_alloc = gpa.allocator();
+
+    const result = execSql(
+        \\SELECT tag, COUNT(*) as count
+        \\FROM document_tags
+        \\GROUP BY tag
+        \\ORDER BY count DESC
+        \\LIMIT 100
+    , &.{}) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer temp_alloc.free(result);
+
+    const parsed = json.parseFromSlice(json.Value, temp_alloc, result, .{}) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer parsed.deinit();
+
+    const rows = getRowsFromParsed(parsed.value) orelse {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+
+    for (rows.items) |row| {
+        if (row != .array or row.array.items.len < 2) continue;
+        const cols = row.array.items;
+
+        try jw.beginObject();
+        try jw.objectField("tag");
+        try jw.write(extractText(cols[0]));
+        try jw.objectField("count");
+        const count_val = cols[1];
+        const count: i64 = switch (count_val) {
+            .integer => |i| i,
+            .object => |obj| blk: {
+                const v = obj.get("value") orelse break :blk 0;
+                break :blk switch (v) {
+                    .integer => |i| i,
+                    .string => |s| std.fmt.parseInt(i64, s, 10) catch 0,
+                    else => 0,
+                };
+            },
+            else => 0,
+        };
+        try jw.write(count);
+        try jw.endObject();
+    }
+
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }
 
 pub fn getStats() struct { documents: i64, publications: i64 } {

@@ -4,11 +4,14 @@ const http = std.http;
 const mem = std.mem;
 const db = @import("db.zig");
 
+const HTTP_BUF_SIZE = 8192;
+const QUERY_PARAM_BUF_SIZE = 64;
+
 pub fn handleConnection(conn: net.Server.Connection) void {
     defer conn.stream.close();
 
-    var read_buffer: [8192]u8 = undefined;
-    var write_buffer: [8192]u8 = undefined;
+    var read_buffer: [HTTP_BUF_SIZE]u8 = undefined;
+    var write_buffer: [HTTP_BUF_SIZE]u8 = undefined;
 
     var reader = conn.stream.reader(&read_buffer);
     var writer = conn.stream.writer(&write_buffer);
@@ -42,6 +45,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
 
     if (mem.startsWith(u8, target, "/search")) {
         try handleSearch(request, target);
+    } else if (mem.eql(u8, target, "/tags")) {
+        try handleTags(request);
     } else if (mem.eql(u8, target, "/stats")) {
         try handleStats(request);
     } else if (mem.eql(u8, target, "/health")) {
@@ -56,19 +61,9 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    // parse query param: /search?q=something
-    const query = blk: {
-        if (mem.indexOf(u8, target, "?q=")) |idx| {
-            const encoded = target[idx + 3 ..];
-            // find end of query param (next & or end of string)
-            const end = mem.indexOf(u8, encoded, "&") orelse encoded.len;
-            const query_encoded = encoded[0..end];
-            // decode percent-encoding
-            const buf = try alloc.dupe(u8, query_encoded);
-            break :blk std.Uri.percentDecodeInPlace(buf);
-        }
-        break :blk "";
-    };
+    // parse query param: /search?q=something&tag=foo
+    const query = parseQueryParam(alloc, target, "q") catch "";
+    const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
 
     if (query.len == 0) {
         try sendJson(request, "{\"error\":\"missing q parameter\"}");
@@ -76,8 +71,34 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     }
 
     // perform FTS search - arena handles cleanup
-    const results = try db.searchDocuments(alloc, query);
+    const results = try db.searchDocuments(alloc, query, tag_filter);
     try sendJson(request, results);
+}
+
+fn handleTags(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const tags = try db.getTags(alloc);
+    try sendJson(request, tags);
+}
+
+fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const u8) ![]const u8 {
+    // look for ?param= or &param=
+    const patterns = [_][]const u8{ "?", "&" };
+    for (patterns) |prefix| {
+        var search_buf: [QUERY_PARAM_BUF_SIZE]u8 = undefined;
+        const search = std.fmt.bufPrint(&search_buf, "{s}{s}=", .{ prefix, param }) catch continue;
+        if (mem.indexOf(u8, target, search)) |idx| {
+            const encoded = target[idx + search.len ..];
+            const end = mem.indexOf(u8, encoded, "&") orelse encoded.len;
+            const query_encoded = encoded[0..end];
+            const buf = try alloc.dupe(u8, query_encoded);
+            return std.Uri.percentDecodeInPlace(buf);
+        }
+    }
+    return error.NotFound;
 }
 
 fn handleStats(request: *http.Server.Request) !void {
