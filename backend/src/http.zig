@@ -75,11 +75,9 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
         return;
     }
 
-    // perform FTS search
-    var results = try db.searchDocuments(alloc, query);
-    defer results.deinit(alloc);
-
-    try sendJson(request, results.items);
+    // perform FTS search - arena handles cleanup
+    const results = try db.searchDocuments(alloc, query);
+    try sendJson(request, results);
 }
 
 fn handleStats(request: *http.Server.Request) !void {

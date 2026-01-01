@@ -4,46 +4,12 @@ const json = std.json;
 const http = std.http;
 const Allocator = mem.Allocator;
 
-pub var turso_url: []const u8 = undefined;
-pub var turso_token: []const u8 = undefined;
-pub var mutex: std.Thread.Mutex = .{};
-
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 
-// Turso API response types
-const TursoResponse = struct {
-    results: []const TursoResult,
-};
-
-const TursoResult = struct {
-    type: []const u8,
-    response: ?TursoResultResponse = null,
-};
-
-const TursoResultResponse = struct {
-    type: []const u8,
-    result: ?TursoQueryResult = null,
-};
-
-const TursoQueryResult = struct {
-    rows: []const []const TursoValue,
-};
-
-const TursoValue = struct {
-    type: []const u8,
-    value: ?json.Value = null,
-};
-
-// Search result type
-pub const SearchResult = struct {
-    uri: []const u8,
-    did: []const u8,
-    title: []const u8,
-    snippet: []const u8,
-    createdAt: []const u8,
-    rkey: []const u8,
-    basePath: []const u8,
-};
+// initialized by init(), null until then
+var turso_url: ?[]const u8 = null;
+var turso_token: ?[]const u8 = null;
+var mutex: std.Thread.Mutex = .{};
 
 pub fn init() !void {
     turso_url = std.posix.getenv("TURSO_URL") orelse {
@@ -55,11 +21,9 @@ pub fn init() !void {
         return error.MissingEnv;
     };
 
-    std.debug.print("using turso database: {s}\n", .{turso_url});
+    std.debug.print("using turso database: {s}\n", .{turso_url.?});
     try initSchema();
 }
-
-pub fn close() void {}
 
 fn initSchema() !void {
     _ = try execSql(
@@ -93,9 +57,13 @@ fn initSchema() !void {
         \\)
     , &.{});
 
-    // migrate: add columns if missing
-    _ = execSql("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch {};
-    _ = execSql("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch {};
+    // migrate: add columns if missing (ignore "duplicate column" errors)
+    _ = execSql("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch |err| {
+        std.debug.print("migrate documents: {}\n", .{err});
+    };
+    _ = execSql("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch |err| {
+        std.debug.print("migrate publications: {}\n", .{err});
+    };
 
     std.debug.print("turso schema initialized with FTS5\n", .{});
 }
@@ -106,13 +74,16 @@ pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title:
         &.{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "" },
     );
 
-    _ = execSql("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
+    // update FTS index - delete old entry first, then insert new
+    _ = execSql("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete FTS error for {s}: {}\n", .{ uri, err });
+    };
 
     _ = execSql(
         "INSERT INTO documents_fts (uri, title, content) VALUES (?, ?, ?)",
         &.{ uri, title, content },
     ) catch |err| {
-        std.debug.print("insert FTS error: {}\n", .{err});
+        std.debug.print("insert FTS error for {s}: {}\n", .{ uri, err });
     };
 }
 
@@ -124,88 +95,111 @@ pub fn insertPublication(uri: []const u8, did: []const u8, rkey: []const u8, nam
 }
 
 pub fn deleteDocument(uri: []const u8) void {
-    _ = execSql("DELETE FROM documents WHERE uri = ?", &.{uri}) catch {};
-    _ = execSql("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
+    _ = execSql("DELETE FROM documents WHERE uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete document error for {s}: {}\n", .{ uri, err });
+    };
+    _ = execSql("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete document FTS error for {s}: {}\n", .{ uri, err });
+    };
 }
 
 pub fn deletePublication(uri: []const u8) void {
-    _ = execSql("DELETE FROM publications WHERE uri = ?", &.{uri}) catch {};
+    _ = execSql("DELETE FROM publications WHERE uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete publication error for {s}: {}\n", .{ uri, err });
+    };
 }
 
-pub fn searchDocuments(alloc: Allocator, query: []const u8) !std.ArrayList(u8) {
-    var output: std.ArrayList(u8) = .{};
-    const writer = output.writer(alloc);
+// column indices for search query results
+const SearchCol = struct {
+    const uri = 0;
+    const did = 1;
+    const title = 2;
+    const snippet = 3;
+    const created_at = 4;
+    const rkey = 5;
+    const base_path = 6;
+    const count = 7;
+};
+
+pub fn searchDocuments(alloc: Allocator, query: []const u8) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
 
     const temp_alloc = gpa.allocator();
 
     const result = execSql(
-        "SELECT f.uri, d.did, d.title, snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet, d.created_at, d.rkey, p.base_path FROM documents_fts f JOIN documents d ON f.uri = d.uri LEFT JOIN publications p ON d.publication_uri = p.uri WHERE documents_fts MATCH ? ORDER BY rank LIMIT 50",
-        &.{query},
-    ) catch {
-        try writer.writeAll("[]");
-        return output;
+        \\SELECT f.uri, d.did, d.title,
+        \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+        \\  d.created_at, d.rkey, p.base_path
+        \\FROM documents_fts f
+        \\JOIN documents d ON f.uri = d.uri
+        \\LEFT JOIN publications p ON d.publication_uri = p.uri
+        \\WHERE documents_fts MATCH ?
+        \\ORDER BY rank LIMIT 50
+    , &.{query}) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
     };
     defer temp_alloc.free(result);
 
-    const rows = extractRows(temp_alloc, result) catch {
-        try writer.writeAll("[]");
-        return output;
+    // parse JSON response - keep parsed alive while iterating rows
+    const parsed = json.parseFromSlice(json.Value, temp_alloc, result, .{}) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer parsed.deinit();
+
+    const rows = getRowsFromParsed(parsed.value) orelse {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
     };
 
-    var jw: json.Stringify = .{ .writer = &writer.any() };
+    var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
 
-    for (rows) |row| {
-        if (row.len < 7) continue;
+    for (rows.items) |row| {
+        if (row != .array or row.array.items.len < SearchCol.count) continue;
+        const cols = row.array.items;
 
         try jw.beginObject();
         try jw.objectField("uri");
-        try jw.write(extractText(row[0]));
+        try jw.write(extractText(cols[SearchCol.uri]));
         try jw.objectField("did");
-        try jw.write(extractText(row[1]));
+        try jw.write(extractText(cols[SearchCol.did]));
         try jw.objectField("title");
-        try jw.write(extractText(row[2]));
+        try jw.write(extractText(cols[SearchCol.title]));
         try jw.objectField("snippet");
-        try jw.write(extractText(row[3]));
+        try jw.write(extractText(cols[SearchCol.snippet]));
         try jw.objectField("createdAt");
-        try jw.write(extractText(row[4]));
+        try jw.write(extractText(cols[SearchCol.created_at]));
         try jw.objectField("rkey");
-        try jw.write(extractText(row[5]));
+        try jw.write(extractText(cols[SearchCol.rkey]));
         try jw.objectField("basePath");
-        try jw.write(extractText(row[6]));
+        try jw.write(extractText(cols[SearchCol.base_path]));
         try jw.endObject();
     }
 
     try jw.endArray();
-    return output;
+    return try output.toOwnedSlice();
 }
 
-fn extractRows(alloc: Allocator, result: []const u8) ![]const []const json.Value {
-    const parsed = try json.parseFromSlice(json.Value, alloc, result, .{});
-    defer parsed.deinit();
-
-    const results = parsed.value.object.get("results") orelse return &.{};
-    if (results != .array or results.array.items.len == 0) return &.{};
+fn getRowsFromParsed(value: json.Value) ?json.Array {
+    const results = value.object.get("results") orelse return null;
+    if (results != .array or results.array.items.len == 0) return null;
 
     const first = results.array.items[0];
-    if (first != .object) return &.{};
+    if (first != .object) return null;
 
-    const resp = first.object.get("response") orelse return &.{};
-    if (resp != .object) return &.{};
+    const resp = first.object.get("response") orelse return null;
+    if (resp != .object) return null;
 
-    const res = resp.object.get("result") orelse return &.{};
-    if (res != .object) return &.{};
+    const res = resp.object.get("result") orelse return null;
+    if (res != .object) return null;
 
-    const rows = res.object.get("rows") orelse return &.{};
-    if (rows != .array) return &.{};
+    const rows = res.object.get("rows") orelse return null;
+    if (rows != .array) return null;
 
-    var result_rows = std.ArrayList([]const json.Value).init(alloc);
-    for (rows.array.items) |row| {
-        if (row == .array) {
-            try result_rows.append(row.array.items);
-        }
-    }
-    return result_rows.toOwnedSlice();
+    return rows.array;
 }
 
 fn extractText(val: json.Value) []const u8 {
@@ -222,21 +216,24 @@ fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
 
     const alloc = gpa.allocator();
 
-    // libsql:// -> https://
+    const url_value = turso_url orelse return error.NotInitialized;
+    const token_value = turso_token orelse return error.NotInitialized;
+
+    // strip libsql:// prefix if present, use https://
+    const libsql_prefix = "libsql://";
+    const host = if (mem.startsWith(u8, url_value, libsql_prefix))
+        url_value[libsql_prefix.len..]
+    else
+        url_value;
+
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{
-        if (mem.startsWith(u8, turso_url, "libsql://"))
-            turso_url[9..]
-        else
-            turso_url,
-    }) catch return error.UrlTooLong;
+    const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{host}) catch return error.UrlTooLong;
 
     // build request body
-    var body: std.ArrayList(u8) = .{};
-    defer body.deinit(alloc);
-    const writer = body.writer(alloc);
+    var body: std.Io.Writer.Allocating = .init(alloc);
+    defer body.deinit();
 
-    var jw: json.Stringify = .{ .writer = &writer.any() };
+    var jw: json.Stringify = .{ .writer = &body.writer };
     try jw.beginObject();
     try jw.objectField("requests");
     try jw.beginArray();
@@ -275,7 +272,7 @@ fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
     try jw.endObject();
 
     var auth_buf: [512]u8 = undefined;
-    const auth_header = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{turso_token}) catch return error.AuthTooLong;
+    const auth_header = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token_value}) catch return error.AuthTooLong;
 
     var client: http.Client = .{ .allocator = alloc };
     defer client.deinit();
@@ -290,7 +287,7 @@ fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
             .content_type = .{ .override = "application/json" },
             .authorization = .{ .override = auth_header },
         },
-        .payload = body.items,
+        .payload = body.written(),
         .response_writer = &response_body.writer,
     }) catch |err| {
         std.debug.print("turso request failed: {}\n", .{err});
@@ -320,11 +317,16 @@ pub fn getStats() struct { documents: i64, publications: i64 } {
 
 fn parseCount(result: []const u8) i64 {
     const alloc = gpa.allocator();
-    const rows = extractRows(alloc, result) catch return 0;
-    if (rows.len == 0) return 0;
-    if (rows[0].len == 0) return 0;
+    const parsed = json.parseFromSlice(json.Value, alloc, result, .{}) catch return 0;
+    defer parsed.deinit();
 
-    const val = rows[0][0];
+    const rows = getRowsFromParsed(parsed.value) orelse return 0;
+    if (rows.items.len == 0) return 0;
+
+    const first_row = rows.items[0];
+    if (first_row != .array or first_row.array.items.len == 0) return 0;
+
+    const val = first_row.array.items[0];
     return switch (val) {
         .integer => |i| i,
         .object => |obj| blk: {

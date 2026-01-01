@@ -16,7 +16,6 @@ pub fn main() !void {
 
     // init turso
     try db.init();
-    defer db.close();
 
     // start tap consumer in background
     const tap_thread = try Thread.spawn(.{}, tap.consumer, .{allocator});
