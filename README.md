@@ -1,8 +1,10 @@
 # leaflet-search
 
+by [@zzstoatzz.io](https://bsky.app/profile/zzstoatzz.io)
+
 full-text search for [leaflet](https://leaflet.pub) documents on the ATProto network.
 
-**live:** [leaflet-search.zzstoatzz.io](https://leaflet-search.zzstoatzz.io)
+**live:** [leaflet-search.pages.dev](https://leaflet-search.pages.dev)
 
 ## how it works
 
