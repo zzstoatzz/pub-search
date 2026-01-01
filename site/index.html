@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>leaflet search</title>
+  <meta name="description" content="full-text search for leaflet documents on atproto">
+  <meta property="og:title" content="leaflet search">
+  <meta property="og:description" content="full-text search for leaflet documents on atproto">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="leaflet search">
+  <meta name="twitter:description" content="full-text search for leaflet documents on atproto">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -113,6 +120,29 @@
       color: #555;
     }
 
+    .entity-type {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-right: 8px;
+      text-transform: lowercase;
+    }
+
+    .entity-type.article {
+      background: rgba(27, 115, 64, 0.2);
+      color: #2a9d5c;
+    }
+
+    .entity-type.looseleaf {
+      background: rgba(100, 100, 100, 0.2);
+      color: #888;
+    }
+
+    .entity-type.publication {
+      background: rgba(64, 115, 180, 0.2);
+      color: #6a9fd4;
+    }
+
     .status {
       padding: 1rem;
       text-align: center;
@@ -206,14 +236,25 @@
         </div>`;
 
         for (const doc of results) {
-          // published docs use basePath, unpublished use leaflet.pub/p/{did}/{rkey}
-          const leafletUrl = doc.basePath && doc.rkey
-            ? `https://${doc.basePath}/${doc.rkey}`
-            : (doc.did && doc.rkey ? `https://leaflet.pub/p/${doc.did}/${doc.rkey}` : null);
+          const entityType = doc.type || 'article';
+
+          // build URL based on entity type
+          let leafletUrl = null;
+          if (entityType === 'publication') {
+            // publications link to their base path
+            leafletUrl = doc.basePath ? `https://${doc.basePath}` : null;
+          } else {
+            // articles and looseleafs link to specific document
+            leafletUrl = doc.basePath && doc.rkey
+              ? `https://${doc.basePath}/${doc.rkey}`
+              : (doc.did && doc.rkey ? `https://leaflet.pub/p/${doc.did}/${doc.rkey}` : null);
+          }
+
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           html += `
             <div class="result">
               <div class="result-title">
+                <span class="entity-type ${entityType}">${entityType}</span>
                 ${leafletUrl
                   ? `<a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
                   : escapeHtml(doc.title || 'Untitled')}

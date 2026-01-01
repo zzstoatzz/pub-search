@@ -61,6 +61,14 @@ fn initSchema() !void {
     , &.{});
 
     _ = try execSql(
+        \\CREATE VIRTUAL TABLE IF NOT EXISTS publications_fts USING fts5(
+        \\  uri UNINDEXED,
+        \\  name,
+        \\  description
+        \\)
+    , &.{});
+
+    _ = try execSql(
         \\CREATE TABLE IF NOT EXISTS document_tags (
         \\  document_uri TEXT NOT NULL,
         \\  tag TEXT NOT NULL,
@@ -120,6 +128,18 @@ pub fn insertPublication(uri: []const u8, did: []const u8, rkey: []const u8, nam
         "INSERT OR REPLACE INTO publications (uri, did, rkey, name, description, base_path) VALUES (?, ?, ?, ?, ?, ?)",
         &.{ uri, did, rkey, name, description orelse "", base_path orelse "" },
     );
+
+    // update FTS index - delete old entry first, then insert new
+    _ = execSql("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete publication FTS error for {s}: {}\n", .{ uri, err });
+    };
+
+    _ = execSql(
+        "INSERT INTO publications_fts (uri, name, description) VALUES (?, ?, ?)",
+        &.{ uri, name, description orelse "" },
+    ) catch |err| {
+        std.debug.print("insert publication FTS error for {s}: {}\n", .{ uri, err });
+    };
 }
 
 pub fn deleteDocument(uri: []const u8) void {
@@ -135,10 +155,13 @@ pub fn deletePublication(uri: []const u8) void {
     _ = execSql("DELETE FROM publications WHERE uri = ?", &.{uri}) catch |err| {
         std.debug.print("delete publication error for {s}: {}\n", .{ uri, err });
     };
+    _ = execSql("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch |err| {
+        std.debug.print("delete publication FTS error for {s}: {}\n", .{ uri, err });
+    };
 }
 
-// column indices for search query results
-const SearchCol = struct {
+// column indices for document search query results
+const DocSearchCol = struct {
     const uri = 0;
     const did = 1;
     const title = 2;
@@ -146,10 +169,22 @@ const SearchCol = struct {
     const created_at = 4;
     const rkey = 5;
     const base_path = 6;
-    const count = 7;
+    const has_publication = 7;
+    const count = 8;
 };
 
-pub fn searchDocuments(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
+// column indices for publication search query results
+const PubSearchCol = struct {
+    const uri = 0;
+    const did = 1;
+    const name = 2;
+    const snippet = 3;
+    const rkey = 4;
+    const base_path = 5;
+    const count = 6;
+};
+
+pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
@@ -161,73 +196,113 @@ pub fn searchDocuments(alloc: Allocator, query: []const u8, tag_filter: ?[]const
         if (c.* == '.') c.* = ' ';
     }
 
-    // build query based on whether we have a tag filter
-    const result = if (tag_filter) |tag|
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+
+    // search documents (articles and looseleafs)
+    const doc_result = if (tag_filter) |tag|
         execSql(
             \\SELECT f.uri, d.did, d.title,
             \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-            \\  d.created_at, d.rkey, p.base_path
+            \\  d.created_at, d.rkey, p.base_path,
+            \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
             \\FROM documents_fts f
             \\JOIN documents d ON f.uri = d.uri
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\JOIN document_tags dt ON d.uri = dt.document_uri
             \\WHERE documents_fts MATCH ? AND dt.tag = ?
-            \\ORDER BY rank LIMIT 50
-        , &.{ normalized_query, tag }) catch {
-            try output.writer.writeAll("[]");
-            return try output.toOwnedSlice();
-        }
+            \\ORDER BY rank LIMIT 40
+        , &.{ normalized_query, tag }) catch null
     else
         execSql(
             \\SELECT f.uri, d.did, d.title,
             \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-            \\  d.created_at, d.rkey, p.base_path
+            \\  d.created_at, d.rkey, p.base_path,
+            \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
             \\FROM documents_fts f
             \\JOIN documents d ON f.uri = d.uri
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ?
-            \\ORDER BY rank LIMIT 50
-        , &.{normalized_query}) catch {
-            try output.writer.writeAll("[]");
-            return try output.toOwnedSlice();
-        };
-    defer temp_alloc.free(result);
+            \\ORDER BY rank LIMIT 40
+        , &.{normalized_query}) catch null;
 
-    // parse JSON response - keep parsed alive while iterating rows
-    const parsed = json.parseFromSlice(json.Value, temp_alloc, result, .{}) catch {
-        try output.writer.writeAll("[]");
-        return try output.toOwnedSlice();
-    };
-    defer parsed.deinit();
+    if (doc_result) |result| {
+        defer temp_alloc.free(result);
+        if (json.parseFromSlice(json.Value, temp_alloc, result, .{})) |parsed| {
+            defer parsed.deinit();
+            if (getRowsFromParsed(parsed.value)) |rows| {
+                for (rows.items) |row| {
+                    if (row != .array or row.array.items.len < DocSearchCol.count) continue;
+                    const cols = row.array.items;
 
-    const rows = getRowsFromParsed(parsed.value) orelse {
-        try output.writer.writeAll("[]");
-        return try output.toOwnedSlice();
-    };
+                    // determine entity type: article (has publication) or looseleaf (no publication)
+                    const has_pub = extractInt(cols[DocSearchCol.has_publication]) != 0;
+                    const entity_type = if (has_pub) "article" else "looseleaf";
 
-    var jw: json.Stringify = .{ .writer = &output.writer };
-    try jw.beginArray();
+                    try jw.beginObject();
+                    try jw.objectField("type");
+                    try jw.write(entity_type);
+                    try jw.objectField("uri");
+                    try jw.write(extractText(cols[DocSearchCol.uri]));
+                    try jw.objectField("did");
+                    try jw.write(extractText(cols[DocSearchCol.did]));
+                    try jw.objectField("title");
+                    try jw.write(extractText(cols[DocSearchCol.title]));
+                    try jw.objectField("snippet");
+                    try jw.write(extractText(cols[DocSearchCol.snippet]));
+                    try jw.objectField("createdAt");
+                    try jw.write(extractText(cols[DocSearchCol.created_at]));
+                    try jw.objectField("rkey");
+                    try jw.write(extractText(cols[DocSearchCol.rkey]));
+                    try jw.objectField("basePath");
+                    try jw.write(extractText(cols[DocSearchCol.base_path]));
+                    try jw.endObject();
+                }
+            }
+        } else |_| {}
+    }
 
-    for (rows.items) |row| {
-        if (row != .array or row.array.items.len < SearchCol.count) continue;
-        const cols = row.array.items;
+    // search publications (only if no tag filter - publications don't have tags)
+    if (tag_filter == null) {
+        const pub_result = execSql(
+            \\SELECT f.uri, p.did, p.name,
+            \\  snippet(publications_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+            \\  p.rkey, p.base_path
+            \\FROM publications_fts f
+            \\JOIN publications p ON f.uri = p.uri
+            \\WHERE publications_fts MATCH ?
+            \\ORDER BY rank LIMIT 10
+        , &.{normalized_query}) catch null;
 
-        try jw.beginObject();
-        try jw.objectField("uri");
-        try jw.write(extractText(cols[SearchCol.uri]));
-        try jw.objectField("did");
-        try jw.write(extractText(cols[SearchCol.did]));
-        try jw.objectField("title");
-        try jw.write(extractText(cols[SearchCol.title]));
-        try jw.objectField("snippet");
-        try jw.write(extractText(cols[SearchCol.snippet]));
-        try jw.objectField("createdAt");
-        try jw.write(extractText(cols[SearchCol.created_at]));
-        try jw.objectField("rkey");
-        try jw.write(extractText(cols[SearchCol.rkey]));
-        try jw.objectField("basePath");
-        try jw.write(extractText(cols[SearchCol.base_path]));
-        try jw.endObject();
+        if (pub_result) |result| {
+            defer temp_alloc.free(result);
+            if (json.parseFromSlice(json.Value, temp_alloc, result, .{})) |parsed| {
+                defer parsed.deinit();
+                if (getRowsFromParsed(parsed.value)) |rows| {
+                    for (rows.items) |row| {
+                        if (row != .array or row.array.items.len < PubSearchCol.count) continue;
+                        const cols = row.array.items;
+
+                        try jw.beginObject();
+                        try jw.objectField("type");
+                        try jw.write("publication");
+                        try jw.objectField("uri");
+                        try jw.write(extractText(cols[PubSearchCol.uri]));
+                        try jw.objectField("did");
+                        try jw.write(extractText(cols[PubSearchCol.did]));
+                        try jw.objectField("title");
+                        try jw.write(extractText(cols[PubSearchCol.name]));
+                        try jw.objectField("snippet");
+                        try jw.write(extractText(cols[PubSearchCol.snippet]));
+                        try jw.objectField("rkey");
+                        try jw.write(extractText(cols[PubSearchCol.rkey]));
+                        try jw.objectField("basePath");
+                        try jw.write(extractText(cols[PubSearchCol.base_path]));
+                        try jw.endObject();
+                    }
+                }
+            } else |_| {}
+        }
     }
 
     try jw.endArray();
@@ -258,6 +333,21 @@ fn extractText(val: json.Value) []const u8 {
         .string => |s| s,
         .object => |obj| if (obj.get("value")) |v| (if (v == .string) v.string else "") else "",
         else => "",
+    };
+}
+
+fn extractInt(val: json.Value) i64 {
+    return switch (val) {
+        .integer => |i| i,
+        .object => |obj| blk: {
+            const v = obj.get("value") orelse break :blk 0;
+            break :blk switch (v) {
+                .integer => |i| i,
+                .string => |s| std.fmt.parseInt(i64, s, 10) catch 0,
+                else => 0,
+            };
+        },
+        else => 0,
     };
 }
 

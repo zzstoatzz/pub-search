@@ -71,7 +71,7 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     }
 
     // perform FTS search - arena handles cleanup
-    const results = try db.searchDocuments(alloc, query, tag_filter);
+    const results = try db.search(alloc, query, tag_filter);
     try sendJson(request, results);
 }
 
