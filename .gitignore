@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+dist/
+.env
+*.db
+.zig-cache/
+zig-out/

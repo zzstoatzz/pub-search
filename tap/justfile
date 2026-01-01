@@ -1,0 +1,13 @@
+# tap instance for leaflet-search
+
+deploy:
+    fly deploy --app leaflet-search-tap
+
+status:
+    fly status --app leaflet-search-tap
+
+logs:
+    fly logs --app leaflet-search-tap
+
+ssh:
+    fly ssh console --app leaflet-search-tap

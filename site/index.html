@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>leaflet search</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 400;
+      margin-bottom: 1.5rem;
+      color: #a3a3a3;
+    }
+
+    h1 span { color: #22c55e; }
+    h1 a.src { font-size: 0.7rem; color: #525252; margin-left: 0.5rem; }
+    h1 a.src:hover { color: #737373; }
+
+    .search-box {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      background: #171717;
+      border: 1px solid #262626;
+      border-radius: 0.5rem;
+      color: #e5e5e5;
+      outline: none;
+    }
+
+    input[type="text"]:focus {
+      border-color: #22c55e;
+    }
+
+    button {
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      background: #22c55e;
+      color: #0a0a0a;
+      border: none;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    button:hover { background: #16a34a; }
+    button:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+
+    .results {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .result {
+      background: #171717;
+      border: 1px solid #262626;
+      border-radius: 0.5rem;
+      padding: 1rem;
+    }
+
+    .result:hover { border-color: #404040; }
+
+    .result-title {
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+      color: #f5f5f5;
+    }
+
+    .result-title a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .result-title a:hover { color: #22c55e; }
+
+    .result-snippet {
+      font-size: 0.9rem;
+      color: #a3a3a3;
+      margin-bottom: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .result-snippet mark {
+      background: #22c55e33;
+      color: #22c55e;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+
+    .result-meta {
+      font-size: 0.75rem;
+      color: #525252;
+    }
+
+    .status {
+      padding: 1rem;
+      text-align: center;
+      color: #737373;
+    }
+
+    .error { color: #ef4444; }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #525252;
+    }
+
+    .empty-state p { margin-bottom: 0.5rem; }
+
+    .stats {
+      font-size: 0.75rem;
+      color: #525252;
+      margin-top: 2rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><span>leaflet</span> search <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a></h1>
+
+    <div class="search-box">
+      <input type="text" id="query" placeholder="search content..." autofocus>
+      <button id="search-btn">search</button>
+    </div>
+
+    <div id="results" class="results">
+      <div class="empty-state">
+        <p>full-text search for leaflet documents</p>
+        <p>searches titles and content</p>
+      </div>
+    </div>
+
+    <div id="stats" class="stats"></div>
+  </div>
+
+  <script>
+    const API_URL = 'https://leaflet-search-backend.fly.dev';
+
+    const queryInput = document.getElementById('query');
+    const searchBtn = document.getElementById('search-btn');
+    const resultsDiv = document.getElementById('results');
+    const statsDiv = document.getElementById('stats');
+
+    async function search(query) {
+      if (!query.trim()) return;
+
+      searchBtn.disabled = true;
+      const searchUrl = `${API_URL}/search?q=${encodeURIComponent(query)}`;
+      resultsDiv.innerHTML = `<div class="status">searching...<br><code style="font-size:0.7rem;color:#525252">${searchUrl}</code></div>`;
+
+      try {
+        const res = await fetch(searchUrl);
+        const rawText = await res.text();
+        let results;
+
+        try {
+          results = JSON.parse(rawText);
+        } catch (parseErr) {
+          resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
+          return;
+        }
+
+        if (results.error) {
+          resultsDiv.innerHTML = `<div class="status error">${results.error}</div>`;
+          return;
+        }
+
+        if (results.length === 0) {
+          resultsDiv.innerHTML = `
+            <div class="empty-state">
+              <p>no results for "${escapeHtml(query)}"</p>
+              <p>try different keywords</p>
+              <p style="margin-top:1rem;font-size:0.7rem;color:#404040">query sent: <code>${searchUrl}</code></p>
+              <p style="font-size:0.7rem;color:#404040">response: <code>${escapeHtml(rawText)}</code></p>
+            </div>
+          `;
+          statsDiv.textContent = '';
+          return;
+        }
+
+        let html = `<div style="font-size:0.7rem;color:#404040;margin-bottom:1rem;padding:0.5rem;background:#111;border-radius:4px">
+          query: <code>${escapeHtml(query)}</code> | url: <code>${searchUrl}</code> | ${results.length} results
+        </div>`;
+
+        // resolve all unique DIDs in parallel
+        const uniqueDids = [...new Set(results.map(d => parseUri(d.uri).did))];
+        await Promise.all(uniqueDids.map(did => resolveHandle(did)));
+
+        for (const doc of results) {
+          const { did, rkey } = parseUri(doc.uri);
+          const handle = handleCache.get(did);
+          const leafletUrl = handle ? buildLeafletUrl(handle, rkey) : `https://leaflet.pub/${rkey}`;
+          const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
+          html += `
+            <div class="result">
+              <div class="result-title">
+                <a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>
+              </div>
+              <div class="result-snippet">${doc.snippet || ''}</div>
+              <div class="result-meta">
+                ${date ? `${date} | ` : ''}${handle ? `@${handle} | ` : ''}uri: ${escapeHtml(doc.uri)}
+              </div>
+            </div>
+          `;
+        }
+
+        resultsDiv.innerHTML = html;
+        statsDiv.textContent = `${results.length} results`;
+
+      } catch (err) {
+        resultsDiv.innerHTML = `<div class="status error">error: ${err.message}<br><code style="font-size:0.7rem">${searchUrl}</code></div>`;
+      } finally {
+        searchBtn.disabled = false;
+      }
+    }
+
+    // cache DID -> handle resolutions
+    const handleCache = new Map();
+
+    async function resolveHandle(did) {
+      if (handleCache.has(did)) return handleCache.get(did);
+      try {
+        const res = await fetch(`https://plc.directory/${did}`);
+        const doc = await res.json();
+        // alsoKnownAs contains at://handle entries
+        const aka = doc.alsoKnownAs?.find(u => u.startsWith('at://'));
+        const handle = aka ? aka.replace('at://', '') : null;
+        handleCache.set(did, handle);
+        return handle;
+      } catch {
+        handleCache.set(did, null);
+        return null;
+      }
+    }
+
+    function parseUri(uri) {
+      // at://did:plc:xxx/pub.leaflet.document/rkey
+      const parts = uri.replace('at://', '').split('/');
+      return { did: parts[0], collection: parts[1], rkey: parts[2] };
+    }
+
+    function buildLeafletUrl(handle, rkey) {
+      // handle like "nate.io" -> nate (subdomain is first part before .)
+      const subdomain = handle.split('.')[0];
+      return `https://${subdomain}.leaflet.pub/${rkey}`;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[c]);
+    }
+
+    searchBtn.addEventListener('click', () => {
+      const q = queryInput.value;
+      if (q.trim()) history.pushState(null, '', `?q=${encodeURIComponent(q)}`);
+      search(q);
+    });
+    queryInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        const q = queryInput.value;
+        if (q.trim()) history.pushState(null, '', `?q=${encodeURIComponent(q)}`);
+        search(q);
+      }
+    });
+
+    // handle back/forward navigation
+    window.addEventListener('popstate', () => {
+      const params = new URLSearchParams(location.search);
+      const q = params.get('q') || '';
+      queryInput.value = q;
+      if (q) search(q);
+    });
+
+    // check for ?q= on page load
+    const initialParams = new URLSearchParams(location.search);
+    const initialQuery = initialParams.get('q');
+    if (initialQuery) {
+      queryInput.value = initialQuery;
+      search(initialQuery);
+    }
+
+    // check backend health on load
+    fetch(`${API_URL}/stats`)
+      .then(r => r.json())
+      .then(data => {
+        statsDiv.textContent = `index: ${data.documents} documents, ${data.publications} publications`;
+      })
+      .catch(() => {
+        statsDiv.textContent = 'backend: connecting...';
+      });
+  </script>
+</body>
+</html>

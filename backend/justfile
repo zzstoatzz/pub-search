@@ -1,0 +1,19 @@
+# leaflet-search backend
+
+build:
+    zig build
+
+run:
+    zig build run
+
+deploy:
+    fly deploy --app leaflet-search-backend
+
+status:
+    fly status --app leaflet-search-backend
+
+logs:
+    fly logs --app leaflet-search-backend
+
+ssh:
+    fly ssh console --app leaflet-search-backend
