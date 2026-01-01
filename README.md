@@ -2,7 +2,7 @@
 
 by [@zzstoatzz.io](https://bsky.app/profile/zzstoatzz.io)
 
-full-text search for [leaflet](https://leaflet.pub) documents on the ATProto network.
+search for [leaflet](https://leaflet.pub).
 
 **live:** [leaflet-search.pages.dev](https://leaflet-search.pages.dev)
 
