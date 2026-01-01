@@ -8,9 +8,9 @@ search for [leaflet](https://leaflet.pub).
 
 ## how it works
 
-1. **tap** subscribes to the ATProto firehose, filtering for `pub.leaflet.document` and `pub.leaflet.publication` records
-2. **backend** indexes documents into SQLite FTS5 via [Turso](https://turso.tech), serves search API
-3. **site** is a static frontend hosted on Cloudflare Pages
+1. **tap** syncs leaflet content from the network
+2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API
+3. **site** static frontend on Cloudflare Pages
 
 ## api
 
@@ -25,8 +25,8 @@ search returns three entity types: `article` (document in a publication), `loose
 
 ## stack
 
-- ~450 LOC of [Zig](https://ziglang.org) for the backend
-- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) for ATProto sync
+- [Zig](https://ziglang.org) backend
+- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) for sync
 - [Turso](https://turso.tech) for SQLite + FTS5
 - [Fly.io](https://fly.io) for hosting
-- [Cloudflare Pages](https://pages.cloudflare.com) for the frontend
+- [Cloudflare Pages](https://pages.cloudflare.com) for frontend
