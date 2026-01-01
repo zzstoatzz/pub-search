@@ -157,6 +157,14 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
     if (title_val != .string) return;
     const title = title_val.string;
 
+    // get publication URI
+    const publication_uri: ?[]const u8 = blk: {
+        if (record.get("publication")) |v| {
+            if (v == .string) break :blk v.string;
+        }
+        break :blk null;
+    };
+
     // get createdAt (optional, might be publishedAt)
     const created_at: ?[]const u8 = blk: {
         if (record.get("publishedAt")) |v| {
@@ -193,7 +201,7 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         return;
     }
 
-    try db.insertDocument(uri, did, rkey, title, content_buf.items, created_at);
+    try db.insertDocument(uri, did, rkey, title, content_buf.items, created_at, publication_uri);
     std.debug.print("indexed document: {s} ({} chars)\n", .{ uri, content_buf.items.len });
 }
 
@@ -290,6 +298,13 @@ fn processPublication(uri: []const u8, did: []const u8, rkey: []const u8, record
         break :blk null;
     };
 
-    try db.insertPublication(uri, did, rkey, name, description);
-    std.debug.print("indexed publication: {s}\n", .{uri});
+    const base_path: ?[]const u8 = blk: {
+        if (record.get("base_path")) |v| {
+            if (v == .string) break :blk v.string;
+        }
+        break :blk null;
+    };
+
+    try db.insertPublication(uri, did, rkey, name, description, base_path);
+    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, base_path orelse "none" });
 }

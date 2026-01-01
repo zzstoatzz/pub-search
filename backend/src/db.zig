@@ -36,7 +36,8 @@ fn initSchema() !void {
         \\  rkey TEXT NOT NULL,
         \\  title TEXT NOT NULL,
         \\  content TEXT NOT NULL,
-        \\  created_at TEXT
+        \\  created_at TEXT,
+        \\  publication_uri TEXT
         \\)
     );
 
@@ -54,17 +55,22 @@ fn initSchema() !void {
         \\  did TEXT NOT NULL,
         \\  rkey TEXT NOT NULL,
         \\  name TEXT NOT NULL,
-        \\  description TEXT
+        \\  description TEXT,
+        \\  base_path TEXT
         \\)
     );
+
+    // migrate: add columns if missing
+    _ = execSqlNoArgs("ALTER TABLE documents ADD COLUMN publication_uri TEXT") catch {};
+    _ = execSqlNoArgs("ALTER TABLE publications ADD COLUMN base_path TEXT") catch {};
 
     std.debug.print("turso schema initialized with FTS5\n", .{});
 }
 
-pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title: []const u8, content: []const u8, created_at: ?[]const u8) !void {
+pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title: []const u8, content: []const u8, created_at: ?[]const u8, publication_uri: ?[]const u8) !void {
     _ = try execSqlWithArgs(
-        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        &[_][]const u8{ uri, did, rkey, title, content, created_at orelse "" },
+        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        &[_][]const u8{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "" },
     );
 
     // delete from fts first (ignore errors)
@@ -78,10 +84,10 @@ pub fn insertDocument(uri: []const u8, did: []const u8, rkey: []const u8, title:
     };
 }
 
-pub fn insertPublication(uri: []const u8, did: []const u8, rkey: []const u8, name: []const u8, description: ?[]const u8) !void {
+pub fn insertPublication(uri: []const u8, did: []const u8, rkey: []const u8, name: []const u8, description: ?[]const u8, base_path: ?[]const u8) !void {
     _ = try execSqlWithArgs(
-        "INSERT OR REPLACE INTO publications (uri, did, rkey, name, description) VALUES (?, ?, ?, ?, ?)",
-        &[_][]const u8{ uri, did, rkey, name, description orelse "" },
+        "INSERT OR REPLACE INTO publications (uri, did, rkey, name, description, base_path) VALUES (?, ?, ?, ?, ?, ?)",
+        &[_][]const u8{ uri, did, rkey, name, description orelse "", base_path orelse "" },
     );
 }
 
@@ -101,7 +107,7 @@ pub fn searchDocuments(alloc: Allocator, query: []const u8) !std.ArrayList(u8) {
     const temp_alloc = gpa.allocator();
 
     const result = execSqlWithArgs(
-        "SELECT f.uri, d.did, d.title, snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet, d.created_at FROM documents_fts f JOIN documents d ON f.uri = d.uri WHERE documents_fts MATCH ? ORDER BY rank LIMIT 50",
+        "SELECT f.uri, d.did, d.title, snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet, d.created_at, d.rkey, p.base_path FROM documents_fts f JOIN documents d ON f.uri = d.uri LEFT JOIN publications p ON d.publication_uri = p.uri WHERE documents_fts MATCH ? ORDER BY rank LIMIT 50",
         &[_][]const u8{query},
     ) catch {
         try response.appendSlice(alloc, "]");
@@ -165,7 +171,7 @@ pub fn searchDocuments(alloc: Allocator, query: []const u8) !std.ArrayList(u8) {
     for (rows.array.items) |row| {
         if (row != .array) continue;
         const cols = row.array.items;
-        if (cols.len < 5) continue;
+        if (cols.len < 7) continue;
 
         if (!first) try response.appendSlice(alloc, ",");
         first = false;
@@ -175,6 +181,8 @@ pub fn searchDocuments(alloc: Allocator, query: []const u8) !std.ArrayList(u8) {
         const title = getTextValue(cols[2]);
         const snippet = getTextValue(cols[3]);
         const created_at = getTextValue(cols[4]);
+        const rkey = getTextValue(cols[5]);
+        const base_path = getTextValue(cols[6]);
 
         try response.appendSlice(alloc, "{\"uri\":\"");
         try appendEscaped(alloc, &response, uri);
@@ -186,6 +194,10 @@ pub fn searchDocuments(alloc: Allocator, query: []const u8) !std.ArrayList(u8) {
         try appendEscaped(alloc, &response, snippet);
         try response.appendSlice(alloc, "\",\"createdAt\":\"");
         try appendEscaped(alloc, &response, created_at);
+        try response.appendSlice(alloc, "\",\"rkey\":\"");
+        try appendEscaped(alloc, &response, rkey);
+        try response.appendSlice(alloc, "\",\"basePath\":\"");
+        try appendEscaped(alloc, &response, base_path);
         try response.appendSlice(alloc, "\"}");
     }
 

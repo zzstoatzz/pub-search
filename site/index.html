@@ -202,26 +202,24 @@
         }
 
         let html = `<div style="font-size:0.7rem;color:#404040;margin-bottom:1rem;padding:0.5rem;background:#111;border-radius:4px">
-          query: <code>${escapeHtml(query)}</code> | url: <code>${searchUrl}</code> | ${results.length} results
+          query: <code>${escapeHtml(query)}</code> | ${results.length} results
         </div>`;
 
-        // resolve all unique DIDs in parallel
-        const uniqueDids = [...new Set(results.map(d => parseUri(d.uri).did))];
-        await Promise.all(uniqueDids.map(did => resolveHandle(did)));
-
         for (const doc of results) {
-          const { did, rkey } = parseUri(doc.uri);
-          const handle = handleCache.get(did);
-          const leafletUrl = handle ? buildLeafletUrl(handle, rkey) : `https://leaflet.pub/${rkey}`;
+          const leafletUrl = doc.basePath && doc.rkey
+            ? `https://${doc.basePath}/${doc.rkey}`
+            : null;
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           html += `
             <div class="result">
               <div class="result-title">
-                <a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>
+                ${leafletUrl
+                  ? `<a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
+                  : escapeHtml(doc.title || 'Untitled')}
               </div>
               <div class="result-snippet">${doc.snippet || ''}</div>
               <div class="result-meta">
-                ${date ? `${date} | ` : ''}${handle ? `@${handle} | ` : ''}uri: ${escapeHtml(doc.uri)}
+                ${date ? `${date} | ` : ''}${doc.basePath ? doc.basePath : 'unpublished'}
               </div>
             </div>
           `;
@@ -235,37 +233,6 @@
       } finally {
         searchBtn.disabled = false;
       }
-    }
-
-    // cache DID -> handle resolutions
-    const handleCache = new Map();
-
-    async function resolveHandle(did) {
-      if (handleCache.has(did)) return handleCache.get(did);
-      try {
-        const res = await fetch(`https://plc.directory/${did}`);
-        const doc = await res.json();
-        // alsoKnownAs contains at://handle entries
-        const aka = doc.alsoKnownAs?.find(u => u.startsWith('at://'));
-        const handle = aka ? aka.replace('at://', '') : null;
-        handleCache.set(did, handle);
-        return handle;
-      } catch {
-        handleCache.set(did, null);
-        return null;
-      }
-    }
-
-    function parseUri(uri) {
-      // at://did:plc:xxx/pub.leaflet.document/rkey
-      const parts = uri.replace('at://', '').split('/');
-      return { did: parts[0], collection: parts[1], rkey: parts[2] };
-    }
-
-    function buildLeafletUrl(handle, rkey) {
-      // handle like "nate.io" -> nate (subdomain is first part before .)
-      const subdomain = handle.split('.')[0];
-      return `https://${subdomain}.leaflet.pub/${rkey}`;
     }
 
     function escapeHtml(str) {
