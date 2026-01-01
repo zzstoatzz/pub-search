@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>leaflet search</title>
-  <meta name="description" content="full-text search for leaflet documents on atproto">
+  <meta name="description" content="search for leaflet">
   <meta property="og:title" content="leaflet search">
-  <meta property="og:description" content="full-text search for leaflet documents on atproto">
+  <meta property="og:description" content="search for leaflet">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="leaflet search">
-  <meta name="twitter:description" content="full-text search for leaflet documents on atproto">
+  <meta name="twitter:description" content="search for leaflet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -241,8 +241,7 @@
 
     <div id="results" class="results">
       <div class="empty-state">
-        <p>full-text search for leaflet documents</p>
-        <p>searches titles and content</p>
+        <p>search for leaflet</p>
       </div>
     </div>
 
@@ -377,11 +376,12 @@
       renderActiveFilter();
       renderTags();
       updateUrl();
-      if (!queryInput.value.trim()) {
+      if (queryInput.value.trim()) {
+        search(queryInput.value, null);
+      } else {
         resultsDiv.innerHTML = `
           <div class="empty-state">
-            <p>full-text search for leaflet documents</p>
-            <p>searches titles and content</p>
+            <p>search for leaflet</p>
           </div>
         `;
       }

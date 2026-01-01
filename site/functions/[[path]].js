@@ -1,9 +1,11 @@
+// dynamic OG tags for link previews
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const query = url.searchParams.get('q');
+  const tag = url.searchParams.get('tag');
 
-  // if no query param, just serve the static file
-  if (!query) {
+  // if no query or tag param, just serve the static file
+  if (!query && !tag) {
     return context.next();
   }
 
@@ -12,8 +14,17 @@ export async function onRequest(context) {
   let html = await response.text();
 
   // build OG meta tags
-  const title = `"${query}" - leaflet search`;
-  const description = `search results for "${query}" on leaflet`;
+  let title, description;
+  if (query && tag) {
+    title = `"${query}" in #${tag} - leaflet search`;
+    description = `search results for "${query}" tagged #${tag}`;
+  } else if (query) {
+    title = `"${query}" - leaflet search`;
+    description = `search results for "${query}" on leaflet`;
+  } else {
+    title = `#${tag} - leaflet search`;
+    description = `leaflet documents tagged #${tag}`;
+  }
   const ogUrl = url.toString();
 
   // remove existing OG tags
