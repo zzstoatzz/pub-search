@@ -165,6 +165,65 @@
       margin-top: 1.5rem;
       text-align: center;
     }
+
+    .tags {
+      margin-bottom: 1rem;
+    }
+
+    .tags-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .tag {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #151515;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #777;
+    }
+
+    .tag:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
+    }
+
+    .tag.active {
+      background: rgba(27, 115, 64, 0.2);
+      border-color: #1B7340;
+      color: #2a9d5c;
+    }
+
+    .tag .count {
+      color: #444;
+      margin-left: 4px;
+    }
+
+    .active-filter {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      padding: 0.5rem;
+      background: rgba(27, 115, 64, 0.1);
+      border: 1px solid #1B7340;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .active-filter .clear {
+      margin-left: auto;
+      color: #666;
+      cursor: pointer;
+    }
+
+    .active-filter .clear:hover {
+      color: #c44;
+    }
   </style>
 </head>
 <body>
@@ -175,6 +234,10 @@
       <input type="text" id="query" placeholder="search content..." autofocus>
       <button id="search-btn">search</button>
     </div>
+
+    <div id="active-filter"></div>
+
+    <div id="tags" class="tags"></div>
 
     <div id="results" class="results">
       <div class="empty-state">
@@ -193,13 +256,19 @@
     const searchBtn = document.getElementById('search-btn');
     const resultsDiv = document.getElementById('results');
     const statsDiv = document.getElementById('stats');
+    const tagsDiv = document.getElementById('tags');
+    const activeFilterDiv = document.getElementById('active-filter');
 
-    async function search(query) {
-      if (!query.trim()) return;
+    let currentTag = null;
+    let allTags = [];
+
+    async function search(query, tag = null) {
+      if (!query.trim() && !tag) return;
 
       searchBtn.disabled = true;
-      const searchUrl = `${API_URL}/search?q=${encodeURIComponent(query)}`;
-      resultsDiv.innerHTML = `<div class="status">searching...<br><code style="font-size:0.7rem;color:#525252">${searchUrl}</code></div>`;
+      let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
+      if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
+      resultsDiv.innerHTML = `<div class="status">searching...</div>`;
 
       try {
         const res = await fetch(searchUrl);
@@ -221,19 +290,15 @@
         if (results.length === 0) {
           resultsDiv.innerHTML = `
             <div class="empty-state">
-              <p>no results for "${escapeHtml(query)}"</p>
+              <p>no results${query ? ` for "${escapeHtml(query)}"` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}</p>
               <p>try different keywords</p>
-              <p style="margin-top:1rem;font-size:0.7rem;color:#404040">query sent: <code>${searchUrl}</code></p>
-              <p style="font-size:0.7rem;color:#404040">response: <code>${escapeHtml(rawText)}</code></p>
             </div>
           `;
           statsDiv.textContent = '';
           return;
         }
 
-        let html = `<div style="font-size:0.7rem;color:#404040;margin-bottom:1rem;padding:0.5rem;background:#111;border-radius:4px">
-          query: <code>${escapeHtml(query)}</code> | ${results.length} results
-        </div>`;
+        let html = '';
 
         for (const doc of results) {
           const entityType = doc.type || 'article';
@@ -286,36 +351,104 @@
       })[c]);
     }
 
-    searchBtn.addEventListener('click', () => {
-      const q = queryInput.value;
-      if (q.trim()) history.pushState(null, '', `?q=${encodeURIComponent(q)}`);
-      search(q);
-    });
-    queryInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        const q = queryInput.value;
-        if (q.trim()) history.pushState(null, '', `?q=${encodeURIComponent(q)}`);
-        search(q);
-      }
-    });
-
-    // handle back/forward navigation
-    window.addEventListener('popstate', () => {
-      const params = new URLSearchParams(location.search);
-      const q = params.get('q') || '';
-      queryInput.value = q;
-      if (q) search(q);
-    });
-
-    // check for ?q= on page load
-    const initialParams = new URLSearchParams(location.search);
-    const initialQuery = initialParams.get('q');
-    if (initialQuery) {
-      queryInput.value = initialQuery;
-      search(initialQuery);
+    function updateUrl() {
+      const params = new URLSearchParams();
+      const q = queryInput.value.trim();
+      if (q) params.set('q', q);
+      if (currentTag) params.set('tag', currentTag);
+      const url = params.toString() ? `?${params}` : '/';
+      history.pushState(null, '', url);
     }
 
-    // check backend health on load
+    function doSearch() {
+      updateUrl();
+      search(queryInput.value, currentTag);
+    }
+
+    function setTag(tag) {
+      currentTag = tag;
+      renderActiveFilter();
+      renderTags();
+      doSearch();
+    }
+
+    function clearTag() {
+      currentTag = null;
+      renderActiveFilter();
+      renderTags();
+      updateUrl();
+      if (!queryInput.value.trim()) {
+        resultsDiv.innerHTML = `
+          <div class="empty-state">
+            <p>full-text search for leaflet documents</p>
+            <p>searches titles and content</p>
+          </div>
+        `;
+      }
+    }
+
+    function renderActiveFilter() {
+      if (!currentTag) {
+        activeFilterDiv.innerHTML = '';
+        return;
+      }
+      activeFilterDiv.innerHTML = `
+        <div class="active-filter">
+          <span>filtering by tag: <strong>#${escapeHtml(currentTag)}</strong></span>
+          <span class="clear" onclick="clearTag()">× clear</span>
+        </div>
+      `;
+    }
+
+    function renderTags() {
+      if (allTags.length === 0) {
+        tagsDiv.innerHTML = '';
+        return;
+      }
+      const html = allTags.slice(0, 15).map(t => `
+        <span class="tag${currentTag === t.tag ? ' active' : ''}" onclick="setTag('${escapeHtml(t.tag)}')">${escapeHtml(t.tag)}<span class="count">${t.count}</span></span>
+      `).join('');
+      tagsDiv.innerHTML = `<div class="tags-list">${html}</div>`;
+    }
+
+    async function loadTags() {
+      try {
+        const res = await fetch(`${API_URL}/tags`);
+        allTags = await res.json();
+        renderTags();
+      } catch (e) {
+        console.error('failed to load tags', e);
+      }
+    }
+
+    searchBtn.addEventListener('click', doSearch);
+    queryInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') doSearch();
+    });
+
+    window.addEventListener('popstate', () => {
+      const params = new URLSearchParams(location.search);
+      queryInput.value = params.get('q') || '';
+      currentTag = params.get('tag') || null;
+      renderActiveFilter();
+      renderTags();
+      if (queryInput.value || currentTag) search(queryInput.value, currentTag);
+    });
+
+    // init
+    const initialParams = new URLSearchParams(location.search);
+    const initialQuery = initialParams.get('q');
+    const initialTag = initialParams.get('tag');
+    if (initialQuery) queryInput.value = initialQuery;
+    if (initialTag) currentTag = initialTag;
+    renderActiveFilter();
+
+    if (initialQuery || initialTag) {
+      search(initialQuery || '', initialTag);
+    }
+
+    loadTags();
+
     fetch(`${API_URL}/stats`)
       .then(r => r.json())
       .then(data => {

@@ -12,6 +12,7 @@ primary_region = 'ewr'
   TAP_DISABLE_ACKS = 'true'
   TAP_LOG_LEVEL = 'info'
   TAP_CURSOR_SAVE_INTERVAL = '5s'
+  TAP_REPO_FETCH_TIMEOUT = '600s'
 
 [http_service]
   internal_port = 2480

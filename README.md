@@ -21,6 +21,8 @@ GET /stats                         # document/publication counts
 GET /health                        # health check
 ```
 
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself)
+
 ## stack
 
 - ~450 LOC of [Zig](https://ziglang.org) for the backend
