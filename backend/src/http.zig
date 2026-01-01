@@ -65,8 +65,8 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const query = parseQueryParam(alloc, target, "q") catch "";
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
 
-    if (query.len == 0) {
-        try sendJson(request, "{\"error\":\"missing q parameter\"}");
+    if (query.len == 0 and tag_filter == null) {
+        try sendJson(request, "{\"error\":\"enter a search term\"}");
         return;
     }
 

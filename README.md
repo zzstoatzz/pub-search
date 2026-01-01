@@ -15,10 +15,10 @@ full-text search for [leaflet](https://leaflet.pub) documents on the ATProto net
 ## api
 
 ```
-GET /search?q=<query>[&tag=<tag>]  # full-text search, optional tag filter
-GET /tags                          # list all tags with counts
-GET /stats                         # document/publication counts
-GET /health                        # health check
+GET /search?q=<query>&tag=<tag>  # search with query, tag, or both
+GET /tags                        # list all tags with counts
+GET /stats                       # document/publication counts
+GET /health                      # health check
 ```
 
 search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself)

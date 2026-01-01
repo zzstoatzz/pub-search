@@ -200,7 +200,19 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
     try jw.beginArray();
 
     // search documents (articles and looseleafs)
-    const doc_result = if (tag_filter) |tag|
+    const doc_result = if (query.len == 0 and tag_filter != null)
+        // tag-only search - list documents with this tag
+        execSql(
+            \\SELECT d.uri, d.did, d.title, '' as snippet,
+            \\  d.created_at, d.rkey, p.base_path,
+            \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+            \\FROM documents d
+            \\LEFT JOIN publications p ON d.publication_uri = p.uri
+            \\JOIN document_tags dt ON d.uri = dt.document_uri
+            \\WHERE dt.tag = ?
+            \\ORDER BY d.created_at DESC LIMIT 40
+        , &.{tag_filter.?}) catch null
+    else if (tag_filter) |tag|
         execSql(
             \\SELECT f.uri, d.did, d.title,
             \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
