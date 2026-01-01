@@ -190,11 +190,8 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 
     const temp_alloc = gpa.allocator();
 
-    // normalize query to match FTS5 tokenization (dots become spaces)
-    const normalized_query = try alloc.dupe(u8, query);
-    for (normalized_query) |*c| {
-        if (c.* == '.') c.* = ' ';
-    }
+    // normalize query: dots become spaces, add prefix matching with *
+    const fts_query = try buildFtsQuery(alloc, query);
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
@@ -224,7 +221,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
             \\JOIN document_tags dt ON d.uri = dt.document_uri
             \\WHERE documents_fts MATCH ? AND dt.tag = ?
             \\ORDER BY rank LIMIT 40
-        , &.{ normalized_query, tag }) catch null
+        , &.{ fts_query, tag }) catch null
     else
         execSql(
             \\SELECT f.uri, d.did, d.title,
@@ -236,7 +233,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ?
             \\ORDER BY rank LIMIT 40
-        , &.{normalized_query}) catch null;
+        , &.{fts_query}) catch null;
 
     if (doc_result) |result| {
         defer temp_alloc.free(result);
@@ -284,7 +281,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
             \\JOIN publications p ON f.uri = p.uri
             \\WHERE publications_fts MATCH ?
             \\ORDER BY rank LIMIT 10
-        , &.{normalized_query}) catch null;
+        , &.{fts_query}) catch null;
 
         if (pub_result) |result| {
             defer temp_alloc.free(result);
@@ -361,6 +358,60 @@ fn extractInt(val: json.Value) i64 {
         },
         else => 0,
     };
+}
+
+// build FTS5 query with prefix matching: "cat dog" -> "cat* dog*"
+fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
+    if (query.len == 0) return "";
+
+    // normalize dots to spaces
+    const normalized = try alloc.dupe(u8, query);
+    for (normalized) |*c| {
+        if (c.* == '.') c.* = ' ';
+    }
+
+    // count words to calculate output size
+    var word_count: usize = 0;
+    var in_word = false;
+    for (normalized) |c| {
+        if (c == ' ') {
+            in_word = false;
+        } else if (!in_word) {
+            word_count += 1;
+            in_word = true;
+        }
+    }
+
+    if (word_count == 0) return "";
+
+    // allocate: original length + one '*' per word + spaces
+    const result = try alloc.alloc(u8, normalized.len + word_count);
+    var pos: usize = 0;
+    in_word = false;
+
+    for (normalized) |c| {
+        if (c == ' ') {
+            if (in_word) {
+                result[pos] = '*';
+                pos += 1;
+                in_word = false;
+            }
+            result[pos] = ' ';
+            pos += 1;
+        } else {
+            result[pos] = c;
+            pos += 1;
+            in_word = true;
+        }
+    }
+
+    // add final * if ended in a word
+    if (in_word) {
+        result[pos] = '*';
+        pos += 1;
+    }
+
+    return result[0..pos];
 }
 
 fn execSql(sql: []const u8, args: []const []const u8) ![]const u8 {
