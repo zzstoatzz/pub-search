@@ -10,7 +10,7 @@
         },
         .zql = .{
             .url = "https://github.com/zzstoatzz/zql/archive/main.tar.gz",
-            .hash = "zql-0.0.1-alpha-xNRI4IYzAABlysQna0qdLkNqMwddTK9vrA0D8JKFjW11",
+            .hash = "zql-0.0.1-alpha-xNRI4II5AAB3EZKhw1ER_m5yJLon0WgAJj_KANA2BwEl",
         },
     },
     .paths = .{

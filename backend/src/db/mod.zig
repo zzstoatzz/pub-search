@@ -90,11 +90,40 @@ pub fn deletePublication(uri: []const u8) void {
 }
 
 // query types with comptime column extraction
-const DocQuery = zql.Query(
+const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, p.base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
     \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN document_tags dt ON d.uri = dt.document_uri
+    \\WHERE dt.tag = :tag
+    \\ORDER BY d.created_at DESC LIMIT 40
+);
+
+const DocsByFtsAndTag = zql.Query(
+    \\SELECT f.uri, d.did, d.title,
+    \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+    \\  d.created_at, d.rkey, p.base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+    \\FROM documents_fts f
+    \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN document_tags dt ON d.uri = dt.document_uri
+    \\WHERE documents_fts MATCH :query AND dt.tag = :tag
+    \\ORDER BY rank LIMIT 40
+);
+
+const DocsByFts = zql.Query(
+    \\SELECT f.uri, d.did, d.title,
+    \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+    \\  d.created_at, d.rkey, p.base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+    \\FROM documents_fts f
+    \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\WHERE documents_fts MATCH :query
+    \\ORDER BY rank LIMIT 40
 );
 
 const Doc = struct {
@@ -108,11 +137,14 @@ const Doc = struct {
     has_publication: bool,
 };
 
-const PubQuery = zql.Query(
+const PubSearch = zql.Query(
     \\SELECT f.uri, p.did, p.name,
     \\  snippet(publications_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
     \\  p.rkey, p.base_path
     \\FROM publications_fts f
+    \\JOIN publications p ON f.uri = p.uri
+    \\WHERE publications_fts MATCH :query
+    \\ORDER BY rank LIMIT 10
 );
 
 const Pub = struct {
@@ -137,46 +169,16 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 
     // search documents
     var doc_result = if (query.len == 0 and tag_filter != null)
-        c.query(
-            \\SELECT d.uri, d.did, d.title, '' as snippet,
-            \\  d.created_at, d.rkey, p.base_path,
-            \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
-            \\FROM documents d
-            \\LEFT JOIN publications p ON d.publication_uri = p.uri
-            \\JOIN document_tags dt ON d.uri = dt.document_uri
-            \\WHERE dt.tag = ?
-            \\ORDER BY d.created_at DESC LIMIT 40
-        , &.{tag_filter.?}) catch null
+        c.query(DocsByTag.positional, DocsByTag.bind(.{ .tag = tag_filter.? })) catch null
     else if (tag_filter) |tag|
-        c.query(
-            \\SELECT f.uri, d.did, d.title,
-            \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-            \\  d.created_at, d.rkey, p.base_path,
-            \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
-            \\FROM documents_fts f
-            \\JOIN documents d ON f.uri = d.uri
-            \\LEFT JOIN publications p ON d.publication_uri = p.uri
-            \\JOIN document_tags dt ON d.uri = dt.document_uri
-            \\WHERE documents_fts MATCH ? AND dt.tag = ?
-            \\ORDER BY rank LIMIT 40
-        , &.{ fts_query, tag }) catch null
+        c.query(DocsByFtsAndTag.positional, DocsByFtsAndTag.bind(.{ .query = fts_query, .tag = tag })) catch null
     else
-        c.query(
-            \\SELECT f.uri, d.did, d.title,
-            \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-            \\  d.created_at, d.rkey, p.base_path,
-            \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
-            \\FROM documents_fts f
-            \\JOIN documents d ON f.uri = d.uri
-            \\LEFT JOIN publications p ON d.publication_uri = p.uri
-            \\WHERE documents_fts MATCH ?
-            \\ORDER BY rank LIMIT 40
-        , &.{fts_query}) catch null;
+        c.query(DocsByFts.positional, DocsByFts.bind(.{ .query = fts_query })) catch null;
 
     if (doc_result) |*res| {
         defer res.deinit();
         for (res.rows) |row| {
-            const doc = DocQuery.fromRow(Doc, row);
+            const doc = DocsByFts.fromRow(Doc, row);
             try jw.beginObject();
             try jw.objectField("type");
             try jw.write(if (doc.has_publication) "article" else "looseleaf");
@@ -201,19 +203,14 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
     // search publications (only if no tag filter)
     if (tag_filter == null) {
         var pub_result = c.query(
-            \\SELECT f.uri, p.did, p.name,
-            \\  snippet(publications_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-            \\  p.rkey, p.base_path
-            \\FROM publications_fts f
-            \\JOIN publications p ON f.uri = p.uri
-            \\WHERE publications_fts MATCH ?
-            \\ORDER BY rank LIMIT 10
-        , &.{fts_query}) catch null;
+            PubSearch.positional,
+            PubSearch.bind(.{ .query = fts_query }),
+        ) catch null;
 
         if (pub_result) |*res| {
             defer res.deinit();
             for (res.rows) |row| {
-                const p = PubQuery.fromRow(Pub, row);
+                const p = PubSearch.fromRow(Pub, row);
                 try jw.beginObject();
                 try jw.objectField("type");
                 try jw.write("publication");
