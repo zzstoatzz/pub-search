@@ -2,7 +2,7 @@ const std = @import("std");
 const net = std.net;
 const posix = std.posix;
 const Thread = std.Thread;
-const db = @import("db.zig");
+const db = @import("db/mod.zig");
 const http_server = @import("http.zig");
 const tap = @import("tap.zig");
 

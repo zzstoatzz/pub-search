@@ -2,7 +2,7 @@ const std = @import("std");
 const net = std.net;
 const http = std.http;
 const mem = std.mem;
-const db = @import("db.zig");
+const db = @import("db/mod.zig");
 
 const HTTP_BUF_SIZE = 8192;
 const QUERY_PARAM_BUF_SIZE = 64;

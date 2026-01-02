@@ -4,7 +4,7 @@ const json = std.json;
 const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
-const db = @import("db.zig");
+const db = @import("db/mod.zig");
 
 const DOCUMENT_COLLECTION = "pub.leaflet.document";
 const PUBLICATION_COLLECTION = "pub.leaflet.publication";

@@ -8,6 +8,10 @@
             .url = "https://github.com/karlseguin/websocket.zig/archive/refs/heads/master.tar.gz",
             .hash = "websocket-0.1.0-ZPISdRNzAwAGszh62EpRtoQxu8wb1MSMVI6Ow0o2dmyJ",
         },
+        .zql = .{
+            .url = "https://github.com/zzstoatzz/zql/archive/main.tar.gz",
+            .hash = "zql-0.0.1-alpha-xNRI4IYzAABlysQna0qdLkNqMwddTK9vrA0D8JKFjW11",
+        },
     },
     .paths = .{
         "build.zig",
