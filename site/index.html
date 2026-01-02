@@ -173,6 +173,54 @@
 
     .empty-state p { margin-bottom: 0.5rem; }
 
+    .popular {
+      margin-top: 1.5rem;
+    }
+
+    .popular-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #444;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .popular-label::before,
+    .popular-label::after {
+      content: '';
+      height: 1px;
+      width: 2rem;
+      background: #333;
+    }
+
+    .popular-list {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .popular-item {
+      font-size: 12px;
+      padding: 0.4rem 0.75rem;
+      background: #151515;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #888;
+      transition: all 0.15s;
+    }
+
+    .popular-item:hover {
+      background: #1a1a1a;
+      border-color: #1B7340;
+      color: #2a9d5c;
+    }
+
     .stats {
       font-size: 11px;
       color: #555;
@@ -276,6 +324,7 @@
 
     let currentTag = null;
     let allTags = [];
+    let popularSearches = [];
 
     async function search(query, tag = null) {
       if (!query.trim() && !tag) return;
@@ -408,11 +457,7 @@
       if (queryInput.value.trim()) {
         search(queryInput.value, null);
       } else {
-        resultsDiv.innerHTML = `
-          <div class="empty-state">
-            <p>search for <a href="https://leaflet.pub" target="_blank">leaflet.pub</a></p>
-          </div>
-        `;
+        renderEmptyState();
       }
     }
 
@@ -455,6 +500,44 @@
       }
     }
 
+    async function loadPopular() {
+      try {
+        const res = await fetch(`${API_URL}/popular`);
+        const data = await res.json();
+        if (!data.error) {
+          popularSearches = data.slice(0, 5);
+          renderEmptyState();
+        }
+      } catch (e) {
+        console.error('failed to load popular', e);
+      }
+    }
+
+    function renderEmptyState() {
+      const popularHtml = popularSearches.length > 0 ? `
+        <div class="popular">
+          <div class="popular-label">trending</div>
+          <div class="popular-list">
+            ${popularSearches.map(p => `
+              <span class="popular-item" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>
+            `).join('')}
+          </div>
+        </div>
+      ` : '';
+
+      resultsDiv.innerHTML = `
+        <div class="empty-state">
+          <p>search for <a href="https://leaflet.pub" target="_blank">leaflet.pub</a></p>
+          ${popularHtml}
+        </div>
+      `;
+    }
+
+    function searchPopular(query) {
+      queryInput.value = query;
+      doSearch();
+    }
+
     searchBtn.addEventListener('click', doSearch);
     queryInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') doSearch();
@@ -479,6 +562,8 @@
 
     if (initialQuery || initialTag) {
       search(initialQuery || '', initialTag);
+    } else {
+      loadPopular();
     }
 
     loadTags();

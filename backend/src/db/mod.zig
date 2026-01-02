@@ -307,18 +307,72 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
-pub fn getStats() struct { documents: i64, publications: i64 } {
-    var c = &(client orelse return .{ .documents = 0, .publications = 0 });
+pub fn getStats() struct { documents: i64, publications: i64, searches: i64, errors: i64 } {
+    var c = &(client orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0 });
 
     var res = c.query(
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
-        \\  (SELECT COUNT(*) FROM publications) as pubs
-    , &.{}) catch return .{ .documents = 0, .publications = 0 };
+        \\  (SELECT COUNT(*) FROM publications) as pubs,
+        \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
+        \\  (SELECT total_errors FROM stats WHERE id = 1) as errors
+    , &.{}) catch return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0 };
     defer res.deinit();
 
-    const row = res.first() orelse return .{ .documents = 0, .publications = 0 };
-    return .{ .documents = row.int(0), .publications = row.int(1) };
+    const row = res.first() orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0 };
+    return .{ .documents = row.int(0), .publications = row.int(1), .searches = row.int(2), .errors = row.int(3) };
+}
+
+pub fn recordSearch(query: []const u8) void {
+    var c = &(client orelse return);
+    c.exec("UPDATE stats SET total_searches = total_searches + 1 WHERE id = 1", &.{}) catch {};
+
+    // track popular searches (skip empty/very short queries)
+    if (query.len >= 2) {
+        c.exec(
+            "INSERT INTO popular_searches (query, count) VALUES (?, 1) ON CONFLICT(query) DO UPDATE SET count = count + 1",
+            &.{query},
+        ) catch {};
+    }
+}
+
+pub fn recordError() void {
+    var c = &(client orelse return);
+    c.exec("UPDATE stats SET total_errors = total_errors + 1 WHERE id = 1", &.{}) catch {};
+}
+
+pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
+    var c = &(client orelse return error.NotInitialized);
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var buf: [8]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&buf, "{d}", .{limit}) catch "3";
+
+    var res = c.query(
+        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT ?",
+        &.{limit_str},
+    ) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+
+    for (res.rows) |row| {
+        try jw.beginObject();
+        try jw.objectField("query");
+        try jw.write(row.text(0));
+        try jw.objectField("count");
+        try jw.write(row.int(1));
+        try jw.endObject();
+    }
+
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }
 
 /// Build FTS5 query with prefix on last word only: "cat dog" -> "cat dog*"

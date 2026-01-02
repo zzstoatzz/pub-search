@@ -53,6 +53,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try handleStats(request);
     } else if (mem.eql(u8, target, "/health")) {
         try sendJson(request, "{\"status\":\"ok\"}");
+    } else if (mem.eql(u8, target, "/popular")) {
+        try handlePopular(request);
     } else if (mem.eql(u8, target, "/dashboard")) {
         try handleDashboard(request);
     } else {
@@ -76,10 +78,10 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
 
     // perform FTS search - arena handles cleanup
     const results = db.search(alloc, query, tag_filter) catch |err| {
-        stats.get().recordError();
+        db.recordError();
         return err;
     };
-    stats.get().recordSearch();
+    db.recordSearch(query);
     try sendJson(request, results);
 }
 
@@ -90,6 +92,15 @@ fn handleTags(request: *http.Server.Request) !void {
 
     const tags = try db.getTags(alloc);
     try sendJson(request, tags);
+}
+
+fn handlePopular(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const popular = try db.getPopular(alloc, 5);
+    try sendJson(request, popular);
 }
 
 fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const u8) ![]const u8 {
@@ -169,8 +180,8 @@ fn handleDashboard(request: *http.Server.Request) !void {
     const html = dashboard.render(
         alloc,
         s.getUptime(),
-        s.getSearches(),
-        s.getErrors(),
+        @intCast(db_stats.searches),
+        @intCast(db_stats.errors),
         db_stats.documents,
         db_stats.publications,
         tags_json,

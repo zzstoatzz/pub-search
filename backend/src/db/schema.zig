@@ -60,6 +60,26 @@ fn createTables(client: *turso.Client) !void {
         "CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag)",
         &.{},
     ) catch {};
+
+    // stats table: single row for lifetime counters
+    try client.exec(
+        \\CREATE TABLE IF NOT EXISTS stats (
+        \\  id INTEGER PRIMARY KEY CHECK (id = 1),
+        \\  total_searches INTEGER DEFAULT 0,
+        \\  total_errors INTEGER DEFAULT 0
+        \\)
+    , &.{});
+
+    // ensure the single row exists
+    client.exec("INSERT OR IGNORE INTO stats (id) VALUES (1)", &.{}) catch {};
+
+    // popular searches tracking
+    try client.exec(
+        \\CREATE TABLE IF NOT EXISTS popular_searches (
+        \\  query TEXT PRIMARY KEY,
+        \\  count INTEGER DEFAULT 1
+        \\)
+    , &.{});
 }
 
 fn runMigrations(client: *turso.Client) !void {

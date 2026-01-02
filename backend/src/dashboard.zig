@@ -90,7 +90,7 @@ pub fn render(
     try w.print("{d}", .{searches});
     try w.writeAll(
         \\</div>
-        \\        <div class="stat-label">searches (this session)</div>
+        \\        <div class="stat-label">searches</div>
         \\      </div>
         \\      <div class="stat">
         \\        <div class="stat-value">
