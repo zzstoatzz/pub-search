@@ -325,24 +325,22 @@ pub fn getStats() struct { documents: i64, publications: i64 } {
 fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
 
-    // normalize dots to spaces and trim
-    const normalized = try alloc.dupe(u8, query);
-    for (normalized) |*c| {
-        if (c.* == '.') c.* = ' ';
-    }
-
     // find actual content bounds (trim whitespace)
     var start: usize = 0;
-    var end: usize = normalized.len;
-    while (start < end and normalized[start] == ' ') start += 1;
-    while (end > start and normalized[end - 1] == ' ') end -= 1;
+    var end: usize = query.len;
+    while (start < end and query[start] == ' ') start += 1;
+    while (end > start and query[end - 1] == ' ') end -= 1;
 
     if (start >= end) return "";
 
     // allocate: trimmed length + 1 for '*' at end
     const trimmed_len = end - start;
     const buf = try alloc.alloc(u8, trimmed_len + 1);
-    @memcpy(buf[0..trimmed_len], normalized[start..end]);
+
+    // copy and normalize dots to spaces
+    for (query[start..end], 0..) |c, i| {
+        buf[i] = if (c == '.') ' ' else c;
+    }
     buf[trimmed_len] = '*';
 
     return buf[0 .. trimmed_len + 1];
