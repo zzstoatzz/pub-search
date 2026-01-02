@@ -175,13 +175,15 @@
 
     .suggestions {
       font-size: 11px;
-      color: #555;
-      margin-bottom: 1rem;
+      color: #444;
+      margin-bottom: 1.5rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #1a1a1a;
     }
 
     .suggestions-label {
-      color: #444;
-      margin-right: 0.5rem;
+      color: #555;
+      margin-right: 0.25rem;
     }
 
     .suggestions-list {
@@ -191,20 +193,27 @@
     .suggestion {
       color: #666;
       cursor: pointer;
-      padding: 2px 0;
+      font-style: italic;
+    }
+
+    .suggestion::before {
+      content: '"';
+      color: #444;
+    }
+
+    .suggestion::after {
+      content: '"';
+      color: #444;
+      margin-right: 0.5rem;
     }
 
     .suggestion:hover {
       color: #2a9d5c;
     }
 
-    .suggestion::after {
-      content: ' · ';
-      color: #333;
-    }
-
-    .suggestion:last-child::after {
-      content: '';
+    .suggestion:hover::before,
+    .suggestion:hover::after {
+      color: #2a9d5c;
     }
 
     .stats {
@@ -509,7 +518,7 @@
       }
       suggestionsDiv.innerHTML = `
         <div class="suggestions">
-          <span class="suggestions-label">try:</span>
+          <span class="suggestions-label">popular searches:</span>
           <span class="suggestions-list">
             ${popularSearches.map(p => `<span class="suggestion" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>`).join('')}
           </span>
