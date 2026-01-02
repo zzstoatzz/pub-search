@@ -173,57 +173,38 @@
 
     .empty-state p { margin-bottom: 0.5rem; }
 
-    .popular {
-      margin-top: 1.5rem;
+    .suggestions {
+      font-size: 11px;
+      color: #555;
+      margin-bottom: 1rem;
     }
 
-    .popular-label {
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
+    .suggestions-label {
       color: #444;
-      margin-bottom: 0.75rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.5rem;
+      margin-right: 0.5rem;
     }
 
-    .popular-label::before,
-    .popular-label::after {
-      content: '';
-      height: 1px;
-      width: 2rem;
-      background: #333;
+    .suggestions-list {
+      display: inline;
     }
 
-    .popular-list {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 0.5rem;
-    }
-
-    .popular-item {
-      font-size: 12px;
-      padding: 0.4rem 0.75rem;
-      background: #151515;
-      border: 1px solid #252525;
-      border-radius: 3px;
+    .suggestion {
+      color: #666;
       cursor: pointer;
-      color: #888;
-      transition: all 0.15s;
+      padding: 2px 0;
     }
 
-    .popular-item::before {
-      content: '↗ ';
-      opacity: 0.5;
-    }
-
-    .popular-item:hover {
-      background: #1a1a1a;
-      border-color: #1B7340;
+    .suggestion:hover {
       color: #2a9d5c;
+    }
+
+    .suggestion::after {
+      content: ' · ';
+      color: #333;
+    }
+
+    .suggestion:last-child::after {
+      content: '';
     }
 
     .stats {
@@ -302,6 +283,8 @@
       <button id="search-btn">search</button>
     </div>
 
+    <div id="suggestions"></div>
+
     <div id="active-filter"></div>
 
     <div id="tags" class="tags"></div>
@@ -326,6 +309,7 @@
     const statsDiv = document.getElementById('stats');
     const tagsDiv = document.getElementById('tags');
     const activeFilterDiv = document.getElementById('active-filter');
+    const suggestionsDiv = document.getElementById('suggestions');
 
     let currentTag = null;
     let allTags = [];
@@ -511,29 +495,32 @@
         const data = await res.json();
         if (!data.error) {
           popularSearches = data.slice(0, 5);
-          renderEmptyState();
+          renderSuggestions();
         }
       } catch (e) {
         console.error('failed to load popular', e);
       }
     }
 
-    function renderEmptyState() {
-      const popularHtml = popularSearches.length > 0 ? `
-        <div class="popular">
-          <div class="popular-label">popular searches</div>
-          <div class="popular-list">
-            ${popularSearches.map(p => `
-              <span class="popular-item" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>
-            `).join('')}
-          </div>
+    function renderSuggestions() {
+      if (popularSearches.length === 0) {
+        suggestionsDiv.innerHTML = '';
+        return;
+      }
+      suggestionsDiv.innerHTML = `
+        <div class="suggestions">
+          <span class="suggestions-label">try:</span>
+          <span class="suggestions-list">
+            ${popularSearches.map(p => `<span class="suggestion" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>`).join('')}
+          </span>
         </div>
-      ` : '';
+      `;
+    }
 
+    function renderEmptyState() {
       resultsDiv.innerHTML = `
         <div class="empty-state">
           <p>search for <a href="https://leaflet.pub" target="_blank">leaflet.pub</a></p>
-          ${popularHtml}
         </div>
       `;
     }
@@ -567,19 +554,18 @@
 
     if (initialQuery || initialTag) {
       search(initialQuery || '', initialTag);
-    } else {
-      loadPopular();
     }
 
     loadTags();
+    loadPopular();
 
     fetch(`${API_URL}/stats`)
       .then(r => r.json())
       .then(data => {
-        statsDiv.textContent = `index: ${data.documents} documents, ${data.publications} publications`;
+        statsDiv.innerHTML = `${data.documents} documents, ${data.publications} publications · <a href="${API_URL}/dashboard" target="_blank">stats</a>`;
       })
       .catch(() => {
-        statsDiv.textContent = 'backend: connecting...';
+        statsDiv.textContent = 'connecting...';
       });
   </script>
 </body>
