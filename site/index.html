@@ -215,6 +215,11 @@
       transition: all 0.15s;
     }
 
+    .popular-item::before {
+      content: '↗ ';
+      opacity: 0.5;
+    }
+
     .popular-item:hover {
       background: #1a1a1a;
       border-color: #1B7340;
@@ -516,7 +521,7 @@
     function renderEmptyState() {
       const popularHtml = popularSearches.length > 0 ? `
         <div class="popular">
-          <div class="popular-label">trending</div>
+          <div class="popular-label">popular searches</div>
           <div class="popular-list">
             ${popularSearches.map(p => `
               <span class="popular-item" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>
