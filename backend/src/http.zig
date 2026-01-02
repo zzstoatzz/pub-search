@@ -3,6 +3,8 @@ const net = std.net;
 const http = std.http;
 const mem = std.mem;
 const db = @import("db/mod.zig");
+const stats = @import("stats.zig");
+const dashboard = @import("dashboard.zig");
 
 const HTTP_BUF_SIZE = 8192;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -51,6 +53,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try handleStats(request);
     } else if (mem.eql(u8, target, "/health")) {
         try sendJson(request, "{\"status\":\"ok\"}");
+    } else if (mem.eql(u8, target, "/dashboard")) {
+        try handleDashboard(request);
     } else {
         try sendNotFound(request);
     }
@@ -71,7 +75,11 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     }
 
     // perform FTS search - arena handles cleanup
-    const results = try db.search(alloc, query, tag_filter);
+    const results = db.search(alloc, query, tag_filter) catch |err| {
+        stats.get().recordError();
+        return err;
+    };
+    stats.get().recordSearch();
     try sendJson(request, results);
 }
 
@@ -106,12 +114,12 @@ fn handleStats(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const stats = db.getStats();
+    const db_stats = db.getStats();
 
     var response: std.ArrayList(u8) = .{};
     defer response.deinit(alloc);
 
-    try response.print(alloc, "{{\"documents\":{d},\"publications\":{d}}}", .{ stats.documents, stats.publications });
+    try response.print(alloc, "{{\"documents\":{d},\"publications\":{d}}}", .{ db_stats.documents, db_stats.publications });
 
     try sendJson(request, response.items);
 }
@@ -145,6 +153,40 @@ fn sendNotFound(request: *http.Server.Request) !void {
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/json" },
             .{ .name = "access-control-allow-origin", .value = "*" },
+        },
+    });
+}
+
+fn handleDashboard(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const s = stats.get();
+    const db_stats = db.getStats();
+    const tags_json = db.getTags(alloc) catch "[]";
+
+    const html = dashboard.render(
+        alloc,
+        s.getUptime(),
+        s.getSearches(),
+        s.getErrors(),
+        db_stats.documents,
+        db_stats.publications,
+        tags_json,
+    ) catch {
+        try sendNotFound(request);
+        return;
+    };
+
+    try sendHtml(request, html);
+}
+
+fn sendHtml(request: *http.Server.Request, body: []const u8) !void {
+    try request.respond(body, .{
+        .status = .ok,
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = "text/html; charset=utf-8" },
         },
     });
 }
