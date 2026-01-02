@@ -321,55 +321,29 @@ pub fn getStats() struct { documents: i64, publications: i64 } {
     return .{ .documents = row.int(0), .publications = row.int(1) };
 }
 
-/// Build FTS5 query with prefix matching: "cat dog" -> "cat* dog*"
+/// Build FTS5 query with prefix on last word only: "cat dog" -> "cat dog*"
 fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
 
-    // normalize dots to spaces
+    // normalize dots to spaces and trim
     const normalized = try alloc.dupe(u8, query);
     for (normalized) |*c| {
         if (c.* == '.') c.* = ' ';
     }
 
-    // count words
-    var word_count: usize = 0;
-    var in_word = false;
-    for (normalized) |c| {
-        if (c == ' ') {
-            in_word = false;
-        } else if (!in_word) {
-            word_count += 1;
-            in_word = true;
-        }
-    }
+    // find actual content bounds (trim whitespace)
+    var start: usize = 0;
+    var end: usize = normalized.len;
+    while (start < end and normalized[start] == ' ') start += 1;
+    while (end > start and normalized[end - 1] == ' ') end -= 1;
 
-    if (word_count == 0) return "";
+    if (start >= end) return "";
 
-    // allocate: original length + one '*' per word
-    const buf = try alloc.alloc(u8, normalized.len + word_count);
-    var pos: usize = 0;
-    in_word = false;
+    // allocate: trimmed length + 1 for '*' at end
+    const trimmed_len = end - start;
+    const buf = try alloc.alloc(u8, trimmed_len + 1);
+    @memcpy(buf[0..trimmed_len], normalized[start..end]);
+    buf[trimmed_len] = '*';
 
-    for (normalized) |c| {
-        if (c == ' ') {
-            if (in_word) {
-                buf[pos] = '*';
-                pos += 1;
-                in_word = false;
-            }
-            buf[pos] = ' ';
-            pos += 1;
-        } else {
-            buf[pos] = c;
-            pos += 1;
-            in_word = true;
-        }
-    }
-
-    if (in_word) {
-        buf[pos] = '*';
-        pos += 1;
-    }
-
-    return buf[0..pos];
+    return buf[0 .. trimmed_len + 1];
 }
