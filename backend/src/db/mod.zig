@@ -307,20 +307,21 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
-pub fn getStats() struct { documents: i64, publications: i64, searches: i64, errors: i64 } {
-    var c = &(client orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0 });
+pub fn getStats() struct { documents: i64, publications: i64, searches: i64, errors: i64, started_at: i64 } {
+    var c = &(client orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0, .started_at = 0 });
 
     var res = c.query(
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
         \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
-        \\  (SELECT total_errors FROM stats WHERE id = 1) as errors
-    , &.{}) catch return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0 };
+        \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
+        \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at
+    , &.{}) catch return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0, .started_at = 0 };
     defer res.deinit();
 
-    const row = res.first() orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0 };
-    return .{ .documents = row.int(0), .publications = row.int(1), .searches = row.int(2), .errors = row.int(3) };
+    const row = res.first() orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0, .started_at = 0 };
+    return .{ .documents = row.int(0), .publications = row.int(1), .searches = row.int(2), .errors = row.int(3), .started_at = row.int(4) };
 }
 
 pub fn recordSearch(query: []const u8) void {

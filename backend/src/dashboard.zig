@@ -3,7 +3,7 @@ const std = @import("std");
 /// Generate dashboard HTML with live stats
 pub fn render(
     alloc: std.mem.Allocator,
-    uptime_secs: i64,
+    started_at: i64,
     searches: u64,
     errors: u64,
     documents: i64,
@@ -80,8 +80,8 @@ pub fn render(
         \\
         \\    <div class="stats-grid">
         \\      <div class="stat">
-        \\        <div class="stat-value uptime" id="uptime">--</div>
-        \\        <div class="stat-label">uptime</div>
+        \\        <div class="stat-value uptime" id="age">--</div>
+        \\        <div class="stat-label">service age</div>
         \\      </div>
         \\      <div class="stat">
         \\        <div class="stat-value">
@@ -130,32 +130,31 @@ pub fn render(
         \\  </div>
         \\
         \\  <script>
-        \\    const startUptime =
+        \\    const startedAt =
     );
 
-    try w.print("{d}", .{uptime_secs});
+    try w.print("{d}", .{started_at});
     try w.writeAll(
-        \\;
-        \\    const startTime = Date.now();
+        \\ * 1000;
         \\
-        \\    function formatUptime(secs) {
+        \\    function formatAge(ms) {
+        \\      const secs = Math.floor(ms / 1000);
         \\      const d = Math.floor(secs / 86400);
         \\      const h = Math.floor((secs % 86400) / 3600);
         \\      const m = Math.floor((secs % 3600) / 60);
-        \\      const s = secs % 60;
-        \\      if (d > 0) return `${d}d ${h}h ${m}m`;
-        \\      if (h > 0) return `${h}h ${m}m ${s}s`;
-        \\      if (m > 0) return `${m}m ${s}s`;
-        \\      return `${s}s`;
+        \\      if (d > 0) return `${d}d ${h}h`;
+        \\      if (h > 0) return `${h}h ${m}m`;
+        \\      if (m > 0) return `${m}m`;
+        \\      return `${secs}s`;
         \\    }
         \\
-        \\    function updateUptime() {
-        \\      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        \\      document.getElementById('uptime').textContent = formatUptime(startUptime + elapsed);
+        \\    function updateAge() {
+        \\      const age = Date.now() - startedAt;
+        \\      document.getElementById('age').textContent = formatAge(age);
         \\    }
         \\
-        \\    updateUptime();
-        \\    setInterval(updateUptime, 1000);
+        \\    updateAge();
+        \\    setInterval(updateAge, 60000);
         \\
         \\    const tags =
     );

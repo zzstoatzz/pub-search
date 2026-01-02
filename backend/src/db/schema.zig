@@ -66,12 +66,21 @@ fn createTables(client: *turso.Client) !void {
         \\CREATE TABLE IF NOT EXISTS stats (
         \\  id INTEGER PRIMARY KEY CHECK (id = 1),
         \\  total_searches INTEGER DEFAULT 0,
-        \\  total_errors INTEGER DEFAULT 0
+        \\  total_errors INTEGER DEFAULT 0,
+        \\  service_started_at INTEGER
         \\)
     , &.{});
 
     // ensure the single row exists
     client.exec("INSERT OR IGNORE INTO stats (id) VALUES (1)", &.{}) catch {};
+
+    // set service_started_at if not already set (first run ever)
+    var ts_buf: [20]u8 = undefined;
+    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
+    client.exec(
+        "UPDATE stats SET service_started_at = ? WHERE id = 1 AND service_started_at IS NULL",
+        &.{ts_str},
+    ) catch {};
 
     // popular searches tracking
     try client.exec(
@@ -86,4 +95,5 @@ fn runMigrations(client: *turso.Client) !void {
     // these may fail if columns already exist - that's fine
     client.exec("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch {};
     client.exec("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch {};
+    client.exec("ALTER TABLE stats ADD COLUMN service_started_at INTEGER", &.{}) catch {};
 }

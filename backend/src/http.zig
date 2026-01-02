@@ -173,13 +173,12 @@ fn handleDashboard(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const s = stats.get();
     const db_stats = db.getStats();
     const tags_json = db.getTags(alloc) catch "[]";
 
     const html = dashboard.render(
         alloc,
-        s.getUptime(),
+        db_stats.started_at,
         @intCast(db_stats.searches),
         @intCast(db_stats.errors),
         db_stats.documents,
