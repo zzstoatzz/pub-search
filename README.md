@@ -21,7 +21,7 @@ GET /stats                       # document/publication counts
 GET /health                      # health check
 ```
 
-search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself)
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). tag filtering applies to documents only.
 
 ## stack
 
