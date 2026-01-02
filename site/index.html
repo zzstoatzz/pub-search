@@ -227,6 +227,12 @@
       margin-bottom: 1rem;
     }
 
+    .tags-label {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 0.5rem;
+    }
+
     .tags-list {
       display: flex;
       flex-wrap: wrap;
@@ -480,7 +486,7 @@
       const html = allTags.slice(0, 15).map(t => `
         <span class="tag${currentTag === t.tag ? ' active' : ''}" onclick="setTag('${escapeHtml(t.tag)}')">${escapeHtml(t.tag)}<span class="count">${t.count}</span></span>
       `).join('');
-      tagsDiv.innerHTML = `<div class="tags-list">${html}</div>`;
+      tagsDiv.innerHTML = `<div class="tags-label">filter by tag:</div><div class="tags-list">${html}</div>`;
     }
 
     async function loadTags() {
