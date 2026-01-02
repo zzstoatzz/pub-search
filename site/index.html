@@ -339,7 +339,7 @@
                   ? `<a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
                   : escapeHtml(doc.title || 'Untitled')}
               </div>
-              <div class="result-snippet">${doc.snippet || ''}</div>
+              <div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>
               <div class="result-meta">
                 ${date ? `${date} | ` : ''}${doc.basePath
                   ? `<a href="https://${doc.basePath}" target="_blank">${doc.basePath}</a>`
@@ -364,6 +364,19 @@
       return str.replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       })[c]);
+    }
+
+    function highlightTerms(text, query) {
+      if (!text || !query) return escapeHtml(text);
+      const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+      if (terms.length === 0) return escapeHtml(text);
+
+      // build regex that matches any term (case insensitive)
+      const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      const regex = new RegExp(`(${escaped.join('|')})`, 'gi');
+
+      // escape HTML first, then apply highlights
+      return escapeHtml(text).replace(regex, '<mark>$1</mark>');
     }
 
     function updateUrl() {

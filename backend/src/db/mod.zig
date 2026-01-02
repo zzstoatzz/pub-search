@@ -128,7 +128,7 @@ const DocsByTag = zql.Query(
 
 const DocsByFtsAndTag = zql.Query(
     \\SELECT f.uri, d.did, d.title,
-    \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+    \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, p.base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
     \\FROM documents_fts f
@@ -141,7 +141,7 @@ const DocsByFtsAndTag = zql.Query(
 
 const DocsByFts = zql.Query(
     \\SELECT f.uri, d.did, d.title,
-    \\  snippet(documents_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+    \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, p.base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
     \\FROM documents_fts f
@@ -174,7 +174,7 @@ const Pub = struct {
 
 const PubSearch = zql.Query(
     \\SELECT f.uri, p.did, p.name,
-    \\  snippet(publications_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+    \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
     \\  p.rkey, p.base_path
     \\FROM publications_fts f
     \\JOIN publications p ON f.uri = p.uri
