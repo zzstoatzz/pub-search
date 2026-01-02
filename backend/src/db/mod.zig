@@ -213,21 +213,22 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
         if (pub_result) |*res| {
             defer res.deinit();
             for (res.rows) |row| {
+                const p = PubQuery.fromRow(Pub, row);
                 try jw.beginObject();
                 try jw.objectField("type");
                 try jw.write("publication");
                 try jw.objectField("uri");
-                try jw.write(row.text(PubQuery.columnIndex("uri")));
+                try jw.write(p.uri);
                 try jw.objectField("did");
-                try jw.write(row.text(PubQuery.columnIndex("did")));
+                try jw.write(p.did);
                 try jw.objectField("title");
-                try jw.write(row.text(PubQuery.columnIndex("name")));
+                try jw.write(p.name);
                 try jw.objectField("snippet");
-                try jw.write(row.text(PubQuery.columnIndex("snippet")));
+                try jw.write(p.snippet);
                 try jw.objectField("rkey");
-                try jw.write(row.text(PubQuery.columnIndex("rkey")));
+                try jw.write(p.rkey);
                 try jw.objectField("basePath");
-                try jw.write(row.text(PubQuery.columnIndex("base_path")));
+                try jw.write(p.base_path);
                 try jw.endObject();
             }
         }
