@@ -89,15 +89,17 @@ pub fn deletePublication(uri: []const u8) void {
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
 }
 
+/// Document search result.
+/// Type derivation: has_publication=true → "article", false → "looseleaf"
 const Doc = struct {
     uri: []const u8,
     did: []const u8,
     title: []const u8,
     snippet: []const u8,
-    created_at: []const u8,
+    createdAt: []const u8,
     rkey: []const u8,
-    base_path: []const u8,
-    has_publication: bool,
+    basePath: []const u8,
+    hasPublication: bool,
 
     fn fromRow(row: Row) Doc {
         return .{
@@ -105,10 +107,10 @@ const Doc = struct {
             .did = row.text(1),
             .title = row.text(2),
             .snippet = row.text(3),
-            .created_at = row.text(4),
+            .createdAt = row.text(4),
             .rkey = row.text(5),
-            .base_path = row.text(6),
-            .has_publication = row.int(7) != 0,
+            .basePath = row.text(6),
+            .hasPublication = row.int(7) != 0,
         };
     }
 };
@@ -149,13 +151,14 @@ const DocsByFts = zql.Query(
     \\ORDER BY rank LIMIT 40
 );
 
+/// Publication search result. Type is always "publication".
 const Pub = struct {
     uri: []const u8,
     did: []const u8,
     name: []const u8,
     snippet: []const u8,
     rkey: []const u8,
-    base_path: []const u8,
+    basePath: []const u8,
 
     fn fromRow(row: Row) Pub {
         return .{
@@ -164,7 +167,7 @@ const Pub = struct {
             .name = row.text(2),
             .snippet = row.text(3),
             .rkey = row.text(4),
-            .base_path = row.text(5),
+            .basePath = row.text(5),
         };
     }
 };
@@ -221,7 +224,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
             const doc = Doc.fromRow(row);
             try jw.beginObject();
             try jw.objectField("type");
-            try jw.write(if (doc.has_publication) "article" else "looseleaf");
+            try jw.write(if (doc.hasPublication) "article" else "looseleaf");
             try jw.objectField("uri");
             try jw.write(doc.uri);
             try jw.objectField("did");
@@ -231,16 +234,16 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
             try jw.objectField("snippet");
             try jw.write(doc.snippet);
             try jw.objectField("createdAt");
-            try jw.write(doc.created_at);
+            try jw.write(doc.createdAt);
             try jw.objectField("rkey");
             try jw.write(doc.rkey);
             try jw.objectField("basePath");
-            try jw.write(doc.base_path);
+            try jw.write(doc.basePath);
             try jw.endObject();
         }
     }
 
-    // search publications (only if no tag filter)
+    // publications are excluded when filtering by tag (tags only apply to documents)
     if (tag_filter == null) {
         var pub_result = c.query(
             PubSearch.positional,
@@ -265,7 +268,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
                 try jw.objectField("rkey");
                 try jw.write(p.rkey);
                 try jw.objectField("basePath");
-                try jw.write(p.base_path);
+                try jw.write(p.basePath);
                 try jw.endObject();
             }
         }
@@ -282,7 +285,7 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
     errdefer output.deinit();
 
     var res = c.query(TagsQuery.positional, &.{}) catch {
-        try output.writer.writeAll("[]");
+        try output.writer.writeAll("{\"error\":\"failed to fetch tags\"}");
         return try output.toOwnedSlice();
     };
     defer res.deinit();

@@ -263,7 +263,9 @@
   </div>
 
   <script>
-    const API_URL = 'https://leaflet-search-backend.fly.dev';
+    const API_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+      ? 'http://localhost:8080'
+      : 'https://leaflet-search-backend.fly.dev';
 
     const queryInput = document.getElementById('query');
     const searchBtn = document.getElementById('search-btn');
@@ -408,7 +410,7 @@
       }
       activeFilterDiv.innerHTML = `
         <div class="active-filter">
-          <span>filtering by tag: <strong>#${escapeHtml(currentTag)}</strong></span>
+          <span>filtering by tag: <strong>#${escapeHtml(currentTag)}</strong> <span style="color:#666;font-size:10px">(documents only)</span></span>
           <span class="clear" onclick="clearTag()">× clear</span>
         </div>
       `;
@@ -428,7 +430,12 @@
     async function loadTags() {
       try {
         const res = await fetch(`${API_URL}/tags`);
-        allTags = await res.json();
+        const data = await res.json();
+        if (data.error) {
+          console.error('failed to load tags:', data.error);
+          return;
+        }
+        allTags = data;
         renderTags();
       } catch (e) {
         console.error('failed to load tags', e);
