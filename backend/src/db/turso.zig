@@ -43,6 +43,7 @@ pub const Client = struct {
     url: []const u8,
     token: []const u8,
     mutex: std.Thread.Mutex = .{},
+    http_client: http.Client,
 
     pub fn init(allocator: Allocator) !Client {
         const url = std.posix.getenv("TURSO_URL") orelse {
@@ -67,7 +68,12 @@ pub const Client = struct {
             .allocator = allocator,
             .url = host,
             .token = token,
+            .http_client = .{ .allocator = allocator },
         };
+    }
+
+    pub fn deinit(self: *Client) void {
+        self.http_client.deinit();
     }
 
     /// Execute a query and return parsed results.
@@ -153,13 +159,10 @@ pub const Client = struct {
         const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.token}) catch
             return error.AuthTooLong;
 
-        var client: http.Client = .{ .allocator = self.allocator };
-        defer client.deinit();
-
         var response_body: std.Io.Writer.Allocating = .init(self.allocator);
         errdefer response_body.deinit();
 
-        const res = client.fetch(.{
+        const res = self.http_client.fetch(.{
             .location = .{ .url = url },
             .method = .POST,
             .headers = .{

@@ -89,7 +89,30 @@ pub fn deletePublication(uri: []const u8) void {
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
 }
 
-// query types with comptime column extraction
+const Doc = struct {
+    uri: []const u8,
+    did: []const u8,
+    title: []const u8,
+    snippet: []const u8,
+    created_at: []const u8,
+    rkey: []const u8,
+    base_path: []const u8,
+    has_publication: bool,
+
+    fn fromRow(row: Row) Doc {
+        return .{
+            .uri = row.text(0),
+            .did = row.text(1),
+            .title = row.text(2),
+            .snippet = row.text(3),
+            .created_at = row.text(4),
+            .rkey = row.text(5),
+            .base_path = row.text(6),
+            .has_publication = row.int(7) != 0,
+        };
+    }
+};
+
 const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, p.base_path,
@@ -126,15 +149,24 @@ const DocsByFts = zql.Query(
     \\ORDER BY rank LIMIT 40
 );
 
-const Doc = struct {
+const Pub = struct {
     uri: []const u8,
     did: []const u8,
-    title: []const u8,
+    name: []const u8,
     snippet: []const u8,
-    created_at: []const u8,
     rkey: []const u8,
     base_path: []const u8,
-    has_publication: bool,
+
+    fn fromRow(row: Row) Pub {
+        return .{
+            .uri = row.text(0),
+            .did = row.text(1),
+            .name = row.text(2),
+            .snippet = row.text(3),
+            .rkey = row.text(4),
+            .base_path = row.text(5),
+        };
+    }
 };
 
 const PubSearch = zql.Query(
@@ -147,14 +179,22 @@ const PubSearch = zql.Query(
     \\ORDER BY rank LIMIT 10
 );
 
-const Pub = struct {
-    uri: []const u8,
-    did: []const u8,
-    name: []const u8,
-    snippet: []const u8,
-    rkey: []const u8,
-    base_path: []const u8,
+const TagCount = struct {
+    tag: []const u8,
+    count: i64,
+
+    fn fromRow(row: Row) TagCount {
+        return .{ .tag = row.text(0), .count = row.int(1) };
+    }
 };
+
+const TagsQuery = zql.Query(
+    \\SELECT tag, COUNT(*) as count
+    \\FROM document_tags
+    \\GROUP BY tag
+    \\ORDER BY count DESC
+    \\LIMIT 100
+);
 
 pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
     var c = &(client orelse return error.NotInitialized);
@@ -178,7 +218,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
     if (doc_result) |*res| {
         defer res.deinit();
         for (res.rows) |row| {
-            const doc = DocsByFts.fromRow(Doc, row);
+            const doc = Doc.fromRow(row);
             try jw.beginObject();
             try jw.objectField("type");
             try jw.write(if (doc.has_publication) "article" else "looseleaf");
@@ -210,7 +250,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
         if (pub_result) |*res| {
             defer res.deinit();
             for (res.rows) |row| {
-                const p = PubSearch.fromRow(Pub, row);
+                const p = Pub.fromRow(row);
                 try jw.beginObject();
                 try jw.objectField("type");
                 try jw.write("publication");
@@ -241,13 +281,7 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
-    var res = c.query(
-        \\SELECT tag, COUNT(*) as count
-        \\FROM document_tags
-        \\GROUP BY tag
-        \\ORDER BY count DESC
-        \\LIMIT 100
-    , &.{}) catch {
+    var res = c.query(TagsQuery.positional, &.{}) catch {
         try output.writer.writeAll("[]");
         return try output.toOwnedSlice();
     };
@@ -257,11 +291,12 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
     try jw.beginArray();
 
     for (res.rows) |row| {
+        const tag = TagCount.fromRow(row);
         try jw.beginObject();
         try jw.objectField("tag");
-        try jw.write(row.text(0));
+        try jw.write(tag.tag);
         try jw.objectField("count");
-        try jw.write(row.int(1));
+        try jw.write(tag.count);
         try jw.endObject();
     }
 
@@ -272,21 +307,15 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
 pub fn getStats() struct { documents: i64, publications: i64 } {
     var c = &(client orelse return .{ .documents = 0, .publications = 0 });
 
-    const docs = blk: {
-        var res = c.query("SELECT COUNT(*) FROM documents", &.{}) catch break :blk 0;
-        defer res.deinit();
-        const row = res.first() orelse break :blk 0;
-        break :blk row.int(0);
-    };
+    var res = c.query(
+        \\SELECT
+        \\  (SELECT COUNT(*) FROM documents) as docs,
+        \\  (SELECT COUNT(*) FROM publications) as pubs
+    , &.{}) catch return .{ .documents = 0, .publications = 0 };
+    defer res.deinit();
 
-    const pubs = blk: {
-        var res = c.query("SELECT COUNT(*) FROM publications", &.{}) catch break :blk 0;
-        defer res.deinit();
-        const row = res.first() orelse break :blk 0;
-        break :blk row.int(0);
-    };
-
-    return .{ .documents = docs, .publications = pubs };
+    const row = res.first() orelse return .{ .documents = 0, .publications = 0 };
+    return .{ .documents = row.int(0), .publications = row.int(1) };
 }
 
 /// Build FTS5 query with prefix matching: "cat dog" -> "cat* dog*"
