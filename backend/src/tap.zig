@@ -5,6 +5,9 @@ const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const db = @import("db/mod.zig");
+const types = @import("types.zig");
+const Did = types.Did;
+const AtUri = types.AtUri;
 
 const DOCUMENT_COLLECTION = "pub.leaflet.document";
 const PUBLICATION_COLLECTION = "pub.leaflet.publication";
@@ -118,40 +121,41 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const action = rec.get("action") orelse return;
     if (action != .string) return;
 
-    const did = rec.get("did") orelse return;
-    if (did != .string) return;
+    const did_val = rec.get("did") orelse return;
+    if (did_val != .string) return;
+    const did = Did.parse(did_val.string) orelse return;
 
     const rkey = rec.get("rkey") orelse return;
     if (rkey != .string) return;
 
-    const uri_str = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ did.string, collection.string, rkey.string });
-    defer allocator.free(uri_str);
+    const uri = AtUri.build(allocator, did, collection.string, rkey.string) catch return;
+    defer allocator.free(uri.raw);
 
     if (mem.eql(u8, action.string, "create") or mem.eql(u8, action.string, "update")) {
         const record = rec.get("record") orelse return;
         if (record != .object) return;
 
         if (mem.eql(u8, collection.string, DOCUMENT_COLLECTION)) {
-            processDocument(allocator, uri_str, did.string, rkey.string, record.object) catch |err| {
+            processDocument(allocator, uri, record.object) catch |err| {
                 std.debug.print("document processing error: {}\n", .{err});
             };
         } else if (mem.eql(u8, collection.string, PUBLICATION_COLLECTION)) {
-            processPublication(uri_str, did.string, rkey.string, record.object) catch |err| {
+            processPublication(uri, record.object) catch |err| {
                 std.debug.print("publication processing error: {}\n", .{err});
             };
         }
     } else if (mem.eql(u8, action.string, "delete")) {
         if (mem.eql(u8, collection.string, DOCUMENT_COLLECTION)) {
-            db.deleteDocument(uri_str);
-            std.debug.print("deleted document: {s}\n", .{uri_str});
+            db.deleteDocument(uri.str());
+            std.debug.print("deleted document: {s}\n", .{uri.str()});
         } else if (mem.eql(u8, collection.string, PUBLICATION_COLLECTION)) {
-            db.deletePublication(uri_str);
-            std.debug.print("deleted publication: {s}\n", .{uri_str});
+            db.deletePublication(uri.str());
+            std.debug.print("deleted publication: {s}\n", .{uri.str()});
         }
     }
 }
 
-fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+fn processDocument(allocator: Allocator, uri: AtUri, record: json.ObjectMap) !void {
     // get title
     const title_val = record.get("title") orelse return;
     if (title_val != .string) return;
@@ -214,8 +218,8 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         return;
     }
 
-    try db.insertDocument(uri, did, rkey, title, content_buf.items, created_at, publication_uri, tags_list.items);
-    std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri, content_buf.items.len, tags_list.items.len });
+    try db.insertDocument(uri.str(), uri.did().str(), uri.rkey(), title, content_buf.items, created_at, publication_uri, tags_list.items);
+    std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri.str(), content_buf.items.len, tags_list.items.len });
 }
 
 fn extractPlaintextFromPage(allocator: Allocator, buf: *std.ArrayList(u8), page: json.ObjectMap) !void {
@@ -299,7 +303,7 @@ fn extractListItemText(allocator: Allocator, buf: *std.ArrayList(u8), item: json
     }
 }
 
-fn processPublication(uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+fn processPublication(uri: AtUri, record: json.ObjectMap) !void {
     const name_val = record.get("name") orelse return;
     if (name_val != .string) return;
     const name = name_val.string;
@@ -318,6 +322,6 @@ fn processPublication(uri: []const u8, did: []const u8, rkey: []const u8, record
         break :blk null;
     };
 
-    try db.insertPublication(uri, did, rkey, name, description, base_path);
-    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, base_path orelse "none" });
+    try db.insertPublication(uri.str(), uri.did().str(), uri.rkey(), name, description, base_path);
+    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri.str(), base_path orelse "none" });
 }

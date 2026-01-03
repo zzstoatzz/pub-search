@@ -4,6 +4,7 @@ const http = std.http;
 const mem = std.mem;
 const db = @import("db/mod.zig");
 const dashboard = @import("dashboard.zig");
+const activity = @import("activity.zig");
 
 const HTTP_BUF_SIZE = 8192;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -58,6 +59,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try handleDashboard(request);
     } else if (mem.startsWith(u8, target, "/similar")) {
         try handleSimilar(request, target);
+    } else if (mem.eql(u8, target, "/activity")) {
+        try handleActivity(request);
     } else {
         try sendNotFound(request);
     }
@@ -212,4 +215,22 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
     };
 
     try sendJson(request, results);
+}
+
+fn handleActivity(request: *http.Server.Request) !void {
+    const counts = activity.getCounts();
+
+    // format as JSON array
+    var buf: [512]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+
+    writer.writeByte('[') catch return;
+    for (counts, 0..) |c, i| {
+        if (i > 0) writer.writeByte(',') catch return;
+        writer.print("{d}", .{c}) catch return;
+    }
+    writer.writeByte(']') catch return;
+
+    try sendJson(request, stream.getWritten());
 }

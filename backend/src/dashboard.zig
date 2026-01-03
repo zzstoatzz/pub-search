@@ -172,16 +172,19 @@ pub fn render(alloc: Allocator, data: Data) ![]const u8 {
         \\    }
         \\    .metrics {
         \\      display: flex;
-        \\      gap: 2rem;
-        \\      margin-bottom: 1.5rem;
+        \\      gap: 1.5rem;
+        \\      margin-bottom: 1rem;
         \\    }
         \\    .metric-value {
-        \\      font-size: 24px;
-        \\      color: #fff;
+        \\      font-size: 16px;
+        \\      color: #888;
+        \\      font-weight: normal;
         \\    }
         \\    .metric-label {
-        \\      font-size: 11px;
-        \\      color: #555;
+        \\      font-size: 10px;
+        \\      color: #444;
+        \\      text-transform: uppercase;
+        \\      letter-spacing: 0.5px;
         \\    }
         \\    .chart-box {
         \\      background: #111;
@@ -247,6 +250,8 @@ pub fn render(alloc: Allocator, data: Data) ![]const u8 {
         \\      color: #aaa;
         \\    }
         \\    .tag .n { color: #444; margin-left: 4px; }
+        \\    .live { font-size: 11px; color: #555; }
+        \\    .live span { color: #4ade80; }
         \\    footer {
         \\      margin-top: 2rem;
         \\      padding-top: 1rem;
@@ -287,6 +292,7 @@ pub fn render(alloc: Allocator, data: Data) ![]const u8 {
         \\          <div class="metric-label">publications</div>
         \\        </div>
         \\      </div>
+        \\      <div class="live" id="live"></div>
         \\    </section>
         \\
         \\    <section>
@@ -395,6 +401,22 @@ pub fn render(alloc: Allocator, data: Data) ![]const u8 {
         \\      '<a class="tag" href="https://leaflet-search.pages.dev/?tag=' + encodeURIComponent(t.tag) + '">' +
         \\        t.tag + '<span class="n">' + t.count + '</span></a>'
         \\    ).join('');
+        \\
+        \\    // live activity - just a number
+        \\    const liveEl = document.getElementById('live');
+        \\    let lastN = -1;
+        \\    async function pollLive() {
+        \\      try {
+        \\        const r = await fetch('/activity');
+        \\        const c = await r.json();
+        \\        const n = c.reduce((a,b) => a+b, 0);
+        \\        if (n !== lastN) {
+        \\          liveEl.innerHTML = n > 0 ? '<span>' + n + '</span> req/6s' : '';
+        \\          lastN = n;
+        \\        }
+        \\      } catch(e) {}
+        \\    }
+        \\    pollLive(); setInterval(pollLive, 1000);
         \\  </script>
         \\</body>
         \\</html>

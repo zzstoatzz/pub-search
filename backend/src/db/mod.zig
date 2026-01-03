@@ -6,6 +6,7 @@ const zql = @import("zql");
 const Client = @import("Client.zig");
 const schema = @import("schema.zig");
 const result = @import("result.zig");
+const activity = @import("../activity.zig");
 
 pub const Row = result.Row;
 pub const BatchResult = result.BatchResult;
@@ -328,6 +329,7 @@ pub fn getStats() struct { documents: i64, publications: i64, searches: i64, err
 }
 
 pub fn recordSearch(query: []const u8) void {
+    activity.record(); // track for real-time sparkline
     var c = &(client orelse return);
     c.exec("UPDATE stats SET total_searches = total_searches + 1 WHERE id = 1", &.{}) catch {};
 

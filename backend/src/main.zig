@@ -5,6 +5,7 @@ const Thread = std.Thread;
 const db = @import("db/mod.zig");
 const server = @import("server.zig");
 const tap = @import("tap.zig");
+const activity = @import("activity.zig");
 
 const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 30;
@@ -16,6 +17,9 @@ pub fn main() !void {
 
     // init turso
     try db.init();
+
+    // start activity tracker
+    activity.init();
 
     // start tap consumer in background
     const tap_thread = try Thread.spawn(.{}, tap.consumer, .{allocator});
