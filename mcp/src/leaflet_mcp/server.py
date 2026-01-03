@@ -93,7 +93,7 @@ def search_tips() -> str:
 async def search(
     query: str = "",
     tag: str | None = None,
-    limit: int = 20,
+    limit: int = 5,
 ) -> list[SearchResult]:
     """search leaflet documents and publications.
 
@@ -103,7 +103,7 @@ async def search(
     args:
         query: search query (searches titles and content)
         tag: optional tag to filter by (only applies to documents)
-        limit: max results to return (default 20, max 40)
+        limit: max results to return (default 5, max 40)
 
     returns:
         list of search results with uri, title, snippet, and metadata

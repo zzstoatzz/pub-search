@@ -117,6 +117,10 @@ fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const 
             const end = mem.indexOf(u8, encoded, "&") orelse encoded.len;
             const query_encoded = encoded[0..end];
             const buf = try alloc.dupe(u8, query_encoded);
+            // decode + as space (form-urlencoded), then percent-decode
+            for (buf) |*c| {
+                if (c.* == '+') c.* = ' ';
+            }
             return std.Uri.percentDecodeInPlace(buf);
         }
     }

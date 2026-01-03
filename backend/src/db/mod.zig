@@ -410,29 +410,80 @@ pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
-/// Build FTS5 query with prefix on last word only: "cat dog" -> "cat dog*"
+/// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
+/// Uses OR for better recall with BM25 ranking (more matches = higher score)
 fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
 
-    // find actual content bounds (trim whitespace)
+    // normalize: trim whitespace
     var start: usize = 0;
     var end: usize = query.len;
     while (start < end and query[start] == ' ') start += 1;
     while (end > start and query[end - 1] == ' ') end -= 1;
-
     if (start >= end) return "";
 
-    // allocate: trimmed length + 1 for '*' at end
-    const trimmed_len = end - start;
-    const buf = try alloc.alloc(u8, trimmed_len + 1);
+    const trimmed = query[start..end];
 
-    // copy and normalize dots to spaces
-    for (query[start..end], 0..) |c, i| {
-        buf[i] = if (c == '.') ' ' else c;
+    // count words and total length
+    var word_count: usize = 0;
+    var total_word_len: usize = 0;
+    var in_word = false;
+    for (trimmed) |c| {
+        const is_sep = (c == ' ' or c == '.');
+        if (is_sep) {
+            in_word = false;
+        } else {
+            if (!in_word) word_count += 1;
+            in_word = true;
+            total_word_len += 1;
+        }
     }
-    buf[trimmed_len] = '*';
 
-    return buf[0 .. trimmed_len + 1];
+    if (word_count == 0) return "";
+
+    // single word: just add prefix wildcard
+    if (word_count == 1) {
+        const buf = try alloc.alloc(u8, total_word_len + 1);
+        var pos: usize = 0;
+        for (trimmed) |c| {
+            if (c != ' ' and c != '.') {
+                buf[pos] = c;
+                pos += 1;
+            }
+        }
+        buf[pos] = '*';
+        return buf;
+    }
+
+    // multiple words: join with " OR ", prefix on last
+    // size = word chars + (n-1) * 4 for " OR " + 1 for "*"
+    const buf_len = total_word_len + (word_count - 1) * 4 + 1;
+    const buf = try alloc.alloc(u8, buf_len);
+
+    var pos: usize = 0;
+    var current_word: usize = 0;
+    in_word = false;
+
+    for (trimmed) |c| {
+        const is_sep = (c == ' ' or c == '.');
+        if (is_sep) {
+            if (in_word) {
+                // end of word - add " OR " if not last
+                current_word += 1;
+                if (current_word < word_count) {
+                    @memcpy(buf[pos .. pos + 4], " OR ");
+                    pos += 4;
+                }
+            }
+            in_word = false;
+        } else {
+            buf[pos] = c;
+            pos += 1;
+            in_word = true;
+        }
+    }
+    buf[pos] = '*';
+    return buf;
 }
 
 /// Find documents similar to a given document using vector similarity
