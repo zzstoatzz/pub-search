@@ -93,11 +93,10 @@ pub const BatchResult = struct {
             all_results.deinit(allocator);
         }
 
-        // turso returns: execute, close, execute, close, ...
-        // we want every other result (the executes, skip the closes)
-        var query_idx: usize = 0;
-        var i: usize = 0;
-        while (i < turso_results.array.items.len and query_idx < count) : (i += 2) {
+        // turso returns: [execute, execute, ..., close]
+        // process first N items (the executes), skip the final close
+        for (0..count) |i| {
+            if (i >= turso_results.array.items.len) break;
             const item = turso_results.array.items[i];
             const json_rows = getRowsFromResult(item);
 
@@ -110,7 +109,6 @@ pub const BatchResult = struct {
                 }
             }
             try all_results.append(allocator, try rows.toOwnedSlice(allocator));
-            query_idx += 1;
         }
 
         return .{

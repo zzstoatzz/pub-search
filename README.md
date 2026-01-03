@@ -26,7 +26,7 @@ search returns three entity types: `article` (document in a publication), `loose
 ## stack
 
 - [Fly.io](https://fly.io) hosts backend + tap
-- [Turso](https://turso.tech) cloud SQLite stores documents, publications, tags, stats
+- [Turso](https://turso.tech) cloud SQLite
 - [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs leaflet content from ATProto firehose
 - [Zig](https://ziglang.org) HTTP server, search API, content indexing
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend

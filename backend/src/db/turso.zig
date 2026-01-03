@@ -275,13 +275,13 @@ pub const Client = struct {
 
             try jw.endObject(); // stmt
             try jw.endObject(); // execute request
-
-            // close after each statement
-            try jw.beginObject();
-            try jw.objectField("type");
-            try jw.write("close");
-            try jw.endObject();
         }
+
+        // single close at the end
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write("close");
+        try jw.endObject();
 
         try jw.endArray(); // requests
         try jw.endObject(); // root
