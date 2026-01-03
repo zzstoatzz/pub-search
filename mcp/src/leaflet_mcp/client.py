@@ -7,7 +7,7 @@ from typing import AsyncIterator
 import httpx
 
 # configurable via env var, defaults to production
-LEAFLET_API_URL = os.getenv("LEAFLET_API_URL", "https://leaflet-backend.fly.dev")
+LEAFLET_API_URL = os.getenv("LEAFLET_API_URL", "https://leaflet-search-backend.fly.dev")
 
 
 @asynccontextmanager
