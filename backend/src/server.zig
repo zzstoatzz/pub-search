@@ -56,6 +56,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try handlePopular(request);
     } else if (mem.eql(u8, target, "/dashboard")) {
         try handleDashboard(request);
+    } else if (mem.startsWith(u8, target, "/similar")) {
+        try handleSimilar(request, target);
     } else {
         try sendNotFound(request);
     }
@@ -192,4 +194,22 @@ fn sendHtml(request: *http.Server.Request, body: []const u8) !void {
             .{ .name = "content-type", .value = "text/html; charset=utf-8" },
         },
     });
+}
+
+fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const uri = parseQueryParam(alloc, target, "uri") catch {
+        try sendJson(request, "{\"error\":\"missing uri parameter\"}");
+        return;
+    };
+
+    const results = db.findSimilar(alloc, uri, 5) catch {
+        try sendJson(request, "[]");
+        return;
+    };
+
+    try sendJson(request, results);
 }

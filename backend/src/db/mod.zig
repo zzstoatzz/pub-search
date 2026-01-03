@@ -83,6 +83,14 @@ pub fn insertPublication(
 
 pub fn deleteDocument(uri: []const u8) void {
     var c = &(client orelse return);
+    // record tombstone
+    var ts_buf: [20]u8 = undefined;
+    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
+    c.exec(
+        "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'document', ?)",
+        &.{ uri, ts },
+    ) catch {};
+    // delete record
     c.exec("DELETE FROM documents WHERE uri = ?", &.{uri}) catch {};
     c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
     c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{uri}) catch {};
@@ -90,6 +98,14 @@ pub fn deleteDocument(uri: []const u8) void {
 
 pub fn deletePublication(uri: []const u8) void {
     var c = &(client orelse return);
+    // record tombstone
+    var ts_buf: [20]u8 = undefined;
+    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
+    c.exec(
+        "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'publication', ?)",
+        &.{ uri, ts },
+    ) catch {};
+    // delete record
     c.exec("DELETE FROM publications WHERE uri = ?", &.{uri}) catch {};
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
 }
@@ -377,4 +393,38 @@ fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     buf[trimmed_len] = '*';
 
     return buf[0 .. trimmed_len + 1];
+}
+
+/// Find documents similar to a given document using vector similarity
+pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
+    var c = &(client orelse return error.NotInitialized);
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var limit_buf: [8]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit + 1}) catch "6"; // +1 to exclude self
+
+    // vector similarity search using the document's embedding
+    // note: CAST required because Hrana sends all values as text
+    var res = c.query(
+        \\SELECT d.uri, d.did, d.title, '' as snippet,
+        \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+        \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+        \\FROM vector_top_k('documents_embedding_idx',
+        \\  (SELECT embedding FROM documents WHERE uri = ?), CAST(? AS INTEGER)) AS v
+        \\JOIN documents d ON d.rowid = v.id
+        \\LEFT JOIN publications p ON d.publication_uri = p.uri
+        \\WHERE d.uri != ?
+    , &.{ uri, limit_str, uri }) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| try jw.write(Doc.fromRow(row).toJson());
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }

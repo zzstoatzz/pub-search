@@ -1,0 +1,78 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Check vector index and embeddings status."""
+
+import os
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://"):]
+        return url
+
+
+def query(settings, sql):
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "requests": [
+                {"type": "execute", "stmt": {"sql": sql}},
+                {"type": "close"},
+            ]
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+settings = Settings()  # type: ignore
+
+# Check embeddings count
+print("Checking embeddings...")
+result = query(settings, "SELECT COUNT(*) as total, SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) as with_embeddings FROM documents")
+data = result["results"][0]["response"]["result"]["rows"][0]
+total = data[0]["value"] if isinstance(data[0], dict) else data[0]
+with_emb = data[1]["value"] if isinstance(data[1], dict) else data[1]
+print(f"  Total documents: {total}")
+print(f"  With embeddings: {with_emb}")
+
+# Check if vector index exists
+print("\nChecking for vector index...")
+result = query(settings, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%embedding%'")
+rows = result["results"][0]["response"]["result"]["rows"]
+for row in rows:
+    name = row[0]["value"] if isinstance(row[0], dict) else row[0]
+    print(f"  Found table: {name}")
+
+# Try to use the index directly
+print("\nTrying vector search...")
+try:
+    result = query(settings, """
+        SELECT d.uri, d.title
+        FROM vector_top_k('documents_embedding_idx',
+          (SELECT embedding FROM documents LIMIT 1), 3) AS v
+        JOIN documents d ON d.rowid = v.id
+        LIMIT 3
+    """)
+    print(f"  Result: {result['results'][0]}")
+except Exception as e:
+    print(f"  Error: {e}")

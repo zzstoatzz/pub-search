@@ -89,6 +89,15 @@ fn createTables(client: *Client) !void {
         \\  count INTEGER DEFAULT 1
         \\)
     , &.{});
+
+    // tombstones for deleted records
+    try client.exec(
+        \\CREATE TABLE IF NOT EXISTS tombstones (
+        \\  uri TEXT PRIMARY KEY,
+        \\  record_type TEXT NOT NULL,
+        \\  deleted_at INTEGER NOT NULL
+        \\)
+    , &.{});
 }
 
 fn runMigrations(client: *Client) !void {
@@ -96,4 +105,6 @@ fn runMigrations(client: *Client) !void {
     client.exec("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch {};
     client.exec("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch {};
     client.exec("ALTER TABLE stats ADD COLUMN service_started_at INTEGER", &.{}) catch {};
+
+    // vector embeddings column already added by backfill script
 }

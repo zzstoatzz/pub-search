@@ -1,0 +1,55 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Check what tables exist in the database."""
+
+import os
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://"):]
+        return url
+
+
+settings = Settings()  # type: ignore
+
+response = httpx.post(
+    f"https://{settings.turso_host}/v2/pipeline",
+    headers={
+        "Authorization": f"Bearer {settings.turso_token}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "requests": [
+            {"type": "execute", "stmt": {"sql": "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"}},
+            {"type": "close"},
+        ]
+    },
+    timeout=30,
+)
+response.raise_for_status()
+data = response.json()
+
+result = data["results"][0]
+if result["type"] == "error":
+    print(f"Error: {result['error']}")
+else:
+    rows = result["response"]["result"]["rows"]
+    print("Tables in database:")
+    for row in rows:
+        name = row[0]["value"] if isinstance(row[0], dict) else row[0]
+        print(f"  - {name}")

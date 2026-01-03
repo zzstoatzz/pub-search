@@ -1,0 +1,83 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Test the exact similar query."""
+
+import os
+import sys
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://"):]
+        return url
+
+
+def query(settings, sql, args=None):
+    stmt = {"sql": sql}
+    if args:
+        stmt["args"] = [{"type": "text", "value": str(a)} for a in args]
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "requests": [
+                {"type": "execute", "stmt": stmt},
+                {"type": "close"},
+            ]
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+settings = Settings()  # type: ignore
+uri = sys.argv[1] if len(sys.argv) > 1 else "at://did:plc:aub4nfuiysmvcfc4g5gptp47/pub.leaflet.document/3lusgsxusqk2w"
+limit = "6"
+
+print(f"Testing similar query for: {uri}")
+print(f"Limit: {limit}")
+
+# Fixed SQL with CAST
+sql = """
+SELECT d.uri, d.did, d.title, '' as snippet,
+  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+FROM vector_top_k('documents_embedding_idx',
+  (SELECT embedding FROM documents WHERE uri = ?), CAST(? AS INTEGER)) AS v
+JOIN documents d ON d.rowid = v.id
+LEFT JOIN publications p ON d.publication_uri = p.uri
+WHERE d.uri != ?
+"""
+
+try:
+    result = query(settings, sql, [uri, limit, uri])
+    print(f"\nResult type: {result['results'][0]['type']}")
+    if result['results'][0]['type'] == 'ok':
+        rows = result['results'][0]['response']['result']['rows']
+        print(f"Found {len(rows)} similar documents:")
+        for row in rows[:5]:
+            title = row[2]["value"] if isinstance(row[2], dict) else row[2]
+            print(f"  - {title}")
+    else:
+        print(f"Error: {result['results'][0]}")
+except Exception as e:
+    print(f"Exception: {e}")

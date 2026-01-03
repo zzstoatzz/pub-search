@@ -223,6 +223,43 @@
       text-align: center;
     }
 
+    .related-section {
+      margin-top: 1rem;
+      padding-top: 0;
+    }
+
+    .related-header {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 0.75rem;
+    }
+
+    .related-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .related-item {
+      font-size: 12px;
+      padding: 0.4rem 0.6rem;
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 3px;
+      color: #888;
+      text-decoration: none;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .related-item:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
+    }
+
     .tags {
       margin-bottom: 1rem;
     }
@@ -405,6 +442,11 @@
         resultsDiv.innerHTML = html;
         statsDiv.textContent = `${results.length} results`;
 
+        // load related documents based on top result
+        if (results.length > 0 && results[0].uri) {
+          loadRelated(results[0]);
+        }
+
       } catch (err) {
         resultsDiv.innerHTML = `<div class="status error">error: ${err.message}<br><code style="font-size:0.7rem">${searchUrl}</code></div>`;
       } finally {
@@ -569,6 +611,42 @@
 
     if (initialQuery || initialTag) {
       search(initialQuery || '', initialTag);
+    }
+
+    async function loadRelated(topResult) {
+      try {
+        const res = await fetch(`${API_URL}/similar?uri=${encodeURIComponent(topResult.uri)}`);
+        const related = await res.json();
+
+        if (!related || related.length === 0) return;
+
+        // filter out the top result itself and limit to 4
+        const filtered = related
+          .filter(r => r.uri !== topResult.uri)
+          .slice(0, 4);
+
+        if (filtered.length === 0) return;
+
+        const items = filtered.map(doc => {
+          const url = doc.basePath && doc.rkey
+            ? `https://${doc.basePath}/${doc.rkey}`
+            : (doc.did && doc.rkey ? `https://leaflet.pub/p/${doc.did}/${doc.rkey}` : null);
+          return url
+            ? `<a href="${url}" target="_blank" class="related-item">${escapeHtml(doc.title || 'Untitled')}</a>`
+            : `<span class="related-item">${escapeHtml(doc.title || 'Untitled')}</span>`;
+        }).join('');
+
+        const relatedHtml = `
+          <div class="related-section">
+            <div class="related-header">related to "${escapeHtml(topResult.title?.slice(0, 30) || 'top result')}${topResult.title?.length > 30 ? '...' : ''}"</div>
+            <div class="related-items">${items}</div>
+          </div>
+        `;
+
+        resultsDiv.insertAdjacentHTML('beforeend', relatedHtml);
+      } catch (e) {
+        // silently fail - related is optional
+      }
     }
 
     loadTags();
