@@ -12,6 +12,16 @@ search for [leaflet](https://leaflet.pub).
 2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API
 3. **site** static frontend on Cloudflare Pages
 
+## MCP server
+
+search is also exposed as an MCP server for AI agents like Claude Code:
+
+```bash
+claude mcp add-json leaflet '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
+```
+
+see [mcp/README.md](mcp/README.md) for local setup and usage details.
+
 ## api
 
 ```

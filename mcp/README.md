@@ -2,69 +2,43 @@
 
 MCP server for [Leaflet](https://leaflet.pub) - search decentralized publications on ATProto.
 
-## installation
-
-```bash
-uv add leaflet-mcp
-```
-
 ## usage
 
-### as a CLI
+### hosted (recommended)
 
 ```bash
-leaflet-mcp
+claude mcp add-json leaflet '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
 ```
 
-### with Claude Code
+### local
 
-Add to your `.claude/settings.json`:
+run the MCP server locally with `uvx`:
 
-```json
-{
-  "mcpServers": {
-    "leaflet": {
-      "command": "uvx",
-      "args": ["leaflet-mcp"]
-    }
-  }
-}
+```bash
+uvx --from git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp leaflet-mcp
 ```
 
-## tools
+to add it to claude code as a local stdio server:
 
-- `search(query, tag, limit)` - search documents and publications
-- `get_document(uri)` - get full document content by AT-URI
-- `find_similar(uri, limit)` - find semantically similar documents
-- `get_tags()` - list available tags with counts
-- `get_stats()` - get index statistics
-- `get_popular(limit)` - get popular search queries
+```bash
+claude mcp add leaflet -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp' leaflet-mcp
+```
 
-## example
+## workflow
 
-```python
-from fastmcp.client import Client
-from fastmcp.client.transports import SSETransport
+1. **search** for documents by query or tag
+2. **get_document** to retrieve full content by AT-URI
 
-async with Client(transport=SSETransport("http://localhost:8000/sse")) as client:
-    # search for python articles
-    results = await client.call_tool("search", {"query": "python"})
-
-    # get full content of first result
-    if results.data:
-        doc = await client.call_tool("get_document", {"uri": results.data[0].uri})
-        print(doc.data.content)
+```
+search("space station") → [{uri: "at://...", title: "...", snippet: "..."}]
+get_document("at://...") → {title: "...", content: "full article text..."}
 ```
 
 ## development
 
 ```bash
-# install dev dependencies
-uv sync --group dev
-
-# run tests
+git clone https://github.com/zzstoatzz/leaflet-search
+cd leaflet-search/mcp
+uv sync
 uv run pytest
-
-# format
-uv run ruff format
 ```
