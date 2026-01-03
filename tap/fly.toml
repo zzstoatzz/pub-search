@@ -7,6 +7,7 @@ primary_region = 'iad'
 [env]
   TAP_DATABASE_URL = 'sqlite:///data/tap.db'
   TAP_BIND = ':2480'
+  TAP_RELAY_URL = 'https://relay1.us-east.bsky.network'
   TAP_SIGNAL_COLLECTION = 'pub.leaflet.document'
   TAP_COLLECTION_FILTERS = 'pub.leaflet.document,pub.leaflet.publication'
   TAP_DISABLE_ACKS = 'true'
