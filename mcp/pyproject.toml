@@ -69,3 +69,6 @@ extend-select = ["B", "C4", "I", "PIE", "RUF", "SIM", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "I001"]
+
+[tool.uv.sources]
+pdsx = { git = "https://github.com/zzstoatzz/pdsx.git" }

@@ -704,7 +704,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-sugar" },
-    { name = "respx" },
     { name = "ruff" },
 ]
 
@@ -712,7 +711,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=2.0" },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "pdsx" },
+    { name = "pdsx", git = "https://github.com/zzstoatzz/pdsx.git" },
 ]
 
 [package.metadata.requires-dev]
@@ -720,7 +719,6 @@ dev = [
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", specifier = ">=0.25.0" },
     { name = "pytest-sugar" },
-    { name = "respx", specifier = ">=0.22" },
     { name = "ruff", specifier = ">=0.12.0" },
 ]
 
@@ -1043,17 +1041,13 @@ wheels = [
 
 [[package]]
 name = "pdsx"
-version = "0.0.1a12"
-source = { registry = "https://pypi.org/simple" }
+version = "0.0.1a16"
+source = { git = "https://github.com/zzstoatzz/pdsx.git#0ddb54107895408e6e3b0a8049c2eb4377f53fc0" }
 dependencies = [
     { name = "atproto" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "rich" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/09/ad53b8d8a7f987ac835e600f86aec68a30b71a70ce1ae54ce1269231791f/pdsx-0.0.1a12.tar.gz", hash = "sha256:1475b4533b63386b82819f6fe7f1d9835fb0fdc199d4a11ae0bff53424dabbad", size = 140194, upload-time = "2025-12-07T07:27:39.757Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/39/0b12ff07d04ebf0c495a7e92bd8b5d2d6611d04d5500bf7ec14b997cc125/pdsx-0.0.1a12-py3-none-any.whl", hash = "sha256:8a9df926f88e0aa88c956335c4cd2925ee47dae064d65e7686727efb46af8dc8", size = 28384, upload-time = "2025-12-07T07:27:38.68Z" },
 ]
 
 [[package]]
@@ -1547,18 +1541,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c9/74/b3ff8e6c8446842c3f5c837e9c3dfcfe2018ea6ecef224c710c85ef728f4/requests-2.32.5.tar.gz", hash = "sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf", size = 134517, upload-time = "2025-08-18T20:46:02.573Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl", hash = "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6", size = 64738, upload-time = "2025-08-18T20:46:00.542Z" },
-]
-
-[[package]]
-name = "respx"
-version = "0.22.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f4/7c/96bd0bc759cf009675ad1ee1f96535edcb11e9666b985717eb8c87192a95/respx-0.22.0.tar.gz", hash = "sha256:3c8924caa2a50bd71aefc07aa812f2466ff489f1848c96e954a5362d17095d91", size = 28439, upload-time = "2024-12-19T22:33:59.374Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8e/67/afbb0978d5399bc9ea200f1d4489a23c9a1dad4eee6376242b8182389c79/respx-0.22.0-py2.py3-none-any.whl", hash = "sha256:631128d4c9aba15e56903fb5f66fb1eff412ce28dd387ca3a81339e52dbd3ad0", size = 25127, upload-time = "2024-12-19T22:33:57.837Z" },
 ]
 
 [[package]]

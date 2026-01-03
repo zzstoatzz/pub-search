@@ -141,8 +141,8 @@ async def get_document(uri: str) -> Document:
     """
     # use pdsx to fetch the actual record from ATProto
     try:
-        from pdsx._internal.client import create_client
         from pdsx._internal.operations import get_record
+        from pdsx.mcp.client import get_atproto_client
     except ImportError as e:
         raise RuntimeError(
             "pdsx is required for fetching full documents. install with: uv add pdsx"
@@ -156,21 +156,33 @@ async def get_document(uri: str) -> Document:
 
     repo = parts[0]
 
-    async with create_client(repo=repo) as client:
+    async with get_atproto_client(target_repo=repo) as client:
         record = await get_record(client, uri)
 
     value = record.value
-    # handle both dict and model responses
-    if hasattr(value, "model_dump"):
-        value = value.model_dump()
-    elif hasattr(value, "to_dict"):
+    # DotDict doesn't have a working .get(), convert to dict first
+    if hasattr(value, "to_dict") and callable(value.to_dict):
         value = value.to_dict()
+    elif not isinstance(value, dict):
+        value = dict(value)
+
+    # extract content from leaflet's block structure
+    # pages[].blocks[].block.plaintext
+    content_parts = []
+    for page in value.get("pages", []):
+        for block_wrapper in page.get("blocks", []):
+            block = block_wrapper.get("block", {})
+            plaintext = block.get("plaintext", "")
+            if plaintext:
+                content_parts.append(plaintext)
+
+    content = "\n\n".join(content_parts)
 
     return Document(
         uri=record.uri,
         title=value.get("title", ""),
-        content=value.get("content", ""),
-        createdAt=value.get("createdAt", ""),
+        content=content,
+        createdAt=value.get("publishedAt", "") or value.get("createdAt", ""),
         tags=value.get("tags", []),
         publicationUri=value.get("publication", ""),
     )
