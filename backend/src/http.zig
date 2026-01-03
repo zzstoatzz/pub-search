@@ -3,8 +3,8 @@ const net = std.net;
 const http = std.http;
 const mem = std.mem;
 const db = @import("db/mod.zig");
-const stats = @import("stats.zig");
 const dashboard = @import("dashboard.zig");
+const dashboard_data = @import("dashboard_data.zig");
 
 const HTTP_BUF_SIZE = 8192;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -173,18 +173,12 @@ fn handleDashboard(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const db_stats = db.getStats();
-    const tags_json = db.getTags(alloc) catch "[]";
+    const data = dashboard_data.fetch(alloc) catch {
+        try sendNotFound(request);
+        return;
+    };
 
-    const html = dashboard.render(
-        alloc,
-        db_stats.started_at,
-        @intCast(db_stats.searches),
-        @intCast(db_stats.errors),
-        db_stats.documents,
-        db_stats.publications,
-        tags_json,
-    ) catch {
+    const html = dashboard.render(alloc, data) catch {
         try sendNotFound(request);
         return;
     };

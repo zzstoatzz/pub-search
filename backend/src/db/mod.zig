@@ -19,6 +19,11 @@ pub fn init() !void {
     try schema.init(&client.?);
 }
 
+pub fn getClient() ?*turso.Client {
+    if (client) |*c| return c;
+    return null;
+}
+
 pub fn insertDocument(
     uri: []const u8,
     did: []const u8,

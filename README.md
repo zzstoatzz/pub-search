@@ -25,8 +25,8 @@ search returns three entity types: `article` (document in a publication), `loose
 
 ## stack
 
-- [Zig](https://ziglang.org) backend
-- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) for sync
-- [Turso](https://turso.tech) for SQLite + FTS5
 - [Fly.io](https://fly.io) for hosting
+- [Turso](https://turso.tech) for SQLite + FTS5
+- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) for sync
+- [Zig](https://ziglang.org) backend
 - [Cloudflare Pages](https://pages.cloudflare.com) for frontend

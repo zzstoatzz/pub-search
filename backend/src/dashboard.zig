@@ -1,15 +1,10 @@
 const std = @import("std");
+const dashboard_data = @import("dashboard_data.zig");
 
-/// Generate dashboard HTML with live stats
-pub fn render(
-    alloc: std.mem.Allocator,
-    started_at: i64,
-    searches: u64,
-    errors: u64,
-    documents: i64,
-    publications: i64,
-    tags_json: []const u8,
-) ![]const u8 {
+pub const DashboardData = dashboard_data.DashboardData;
+
+/// Generate dashboard HTML with stats and charts
+pub fn render(alloc: std.mem.Allocator, data: DashboardData) ![]const u8 {
     var buf: std.ArrayList(u8) = .{};
     const w = buf.writer(alloc);
 
@@ -19,7 +14,8 @@ pub fn render(
         \\<head>
         \\  <meta charset="UTF-8">
         \\  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        \\  <title>leaflet search stats</title>
+        \\  <title>leaflet search / stats</title>
+        \\  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='18' width='6' height='10' fill='%231B7340'/><rect x='13' y='12' width='6' height='16' fill='%231B7340'/><rect x='22' y='6' width='6' height='22' fill='%231B7340'/></svg>">
         \\  <style>
         \\    * { box-sizing: border-box; margin: 0; padding: 0; }
         \\    body {
@@ -27,145 +23,252 @@ pub fn render(
         \\      background: #0a0a0a;
         \\      color: #ccc;
         \\      min-height: 100vh;
-        \\      padding: 2rem;
+        \\      padding: 1rem;
+        \\      font-size: 14px;
         \\      line-height: 1.6;
         \\    }
-        \\    .container { max-width: 800px; margin: 0 auto; }
-        \\    h1 { font-size: 14px; color: #888; margin-bottom: 2rem; font-weight: normal; }
-        \\    h1 a { color: #1B7340; text-decoration: none; }
-        \\    h1 a:hover { color: #2a9d5c; }
-        \\    h2 { font-size: 12px; color: #666; margin: 2rem 0 1rem; font-weight: normal; text-transform: uppercase; letter-spacing: 1px; }
-        \\    .stats-grid {
-        \\      display: grid;
-        \\      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        \\      gap: 1rem;
-        \\      margin-bottom: 2rem;
+        \\    .container { max-width: 600px; margin: 0 auto; }
+        \\    a { color: #1B7340; text-decoration: none; }
+        \\    a:hover { color: #2a9d5c; }
+        \\    h1 {
+        \\      font-size: 12px;
+        \\      font-weight: normal;
+        \\      margin-bottom: 1.5rem;
         \\    }
-        \\    .stat {
+        \\    h1 a.title { color: #888; }
+        \\    h1 a.title:hover { color: #fff; }
+        \\    h1 .dim { color: #555; }
+        \\    section { margin-bottom: 2rem; }
+        \\    .section-title {
+        \\      font-size: 11px;
+        \\      color: #555;
+        \\      margin-bottom: 0.75rem;
+        \\    }
+        \\    .metrics {
+        \\      display: flex;
+        \\      gap: 2rem;
+        \\      margin-bottom: 1.5rem;
+        \\    }
+        \\    .metric-value {
+        \\      font-size: 24px;
+        \\      color: #fff;
+        \\    }
+        \\    .metric-label {
+        \\      font-size: 11px;
+        \\      color: #555;
+        \\    }
+        \\    .chart-box {
         \\      background: #111;
         \\      border: 1px solid #222;
         \\      padding: 1rem;
-        \\      border-radius: 4px;
+        \\      margin-bottom: 1rem;
         \\    }
-        \\    .stat-value {
-        \\      font-size: 24px;
-        \\      color: #fff;
-        \\      margin-bottom: 0.25rem;
+        \\    .chart-header {
+        \\      display: flex;
+        \\      justify-content: space-between;
+        \\      font-size: 11px;
+        \\      color: #666;
+        \\      margin-bottom: 0.75rem;
         \\    }
-        \\    .stat-value.uptime { color: #2a9d5c; }
-        \\    .stat-label { font-size: 11px; color: #666; }
-        \\    .tags-grid {
+        \\    .timeline {
+        \\      display: flex;
+        \\      align-items: flex-end;
+        \\      gap: 2px;
+        \\      height: 60px;
+        \\    }
+        \\    .bar {
+        \\      flex: 1;
+        \\      background: #1B7340;
+        \\      min-height: 2px;
+        \\    }
+        \\    .bar:hover { background: #2a9d5c; }
+        \\    .doc-row {
+        \\      display: flex;
+        \\      justify-content: space-between;
+        \\      font-size: 12px;
+        \\      padding: 0.25rem 0;
+        \\      border-bottom: 1px solid #1a1a1a;
+        \\    }
+        \\    .doc-row:last-child { border-bottom: none; }
+        \\    .doc-type { color: #888; }
+        \\    .doc-count { color: #ccc; }
+        \\    .pub-row {
+        \\      display: flex;
+        \\      justify-content: space-between;
+        \\      font-size: 12px;
+        \\      padding: 0.25rem 0;
+        \\      border-bottom: 1px solid #1a1a1a;
+        \\    }
+        \\    .pub-row:last-child { border-bottom: none; }
+        \\    .pub-name { color: #888; }
+        \\    .pub-count { color: #666; }
+        \\    .tags {
         \\      display: flex;
         \\      flex-wrap: wrap;
         \\      gap: 0.5rem;
         \\    }
         \\    .tag {
+        \\      font-size: 11px;
+        \\      padding: 3px 8px;
         \\      background: #151515;
         \\      border: 1px solid #252525;
-        \\      padding: 0.5rem 0.75rem;
-        \\      border-radius: 4px;
-        \\      font-size: 12px;
-        \\      color: #888;
-        \\      text-decoration: none;
+        \\      border-radius: 3px;
+        \\      color: #777;
         \\    }
-        \\    .tag:hover { background: #1a1a1a; border-color: #333; color: #aaa; }
-        \\    .tag .count { color: #555; margin-left: 0.5rem; }
-        \\    .footer { margin-top: 3rem; font-size: 11px; color: #444; }
-        \\    .footer a { color: #555; }
+        \\    .tag:hover {
+        \\      background: #1a1a1a;
+        \\      border-color: #333;
+        \\      color: #aaa;
+        \\    }
+        \\    .tag .n { color: #444; margin-left: 4px; }
+        \\    footer {
+        \\      margin-top: 2rem;
+        \\      padding-top: 1rem;
+        \\      border-top: 1px solid #222;
+        \\      font-size: 11px;
+        \\      color: #444;
+        \\    }
+        \\    footer a { color: #555; }
+        \\    footer a:hover { color: #888; }
         \\  </style>
         \\</head>
         \\<body>
         \\  <div class="container">
-        \\    <h1><a href="https://leaflet-search.pages.dev">leaflet search</a> / stats</h1>
+        \\    <h1><a href="https://leaflet-search.pages.dev" class="title">leaflet search</a> <span class="dim">/ stats</span></h1>
         \\
-        \\    <div class="stats-grid">
-        \\      <div class="stat">
-        \\        <div class="stat-value uptime" id="age">--</div>
-        \\        <div class="stat-label">service age</div>
-        \\      </div>
-        \\      <div class="stat">
-        \\        <div class="stat-value">
+        \\    <section>
+        \\      <div class="metrics">
+        \\        <div>
+        \\          <div class="metric-value" id="age">--</div>
+        \\          <div class="metric-label">uptime</div>
+        \\        </div>
+        \\        <div>
+        \\          <div class="metric-value">
     );
 
-    try w.print("{d}", .{searches});
+    try w.print("{d}", .{data.searches});
     try w.writeAll(
         \\</div>
-        \\        <div class="stat-label">searches</div>
-        \\      </div>
-        \\      <div class="stat">
-        \\        <div class="stat-value">
+        \\          <div class="metric-label">searches</div>
+        \\        </div>
+        \\        <div>
+        \\          <div class="metric-value">
     );
 
-    try w.print("{d}", .{documents});
+    try w.print("{d}", .{data.publications});
     try w.writeAll(
         \\</div>
-        \\        <div class="stat-label">documents indexed</div>
+        \\          <div class="metric-label">publications</div>
+        \\        </div>
         \\      </div>
-        \\      <div class="stat">
-        \\        <div class="stat-value">
-    );
-
-    try w.print("{d}", .{publications});
-    try w.writeAll(
-        \\</div>
-        \\        <div class="stat-label">publications indexed</div>
-        \\      </div>
-        \\      <div class="stat">
-        \\        <div class="stat-value">
-    );
-
-    try w.print("{d}", .{errors});
-    try w.writeAll(
-        \\</div>
-        \\        <div class="stat-label">errors</div>
-        \\      </div>
-        \\    </div>
+        \\    </section>
         \\
-        \\    <h2>top tags</h2>
-        \\    <div class="tags-grid" id="tags"></div>
+        \\    <section>
+        \\      <div class="section-title">documents</div>
+        \\      <div class="chart-box">
+        \\        <div class="doc-row">
+        \\          <span class="doc-type">articles</span>
+        \\          <span class="doc-count">
+    );
+
+    try w.print("{d}", .{data.articles});
+    try w.writeAll(
+        \\</span>
+        \\        </div>
+        \\        <div class="doc-row">
+        \\          <span class="doc-type">looseleafs</span>
+        \\          <span class="doc-count">
+    );
+
+    try w.print("{d}", .{data.looseleafs});
+    try w.writeAll(
+        \\</span>
+        \\        </div>
+        \\      </div>
+        \\    </section>
         \\
-        \\    <div class="footer">
-        \\      <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank">source</a>
-        \\    </div>
+        \\    <section>
+        \\      <div class="section-title">activity (last 30 days)</div>
+        \\      <div class="chart-box">
+        \\        <div class="timeline" id="timeline"></div>
+        \\      </div>
+        \\    </section>
+        \\
+        \\    <section>
+        \\      <div class="section-title">top publications</div>
+        \\      <div class="chart-box">
+        \\        <div id="pubs"></div>
+        \\      </div>
+        \\    </section>
+        \\
+        \\    <section>
+        \\      <div class="section-title">tags</div>
+        \\      <div class="tags" id="tags"></div>
+        \\    </section>
+        \\
+        \\    <footer>
+        \\      <a href="https://leaflet-search.pages.dev">← back</a> · source on <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search">tangled</a>
+        \\    </footer>
         \\  </div>
         \\
         \\  <script>
         \\    const startedAt =
     );
 
-    try w.print("{d}", .{started_at});
-    try w.writeAll(
-        \\ * 1000;
-        \\
-        \\    function formatAge(ms) {
-        \\      const secs = Math.floor(ms / 1000);
-        \\      const d = Math.floor(secs / 86400);
-        \\      const h = Math.floor((secs % 86400) / 3600);
-        \\      const m = Math.floor((secs % 3600) / 60);
-        \\      if (d > 0) return `${d}d ${h}h`;
-        \\      if (h > 0) return `${h}h ${m}m`;
-        \\      if (m > 0) return `${m}m`;
-        \\      return `${secs}s`;
-        \\    }
-        \\
-        \\    function updateAge() {
-        \\      const age = Date.now() - startedAt;
-        \\      document.getElementById('age').textContent = formatAge(age);
-        \\    }
-        \\
-        \\    updateAge();
-        \\    setInterval(updateAge, 60000);
-        \\
-        \\    const tags =
-    );
-
-    try w.writeAll(tags_json);
+    try w.print("{d}", .{data.started_at});
+    try w.writeAll(" * 1000;\n    const tags = ");
+    try w.writeAll(data.tags_json);
+    try w.writeAll(";\n    const timeline = ");
+    try w.writeAll(data.timeline_json);
+    try w.writeAll(";\n    const pubs = ");
+    try w.writeAll(data.top_pubs_json);
     try w.writeAll(
         \\;
-        \\    const tagsHtml = tags.slice(0, 20).map(t =>
-        \\      `<a class="tag" href="https://leaflet-search.pages.dev/?tag=${encodeURIComponent(t.tag)}">${t.tag}<span class="count">${t.count}</span></a>`
+        \\
+        \\    function formatAge(ms) {
+        \\      const s = Math.floor(ms / 1000);
+        \\      const d = Math.floor(s / 86400);
+        \\      const h = Math.floor((s % 86400) / 3600);
+        \\      const m = Math.floor((s % 3600) / 60);
+        \\      const sec = s % 60;
+        \\      if (d > 0) return d + 'd ' + h + 'h ' + m + 'm ' + sec + 's';
+        \\      if (h > 0) return h + 'h ' + m + 'm ' + sec + 's';
+        \\      return m + 'm ' + sec + 's';
+        \\    }
+        \\    function updateAge() {
+        \\      document.getElementById('age').textContent = formatAge(Date.now() - startedAt);
+        \\    }
+        \\    updateAge();
+        \\    setInterval(updateAge, 1000);
+        \\
+        \\    // timeline
+        \\    const timelineEl = document.getElementById('timeline');
+        \\    if (timeline.length > 0) {
+        \\      const max = Math.max(...timeline.map(d => d.count));
+        \\      [...timeline].reverse().forEach(d => {
+        \\        const h = max > 0 ? (d.count / max * 100) : 0;
+        \\        const bar = document.createElement('div');
+        \\        bar.className = 'bar';
+        \\        bar.style.height = Math.max(h, 3) + '%';
+        \\        bar.title = d.date + ': ' + d.count;
+        \\        timelineEl.appendChild(bar);
+        \\      });
+        \\    }
+        \\
+        \\    // publications
+        \\    const pubsEl = document.getElementById('pubs');
+        \\    pubs.forEach(p => {
+        \\      const row = document.createElement('div');
+        \\      row.className = 'pub-row';
+        \\      row.innerHTML = '<span class="pub-name">' + p.name + '</span><span class="pub-count">' + p.count + '</span>';
+        \\      pubsEl.appendChild(row);
+        \\    });
+        \\
+        \\    // tags
+        \\    document.getElementById('tags').innerHTML = tags.slice(0, 20).map(t =>
+        \\      '<a class="tag" href="https://leaflet-search.pages.dev/?tag=' + encodeURIComponent(t.tag) + '">' +
+        \\        t.tag + '<span class="n">' + t.count + '</span></a>'
         \\    ).join('');
-        \\    document.getElementById('tags').innerHTML = tagsHtml;
         \\  </script>
         \\</body>
         \\</html>
