@@ -6,7 +6,45 @@ const zql = @import("zql");
 const Client = @import("Client.zig");
 const schema = @import("schema.zig");
 const result = @import("result.zig");
-const activity = @import("../activity.zig");
+
+// activity tracking - ring buffer for real-time search activity
+const ACTIVITY_SLOTS = 60;
+const ACTIVITY_TICK_MS = 100;
+var activity_counts: [ACTIVITY_SLOTS]u16 = .{0} ** ACTIVITY_SLOTS;
+var activity_slot: usize = 0;
+var activity_mutex: std.Thread.Mutex = .{};
+var activity_thread: ?std.Thread = null;
+
+fn activityTickLoop() void {
+    while (true) {
+        std.Thread.sleep(ACTIVITY_TICK_MS * std.time.ns_per_ms);
+        activity_mutex.lock();
+        activity_slot = (activity_slot + 1) % ACTIVITY_SLOTS;
+        activity_counts[activity_slot] = 0;
+        activity_mutex.unlock();
+    }
+}
+
+pub fn initActivity() void {
+    activity_thread = std.Thread.spawn(.{}, activityTickLoop, .{}) catch null;
+}
+
+pub fn getActivityCounts() [ACTIVITY_SLOTS]u16 {
+    activity_mutex.lock();
+    defer activity_mutex.unlock();
+    var result_arr: [ACTIVITY_SLOTS]u16 = undefined;
+    for (0..ACTIVITY_SLOTS) |i| {
+        const idx = (activity_slot + 1 + i) % ACTIVITY_SLOTS;
+        result_arr[i] = activity_counts[idx];
+    }
+    return result_arr;
+}
+
+fn recordActivity() void {
+    activity_mutex.lock();
+    defer activity_mutex.unlock();
+    activity_counts[activity_slot] +|= 1;
+}
 
 pub const Row = result.Row;
 pub const BatchResult = result.BatchResult;
@@ -329,7 +367,7 @@ pub fn getStats() struct { documents: i64, publications: i64, searches: i64, err
 }
 
 pub fn recordSearch(query: []const u8) void {
-    activity.record(); // track for real-time sparkline
+    recordActivity();
     var c = &(client orelse return);
     c.exec("UPDATE stats SET total_searches = total_searches + 1 WHERE id = 1", &.{}) catch {};
 

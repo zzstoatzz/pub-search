@@ -5,12 +5,53 @@ const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const db = @import("db/mod.zig");
-const types = @import("types.zig");
-const Did = types.Did;
-const AtUri = types.AtUri;
 
 const DOCUMENT_COLLECTION = "pub.leaflet.document";
 const PUBLICATION_COLLECTION = "pub.leaflet.publication";
+
+// domain types
+const Did = struct {
+    raw: []const u8,
+
+    fn parse(s: []const u8) ?Did {
+        if (!mem.startsWith(u8, s, "did:")) return null;
+        const rest = s[4..];
+        const colon = mem.indexOf(u8, rest, ":") orelse return null;
+        if (colon == 0 or colon == rest.len - 1) return null;
+        return .{ .raw = s };
+    }
+
+    fn str(self: Did) []const u8 {
+        return self.raw;
+    }
+};
+
+const AtUri = struct {
+    raw: []const u8,
+    did_end: usize,
+    collection_end: usize,
+
+    fn build(allocator: Allocator, d: Did, coll: []const u8, rk: []const u8) !AtUri {
+        const raw = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ d.raw, coll, rk });
+        return .{
+            .raw = raw,
+            .did_end = 5 + d.raw.len,
+            .collection_end = 5 + d.raw.len + 1 + coll.len,
+        };
+    }
+
+    fn did(self: AtUri) Did {
+        return .{ .raw = self.raw[5..self.did_end] };
+    }
+
+    fn rkey(self: AtUri) []const u8 {
+        return self.raw[self.collection_end + 1 ..];
+    }
+
+    fn str(self: AtUri) []const u8 {
+        return self.raw;
+    }
+};
 
 fn getTapHost() []const u8 {
     return posix.getenv("TAP_HOST") orelse "leaflet-search-tap.fly.dev";

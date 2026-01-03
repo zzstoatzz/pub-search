@@ -4,7 +4,6 @@ const http = std.http;
 const mem = std.mem;
 const db = @import("db/mod.zig");
 const dashboard = @import("dashboard.zig");
-const activity = @import("activity.zig");
 
 const HTTP_BUF_SIZE = 8192;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -218,7 +217,7 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn handleActivity(request: *http.Server.Request) !void {
-    const counts = activity.getCounts();
+    const counts = db.getActivityCounts();
 
     // format as JSON array
     var buf: [512]u8 = undefined;
