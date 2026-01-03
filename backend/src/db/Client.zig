@@ -1,3 +1,6 @@
+//! Turso HTTP API client
+//! https://docs.turso.tech/sdk/http/reference
+
 const std = @import("std");
 const http = std.http;
 const json = std.json;
@@ -11,10 +14,15 @@ pub const BatchResult = result.BatchResult;
 
 const Client = @This();
 
+// Hrana protocol types (https://github.com/tursodatabase/libsql/blob/main/docs/HRANA_3_SPEC.md)
+const Value = struct { type: []const u8 = "text", value: []const u8 };
+const Stmt = struct { sql: []const u8, args: ?[]const Value = null };
+const ExecuteReq = struct { type: []const u8 = "execute", stmt: Stmt };
+const CloseReq = struct { type: []const u8 = "close" };
+
 const URL_BUF_SIZE = 512;
 const AUTH_BUF_SIZE = 512;
 
-// fields
 allocator: Allocator,
 url: []const u8,
 token: []const u8,
@@ -31,7 +39,6 @@ pub fn init(allocator: Allocator) !Client {
         return error.MissingEnv;
     };
 
-    // strip libsql:// prefix if present
     const libsql_prefix = "libsql://";
     const host = if (mem.startsWith(u8, url, libsql_prefix))
         url[libsql_prefix.len..]
@@ -52,17 +59,8 @@ pub fn deinit(self: *Client) void {
     self.http_client.deinit();
 }
 
-/// Execute a query and return parsed results.
-/// Validates parameter count at compile time.
 pub fn query(self: *Client, comptime sql: []const u8, args: anytype) !Result {
-    const expected = comptime countPlaceholders(sql);
-    const provided = comptime countArgsType(@TypeOf(args));
-    if (expected != provided) {
-        @compileError(std.fmt.comptimePrint(
-            "SQL has {} placeholders but {} args provided",
-            .{ expected, provided },
-        ));
-    }
+    comptime validateArgs(sql, @TypeOf(args));
     const args_slice = try self.argsToSlice(args);
     defer self.allocator.free(args_slice);
     const response = try self.executeRaw(sql, args_slice);
@@ -70,46 +68,33 @@ pub fn query(self: *Client, comptime sql: []const u8, args: anytype) !Result {
     return Result.parse(self.allocator, response);
 }
 
-/// Execute a statement, ignoring results.
-/// Validates parameter count at compile time.
 pub fn exec(self: *Client, comptime sql: []const u8, args: anytype) !void {
-    const expected = comptime countPlaceholders(sql);
-    const provided = comptime countArgsType(@TypeOf(args));
-    if (expected != provided) {
-        @compileError(std.fmt.comptimePrint(
-            "SQL has {} placeholders but {} args provided",
-            .{ expected, provided },
-        ));
-    }
+    comptime validateArgs(sql, @TypeOf(args));
     const args_slice = try self.argsToSlice(args);
     defer self.allocator.free(args_slice);
     const response = try self.executeRaw(sql, args_slice);
     self.allocator.free(response);
 }
 
-/// Statement for batch queries
 pub const Statement = struct {
     sql: []const u8,
     args: []const []const u8 = &.{},
 };
 
-/// Execute multiple queries in a single HTTP request
 pub fn queryBatch(self: *Client, statements: []const Statement) !BatchResult {
     const response = try self.executeBatchRaw(statements);
     defer self.allocator.free(response);
     return BatchResult.parse(self.allocator, response, statements.len);
 }
 
-/// Convert tuple/struct args to slice, with comptime validation
 fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
     const ArgsType = @TypeOf(args);
-    const args_type_info = @typeInfo(ArgsType);
+    const info = @typeInfo(ArgsType);
 
-    // handle pointer to tuple (e.g., &.{a, b, c})
-    if (args_type_info == .pointer) {
-        const child_info = @typeInfo(args_type_info.pointer.child);
-        if (child_info == .@"struct") {
-            const fields = child_info.@"struct".fields;
+    if (info == .pointer) {
+        const child = @typeInfo(info.pointer.child);
+        if (child == .@"struct") {
+            const fields = child.@"struct".fields;
             const slice = try self.allocator.alloc([]const u8, fields.len);
             inline for (fields, 0..) |field, i| {
                 slice[i] = @field(args.*, field.name);
@@ -118,9 +103,8 @@ fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
         }
     }
 
-    // handle direct struct/tuple
-    if (args_type_info == .@"struct") {
-        const fields = args_type_info.@"struct".fields;
+    if (info == .@"struct") {
+        const fields = info.@"struct".fields;
         const slice = try self.allocator.alloc([]const u8, fields.len);
         inline for (fields, 0..) |field, i| {
             slice[i] = @field(args, field.name);
@@ -131,7 +115,6 @@ fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
     @compileError("args must be a tuple or pointer to tuple");
 }
 
-/// Execute and return raw JSON response (caller owns memory)
 fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const u8 {
     self.mutex.lock();
     defer self.mutex.unlock();
@@ -140,7 +123,6 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
         return error.UrlTooLong;
 
-    // build request body
     const body = try self.buildRequestBody(sql, args);
     defer self.allocator.free(body);
 
@@ -173,7 +155,6 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
     return try response_body.toOwnedSlice();
 }
 
-/// Execute batch and return raw JSON response
 fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
     self.mutex.lock();
     defer self.mutex.unlock();
@@ -217,49 +198,23 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
 fn buildBatchRequestBody(self: *Client, statements: []const Statement) ![]const u8 {
     var body: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer body.deinit();
-
-    var jw: json.Stringify = .{ .writer = &body.writer };
+    var jw: json.Stringify = .{ .writer = &body.writer, .options = .{ .emit_null_optional_fields = false } };
 
     try jw.beginObject();
     try jw.objectField("requests");
     try jw.beginArray();
 
     for (statements) |stmt| {
-        // execute statement
-        try jw.beginObject();
-        try jw.objectField("type");
-        try jw.write("execute");
-        try jw.objectField("stmt");
-        try jw.beginObject();
-        try jw.objectField("sql");
-        try jw.write(stmt.sql);
-
-        if (stmt.args.len > 0) {
-            try jw.objectField("args");
-            try jw.beginArray();
-            for (stmt.args) |arg| {
-                try jw.beginObject();
-                try jw.objectField("type");
-                try jw.write("text");
-                try jw.objectField("value");
-                try jw.write(arg);
-                try jw.endObject();
-            }
-            try jw.endArray();
-        }
-
-        try jw.endObject(); // stmt
-        try jw.endObject(); // execute request
+        const values = try self.toValues(stmt.args);
+        defer self.allocator.free(values);
+        try jw.write(ExecuteReq{
+            .stmt = .{ .sql = stmt.sql, .args = if (values.len > 0) values else null },
+        });
     }
 
-    // single close at the end
-    try jw.beginObject();
-    try jw.objectField("type");
-    try jw.write("close");
+    try jw.write(CloseReq{});
+    try jw.endArray();
     try jw.endObject();
-
-    try jw.endArray(); // requests
-    try jw.endObject(); // root
 
     return try body.toOwnedSlice();
 }
@@ -267,54 +222,44 @@ fn buildBatchRequestBody(self: *Client, statements: []const Statement) ![]const 
 fn buildRequestBody(self: *Client, sql: []const u8, args: []const []const u8) ![]const u8 {
     var body: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer body.deinit();
+    var jw: json.Stringify = .{ .writer = &body.writer, .options = .{ .emit_null_optional_fields = false } };
 
-    var jw: json.Stringify = .{ .writer = &body.writer };
+    const values = try self.toValues(args);
+    defer self.allocator.free(values);
 
     try jw.beginObject();
     try jw.objectField("requests");
     try jw.beginArray();
-
-    // execute statement
-    try jw.beginObject();
-    try jw.objectField("type");
-    try jw.write("execute");
-    try jw.objectField("stmt");
-    try jw.beginObject();
-    try jw.objectField("sql");
-    try jw.write(sql);
-
-    if (args.len > 0) {
-        try jw.objectField("args");
-        try jw.beginArray();
-        for (args) |arg| {
-            try jw.beginObject();
-            try jw.objectField("type");
-            try jw.write("text");
-            try jw.objectField("value");
-            try jw.write(arg);
-            try jw.endObject();
-        }
-        try jw.endArray();
-    }
-
-    try jw.endObject(); // stmt
-    try jw.endObject(); // execute request
-
-    // close statement
-    try jw.beginObject();
-    try jw.objectField("type");
-    try jw.write("close");
+    try jw.write(ExecuteReq{
+        .stmt = .{ .sql = sql, .args = if (values.len > 0) values else null },
+    });
+    try jw.write(CloseReq{});
+    try jw.endArray();
     try jw.endObject();
-
-    try jw.endArray(); // requests
-    try jw.endObject(); // root
 
     return try body.toOwnedSlice();
 }
 
-// module-level helpers (don't need self)
+fn toValues(self: *Client, args: []const []const u8) ![]const Value {
+    if (args.len == 0) return &.{};
+    const values = try self.allocator.alloc(Value, args.len);
+    for (args, 0..) |arg, i| {
+        values[i] = .{ .value = arg };
+    }
+    return values;
+}
 
-/// Count `?` placeholders in SQL at comptime
+fn validateArgs(comptime sql: []const u8, comptime ArgsType: type) void {
+    const expected = countPlaceholders(sql);
+    const provided = countArgsType(ArgsType);
+    if (expected != provided) {
+        @compileError(std.fmt.comptimePrint(
+            "SQL has {} placeholders but {} args provided",
+            .{ expected, provided },
+        ));
+    }
+}
+
 fn countPlaceholders(comptime sql: []const u8) usize {
     var count: usize = 0;
     for (sql) |c| {
@@ -323,19 +268,18 @@ fn countPlaceholders(comptime sql: []const u8) usize {
     return count;
 }
 
-/// Count args in a tuple type (handles both direct tuples and pointers to tuples)
 fn countArgsType(comptime ArgsType: type) usize {
-    const args_type_info = @typeInfo(ArgsType);
+    const info = @typeInfo(ArgsType);
 
-    if (args_type_info == .pointer) {
-        const child_info = @typeInfo(args_type_info.pointer.child);
-        if (child_info == .@"struct") {
-            return child_info.@"struct".fields.len;
+    if (info == .pointer) {
+        const child = @typeInfo(info.pointer.child);
+        if (child == .@"struct") {
+            return child.@"struct".fields.len;
         }
     }
 
-    if (args_type_info == .@"struct") {
-        return args_type_info.@"struct".fields.len;
+    if (info == .@"struct") {
+        return info.@"struct".fields.len;
     }
 
     return 0;
