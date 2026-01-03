@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 
 class SearchResult(BaseModel):
@@ -16,6 +16,14 @@ class SearchResult(BaseModel):
     createdAt: str = ""
     rkey: str
     basePath: str = ""
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        """web URL for this document."""
+        if self.basePath:
+            return f"https://{self.basePath}/{self.rkey}"
+        return ""
 
 
 class Tag(BaseModel):
