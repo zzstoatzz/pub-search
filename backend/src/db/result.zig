@@ -68,15 +68,81 @@ pub const Result = struct {
     }
 };
 
-/// Navigate Turso's nested response format to get rows
-fn getRowsFromParsed(value: json.Value) ?json.Array {
-    const results = value.object.get("results") orelse return null;
-    if (results != .array or results.array.items.len == 0) return null;
+/// Batch result holding multiple query results
+pub const BatchResult = struct {
+    allocator: Allocator,
+    parsed: ?json.Parsed(json.Value),
+    results: []const []const Row,
 
-    const first = results.array.items[0];
-    if (first != .object) return null;
+    pub fn parse(allocator: Allocator, response: []const u8, count: usize) !BatchResult {
+        const parsed = json.parseFromSlice(json.Value, allocator, response, .{}) catch {
+            return .{ .allocator = allocator, .parsed = null, .results = &.{} };
+        };
 
-    const resp = first.object.get("response") orelse return null;
+        const turso_results = parsed.value.object.get("results") orelse {
+            return .{ .allocator = allocator, .parsed = parsed, .results = &.{} };
+        };
+
+        if (turso_results != .array) {
+            return .{ .allocator = allocator, .parsed = parsed, .results = &.{} };
+        }
+
+        var all_results: std.ArrayList([]const Row) = .{};
+        errdefer {
+            for (all_results.items) |rows| allocator.free(rows);
+            all_results.deinit(allocator);
+        }
+
+        // turso returns: execute, close, execute, close, ...
+        // we want every other result (the executes, skip the closes)
+        var query_idx: usize = 0;
+        var i: usize = 0;
+        while (i < turso_results.array.items.len and query_idx < count) : (i += 2) {
+            const item = turso_results.array.items[i];
+            const json_rows = getRowsFromResult(item);
+
+            var rows: std.ArrayList(Row) = .{};
+            if (json_rows) |jr| {
+                for (jr.items) |row_item| {
+                    if (row_item == .array) {
+                        try rows.append(allocator, .{ .columns = row_item.array.items });
+                    }
+                }
+            }
+            try all_results.append(allocator, try rows.toOwnedSlice(allocator));
+            query_idx += 1;
+        }
+
+        return .{
+            .allocator = allocator,
+            .parsed = parsed,
+            .results = try all_results.toOwnedSlice(allocator),
+        };
+    }
+
+    pub fn deinit(self: *BatchResult) void {
+        for (self.results) |rows| self.allocator.free(rows);
+        self.allocator.free(self.results);
+        if (self.parsed) |*p| p.deinit();
+    }
+
+    pub fn get(self: BatchResult, index: usize) []const Row {
+        if (index >= self.results.len) return &.{};
+        return self.results[index];
+    }
+
+    pub fn getFirst(self: BatchResult, index: usize) ?Row {
+        const rows = self.get(index);
+        if (rows.len == 0) return null;
+        return rows[0];
+    }
+};
+
+/// Get rows from a single result item in the results array
+fn getRowsFromResult(item: json.Value) ?json.Array {
+    if (item != .object) return null;
+
+    const resp = item.object.get("response") orelse return null;
     if (resp != .object) return null;
 
     const res = resp.object.get("result") orelse return null;
@@ -86,6 +152,14 @@ fn getRowsFromParsed(value: json.Value) ?json.Array {
     if (rows != .array) return null;
 
     return rows.array;
+}
+
+/// Navigate Turso's nested response format to get rows (first result only)
+fn getRowsFromParsed(value: json.Value) ?json.Array {
+    const results = value.object.get("results") orelse return null;
+    if (results != .array or results.array.items.len == 0) return null;
+
+    return getRowsFromResult(results.array.items[0]);
 }
 
 /// Extract text from a Turso value (handles both raw and typed formats)

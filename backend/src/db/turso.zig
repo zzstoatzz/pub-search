@@ -7,6 +7,7 @@ const Allocator = mem.Allocator;
 const result = @import("result.zig");
 pub const Result = result.Result;
 pub const Row = result.Row;
+pub const BatchResult = result.BatchResult;
 
 const URL_BUF_SIZE = 512;
 const AUTH_BUF_SIZE = 512;
@@ -182,6 +183,110 @@ pub const Client = struct {
         }
 
         return try response_body.toOwnedSlice();
+    }
+
+    /// Statement for batch queries
+    pub const Statement = struct {
+        sql: []const u8,
+        args: []const []const u8 = &.{},
+    };
+
+    /// Execute multiple queries in a single HTTP request
+    pub fn queryBatch(self: *Client, statements: []const Statement) !BatchResult {
+        const response = try self.executeBatchRaw(statements);
+        defer self.allocator.free(response);
+        return BatchResult.parse(self.allocator, response, statements.len);
+    }
+
+    /// Execute batch and return raw JSON response
+    fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var url_buf: [URL_BUF_SIZE]u8 = undefined;
+        const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
+            return error.UrlTooLong;
+
+        const body = try self.buildBatchRequestBody(statements);
+        defer self.allocator.free(body);
+
+        var auth_buf: [AUTH_BUF_SIZE]u8 = undefined;
+        const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.token}) catch
+            return error.AuthTooLong;
+
+        var response_body: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer response_body.deinit();
+
+        const res = self.http_client.fetch(.{
+            .location = .{ .url = url },
+            .method = .POST,
+            .headers = .{
+                .content_type = .{ .override = "application/json" },
+                .authorization = .{ .override = auth },
+            },
+            .payload = body,
+            .response_writer = &response_body.writer,
+        }) catch |err| {
+            std.debug.print("turso batch request failed: {}\n", .{err});
+            return error.HttpError;
+        };
+
+        if (res.status != .ok) {
+            std.debug.print("turso batch error: {}\n", .{res.status});
+            return error.TursoError;
+        }
+
+        return try response_body.toOwnedSlice();
+    }
+
+    fn buildBatchRequestBody(self: *Client, statements: []const Statement) ![]const u8 {
+        var body: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer body.deinit();
+
+        var jw: json.Stringify = .{ .writer = &body.writer };
+
+        try jw.beginObject();
+        try jw.objectField("requests");
+        try jw.beginArray();
+
+        for (statements) |stmt| {
+            // execute statement
+            try jw.beginObject();
+            try jw.objectField("type");
+            try jw.write("execute");
+            try jw.objectField("stmt");
+            try jw.beginObject();
+            try jw.objectField("sql");
+            try jw.write(stmt.sql);
+
+            if (stmt.args.len > 0) {
+                try jw.objectField("args");
+                try jw.beginArray();
+                for (stmt.args) |arg| {
+                    try jw.beginObject();
+                    try jw.objectField("type");
+                    try jw.write("text");
+                    try jw.objectField("value");
+                    try jw.write(arg);
+                    try jw.endObject();
+                }
+                try jw.endArray();
+            }
+
+            try jw.endObject(); // stmt
+            try jw.endObject(); // execute request
+
+            // close after each statement
+            try jw.beginObject();
+            try jw.objectField("type");
+            try jw.write("close");
+            try jw.endObject();
+        }
+
+        try jw.endArray(); // requests
+        try jw.endObject(); // root
+
+        return try body.toOwnedSlice();
     }
 
     fn buildRequestBody(self: *Client, sql: []const u8, args: []const []const u8) ![]const u8 {

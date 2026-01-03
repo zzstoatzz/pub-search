@@ -10,6 +10,8 @@ const result = @import("result.zig");
 pub const Client = turso.Client;
 pub const Result = turso.Result;
 pub const Row = turso.Row;
+pub const BatchResult = turso.BatchResult;
+pub const Statement = turso.Client.Statement;
 
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var client: ?turso.Client = null;
