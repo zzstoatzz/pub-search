@@ -94,8 +94,22 @@ pub fn deletePublication(uri: []const u8) void {
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
 }
 
-/// Document search result.
-/// Type derivation: has_publication=true → "article", false → "looseleaf"
+// JSON output types for search results
+const SearchResultJson = struct {
+    type: []const u8,
+    uri: []const u8,
+    did: []const u8,
+    title: []const u8,
+    snippet: []const u8,
+    createdAt: []const u8 = "",
+    rkey: []const u8,
+    basePath: []const u8,
+};
+
+const TagJson = struct { tag: []const u8, count: i64 };
+const PopularJson = struct { query: []const u8, count: i64 };
+
+/// Document search result (internal)
 const Doc = struct {
     uri: []const u8,
     did: []const u8,
@@ -116,6 +130,19 @@ const Doc = struct {
             .rkey = row.text(5),
             .basePath = row.text(6),
             .hasPublication = row.int(7) != 0,
+        };
+    }
+
+    fn toJson(self: Doc) SearchResultJson {
+        return .{
+            .type = if (self.hasPublication) "article" else "looseleaf",
+            .uri = self.uri,
+            .did = self.did,
+            .title = self.title,
+            .snippet = self.snippet,
+            .createdAt = self.createdAt,
+            .rkey = self.rkey,
+            .basePath = self.basePath,
         };
     }
 };
@@ -156,7 +183,7 @@ const DocsByFts = zql.Query(
     \\ORDER BY rank LIMIT 40
 );
 
-/// Publication search result. Type is always "publication".
+/// Publication search result (internal)
 const Pub = struct {
     uri: []const u8,
     did: []const u8,
@@ -175,6 +202,18 @@ const Pub = struct {
             .basePath = row.text(5),
         };
     }
+
+    fn toJson(self: Pub) SearchResultJson {
+        return .{
+            .type = "publication",
+            .uri = self.uri,
+            .did = self.did,
+            .title = self.name,
+            .snippet = self.snippet,
+            .rkey = self.rkey,
+            .basePath = self.basePath,
+        };
+    }
 };
 
 const PubSearch = zql.Query(
@@ -186,15 +225,6 @@ const PubSearch = zql.Query(
     \\WHERE publications_fts MATCH :query
     \\ORDER BY rank LIMIT 10
 );
-
-const TagCount = struct {
-    tag: []const u8,
-    count: i64,
-
-    fn fromRow(row: Row) TagCount {
-        return .{ .tag = row.text(0), .count = row.int(1) };
-    }
-};
 
 const TagsQuery = zql.Query(
     \\SELECT tag, COUNT(*) as count
@@ -225,27 +255,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 
     if (doc_result) |*res| {
         defer res.deinit();
-        for (res.rows) |row| {
-            const doc = Doc.fromRow(row);
-            try jw.beginObject();
-            try jw.objectField("type");
-            try jw.write(if (doc.hasPublication) "article" else "looseleaf");
-            try jw.objectField("uri");
-            try jw.write(doc.uri);
-            try jw.objectField("did");
-            try jw.write(doc.did);
-            try jw.objectField("title");
-            try jw.write(doc.title);
-            try jw.objectField("snippet");
-            try jw.write(doc.snippet);
-            try jw.objectField("createdAt");
-            try jw.write(doc.createdAt);
-            try jw.objectField("rkey");
-            try jw.write(doc.rkey);
-            try jw.objectField("basePath");
-            try jw.write(doc.basePath);
-            try jw.endObject();
-        }
+        for (res.rows) |row| try jw.write(Doc.fromRow(row).toJson());
     }
 
     // publications are excluded when filtering by tag (tags only apply to documents)
@@ -257,25 +267,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 
         if (pub_result) |*res| {
             defer res.deinit();
-            for (res.rows) |row| {
-                const p = Pub.fromRow(row);
-                try jw.beginObject();
-                try jw.objectField("type");
-                try jw.write("publication");
-                try jw.objectField("uri");
-                try jw.write(p.uri);
-                try jw.objectField("did");
-                try jw.write(p.did);
-                try jw.objectField("title");
-                try jw.write(p.name);
-                try jw.objectField("snippet");
-                try jw.write(p.snippet);
-                try jw.objectField("rkey");
-                try jw.write(p.rkey);
-                try jw.objectField("basePath");
-                try jw.write(p.basePath);
-                try jw.endObject();
-            }
+            for (res.rows) |row| try jw.write(Pub.fromRow(row).toJson());
         }
     }
 
@@ -297,17 +289,7 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-
-    for (res.rows) |row| {
-        const tag = TagCount.fromRow(row);
-        try jw.beginObject();
-        try jw.objectField("tag");
-        try jw.write(tag.tag);
-        try jw.objectField("count");
-        try jw.write(tag.count);
-        try jw.endObject();
-    }
-
+    for (res.rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -367,16 +349,7 @@ pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-
-    for (res.rows) |row| {
-        try jw.beginObject();
-        try jw.objectField("query");
-        try jw.write(row.text(0));
-        try jw.objectField("count");
-        try jw.write(row.int(1));
-        try jw.endObject();
-    }
-
+    for (res.rows) |row| try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
     try jw.endArray();
     return try output.toOwnedSlice();
 }

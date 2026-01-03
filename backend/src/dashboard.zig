@@ -3,6 +3,11 @@ const json = std.json;
 const Allocator = std.mem.Allocator;
 const db = @import("db/mod.zig");
 
+// JSON output types
+const TagJson = struct { tag: []const u8, count: i64 };
+const TimelineJson = struct { date: []const u8, count: i64 };
+const PubJson = struct { name: []const u8, basePath: []const u8, count: i64 };
+
 /// All data needed to render the dashboard
 pub const Data = struct {
     started_at: i64,
@@ -97,19 +102,9 @@ pub fn fetch(alloc: Allocator) !Data {
 fn formatTagsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
-
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-
-    for (rows) |row| {
-        try jw.beginObject();
-        try jw.objectField("tag");
-        try jw.write(row.text(0));
-        try jw.objectField("count");
-        try jw.write(row.int(1));
-        try jw.endObject();
-    }
-
+    for (rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -117,19 +112,9 @@ fn formatTagsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
 fn formatTimelineJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
-
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-
-    for (rows) |row| {
-        try jw.beginObject();
-        try jw.objectField("date");
-        try jw.write(row.text(0));
-        try jw.objectField("count");
-        try jw.write(row.int(1));
-        try jw.endObject();
-    }
-
+    for (rows) |row| try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1) });
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -137,21 +122,9 @@ fn formatTimelineJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
 fn formatPubsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
-
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-
-    for (rows) |row| {
-        try jw.beginObject();
-        try jw.objectField("name");
-        try jw.write(row.text(0));
-        try jw.objectField("basePath");
-        try jw.write(row.text(1));
-        try jw.objectField("count");
-        try jw.write(row.int(2));
-        try jw.endObject();
-    }
-
+    for (rows) |row| try jw.write(PubJson{ .name = row.text(0), .basePath = row.text(1), .count = row.int(2) });
     try jw.endArray();
     return try output.toOwnedSlice();
 }
