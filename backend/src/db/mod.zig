@@ -3,25 +3,23 @@ const json = std.json;
 const Allocator = std.mem.Allocator;
 
 const zql = @import("zql");
-const turso = @import("turso.zig");
+const Client = @import("Client.zig");
 const schema = @import("schema.zig");
 const result = @import("result.zig");
 
-pub const Client = turso.Client;
-pub const Result = turso.Result;
-pub const Row = turso.Row;
-pub const BatchResult = turso.BatchResult;
-pub const Statement = turso.Client.Statement;
+pub const Row = result.Row;
+pub const BatchResult = result.BatchResult;
+pub const Statement = Client.Statement;
 
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-var client: ?turso.Client = null;
+var client: ?Client = null;
 
 pub fn init() !void {
-    client = try turso.Client.init(gpa.allocator());
+    client = try Client.init(gpa.allocator());
     try schema.init(&client.?);
 }
 
-pub fn getClient() ?*turso.Client {
+pub fn getClient() ?*Client {
     if (client) |*c| return c;
     return null;
 }

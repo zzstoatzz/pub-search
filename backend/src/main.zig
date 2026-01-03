@@ -3,7 +3,7 @@ const net = std.net;
 const posix = std.posix;
 const Thread = std.Thread;
 const db = @import("db/mod.zig");
-const http_server = @import("http.zig");
+const server = @import("server.zig");
 const tap = @import("tap.zig");
 
 const MAX_HTTP_WORKERS = 16;
@@ -36,13 +36,13 @@ pub fn main() !void {
     };
 
     const address = try net.Address.parseIp("0.0.0.0", port);
-    var server = try address.listen(.{ .reuse_address = true });
-    defer server.deinit();
+    var listener = try address.listen(.{ .reuse_address = true });
+    defer listener.deinit();
 
     std.debug.print("leaflet-search listening on http://0.0.0.0:{d} (max {} workers)\n", .{ port, MAX_HTTP_WORKERS });
 
     while (true) {
-        const conn = server.accept() catch |err| {
+        const conn = listener.accept() catch |err| {
             std.debug.print("accept error: {}\n", .{err});
             continue;
         };
@@ -51,7 +51,7 @@ pub fn main() !void {
             std.debug.print("failed to set socket timeout: {}\n", .{err});
         };
 
-        pool.spawn(http_server.handleConnection, .{conn}) catch |err| {
+        pool.spawn(server.handleConnection, .{conn}) catch |err| {
             std.debug.print("pool spawn error: {}\n", .{err});
             conn.stream.close();
         };

@@ -1,14 +1,14 @@
 const std = @import("std");
-const turso = @import("turso.zig");
+const Client = @import("Client.zig");
 
 /// Initialize database schema and run migrations
-pub fn init(client: *turso.Client) !void {
+pub fn init(client: *Client) !void {
     try createTables(client);
     try runMigrations(client);
     std.debug.print("schema initialized\n", .{});
 }
 
-fn createTables(client: *turso.Client) !void {
+fn createTables(client: *Client) !void {
     try client.exec(
         \\CREATE TABLE IF NOT EXISTS documents (
         \\  uri TEXT PRIMARY KEY,
@@ -91,7 +91,7 @@ fn createTables(client: *turso.Client) !void {
     , &.{});
 }
 
-fn runMigrations(client: *turso.Client) !void {
+fn runMigrations(client: *Client) !void {
     // these may fail if columns already exist - that's fine
     client.exec("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch {};
     client.exec("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch {};
