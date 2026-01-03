@@ -1,0 +1,6 @@
+{
+  "leaflet": {
+    "command": "uvx",
+    "args": ["leaflet-mcp"]
+  }
+}

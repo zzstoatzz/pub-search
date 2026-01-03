@@ -1,0 +1,18 @@
+{
+  "name": "leaflet",
+  "description": "Search decentralized publications on ATProto - find and retrieve articles, publications, and documents on Leaflet",
+  "author": {
+    "name": "zzstoatzz",
+    "email": "thrast36@gmail.com",
+    "url": "https://github.com/zzstoatzz"
+  },
+  "repository": "https://github.com/zzstoatzz/leaflet-search",
+  "keywords": [
+    "leaflet",
+    "atproto",
+    "publications",
+    "search",
+    "decentralized"
+  ],
+  "mcpServers": "./.mcp.json"
+}
