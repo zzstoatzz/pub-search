@@ -2,7 +2,9 @@ const std = @import("std");
 const net = std.net;
 const http = std.http;
 const mem = std.mem;
-const db = @import("db/mod.zig");
+const activity = @import("activity.zig");
+const search = @import("search.zig");
+const stats = @import("stats.zig");
 const dashboard = @import("dashboard.zig");
 
 const HTTP_BUF_SIZE = 8192;
@@ -82,11 +84,11 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     }
 
     // perform FTS search - arena handles cleanup
-    const results = db.search(alloc, query, tag_filter) catch |err| {
-        db.recordError();
+    const results = search.search(alloc, query, tag_filter) catch |err| {
+        stats.recordError();
         return err;
     };
-    db.recordSearch(query);
+    stats.recordSearch(query);
     try sendJson(request, results);
 }
 
@@ -95,7 +97,7 @@ fn handleTags(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const tags = try db.getTags(alloc);
+    const tags = try stats.getTags(alloc);
     try sendJson(request, tags);
 }
 
@@ -104,7 +106,7 @@ fn handlePopular(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const popular = try db.getPopular(alloc, 5);
+    const popular = try stats.getPopular(alloc, 5);
     try sendJson(request, popular);
 }
 
@@ -113,9 +115,9 @@ fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const 
     const patterns = [_][]const u8{ "?", "&" };
     for (patterns) |prefix| {
         var search_buf: [QUERY_PARAM_BUF_SIZE]u8 = undefined;
-        const search = std.fmt.bufPrint(&search_buf, "{s}{s}=", .{ prefix, param }) catch continue;
-        if (mem.indexOf(u8, target, search)) |idx| {
-            const encoded = target[idx + search.len ..];
+        const search_str = std.fmt.bufPrint(&search_buf, "{s}{s}=", .{ prefix, param }) catch continue;
+        if (mem.indexOf(u8, target, search_str)) |idx| {
+            const encoded = target[idx + search_str.len ..];
             const end = mem.indexOf(u8, encoded, "&") orelse encoded.len;
             const query_encoded = encoded[0..end];
             const buf = try alloc.dupe(u8, query_encoded);
@@ -134,7 +136,7 @@ fn handleStats(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const db_stats = db.getStats();
+    const db_stats = stats.getStats();
 
     var response: std.ArrayList(u8) = .{};
     defer response.deinit(alloc);
@@ -214,7 +216,7 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
         return;
     };
 
-    const results = db.findSimilar(alloc, uri, 5) catch {
+    const results = search.findSimilar(alloc, uri, 5) catch {
         try sendJson(request, "[]");
         return;
     };
@@ -223,7 +225,7 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn handleActivity(request: *http.Server.Request) !void {
-    const counts = db.getActivityCounts();
+    const counts = activity.getCounts();
 
     // format as JSON array
     var buf: [512]u8 = undefined;

@@ -5,7 +5,7 @@ const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const zat = @import("zat");
-const db = @import("db/mod.zig");
+const indexer = @import("indexer.zig");
 
 const DOCUMENT_COLLECTION = "pub.leaflet.document";
 const PUBLICATION_COLLECTION = "pub.leaflet.publication";
@@ -155,10 +155,10 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
         },
         .delete => {
             if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
-                db.deleteDocument(uri);
+                indexer.deleteDocument(uri);
                 std.debug.print("deleted document: {s}\n", .{uri});
             } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
-                db.deletePublication(uri);
+                indexer.deletePublication(uri);
                 std.debug.print("deleted publication: {s}\n", .{uri});
             }
         },
@@ -203,7 +203,7 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
 
     if (content_buf.items.len == 0) return;
 
-    try db.insertDocument(uri, did, rkey, doc.title, content_buf.items, created_at, doc.publication, tags_list.items);
+    try indexer.insertDocument(uri, did, rkey, doc.title, content_buf.items, created_at, doc.publication, tags_list.items);
     std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri, content_buf.items.len, tags_list.items.len });
 }
 
@@ -292,6 +292,6 @@ fn processPublication(allocator: Allocator, uri: []const u8, did: []const u8, rk
     const record_val: json.Value = .{ .object = record };
     const pub_data = zat.json.extractAt(LeafletPublication, allocator, record_val, .{}) catch return;
 
-    try db.insertPublication(uri, did, rkey, pub_data.name, pub_data.description, pub_data.base_path);
+    try indexer.insertPublication(uri, did, rkey, pub_data.name, pub_data.description, pub_data.base_path);
     std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, pub_data.base_path orelse "none" });
 }

@@ -3,6 +3,7 @@ const net = std.net;
 const posix = std.posix;
 const Thread = std.Thread;
 const db = @import("db/mod.zig");
+const activity = @import("activity.zig");
 const server = @import("server.zig");
 const tap = @import("tap.zig");
 
@@ -18,7 +19,7 @@ pub fn main() !void {
     try db.init();
 
     // start activity tracker
-    db.initActivity();
+    activity.init();
 
     // start tap consumer in background
     const tap_thread = try Thread.spawn(.{}, tap.consumer, .{allocator});

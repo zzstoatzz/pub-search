@@ -2,7 +2,7 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const zql = @import("zql");
-const Client = @import("Client.zig");
+const db = @import("db/mod.zig");
 const activity = @import("activity.zig");
 
 const TagJson = struct { tag: []const u8, count: i64 };
@@ -16,7 +16,9 @@ const TagsQuery = zql.Query(
     \\LIMIT 100
 );
 
-pub fn getTags(c: *Client, alloc: Allocator) ![]const u8 {
+pub fn getTags(alloc: Allocator) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
@@ -41,7 +43,9 @@ pub const Stats = struct {
     started_at: i64,
 };
 
-pub fn getStats(c: *Client) Stats {
+pub fn getStats() Stats {
+    const c = db.getClient() orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0, .started_at = 0 };
+
     var res = c.query(
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
@@ -62,7 +66,9 @@ pub fn getStats(c: *Client) Stats {
     };
 }
 
-pub fn recordSearch(c: *Client, query: []const u8) void {
+pub fn recordSearch(query: []const u8) void {
+    const c = db.getClient() orelse return;
+
     activity.record();
     c.exec("UPDATE stats SET total_searches = total_searches + 1 WHERE id = 1", &.{}) catch {};
 
@@ -75,11 +81,14 @@ pub fn recordSearch(c: *Client, query: []const u8) void {
     }
 }
 
-pub fn recordError(c: *Client) void {
+pub fn recordError() void {
+    const c = db.getClient() orelse return;
     c.exec("UPDATE stats SET total_errors = total_errors + 1 WHERE id = 1", &.{}) catch {};
 }
 
-pub fn getPopular(c: *Client, alloc: Allocator, limit: usize) ![]const u8 {
+pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 

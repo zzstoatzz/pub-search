@@ -2,9 +2,7 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const zql = @import("zql");
-const Client = @import("Client.zig");
-const result = @import("result.zig");
-const Row = result.Row;
+const db = @import("db/mod.zig");
 
 // JSON output type for search results
 const SearchResultJson = struct {
@@ -29,7 +27,7 @@ const Doc = struct {
     basePath: []const u8,
     hasPublication: bool,
 
-    fn fromRow(row: Row) Doc {
+    fn fromRow(row: db.Row) Doc {
         return .{
             .uri = row.text(0),
             .did = row.text(1),
@@ -101,7 +99,7 @@ const Pub = struct {
     rkey: []const u8,
     basePath: []const u8,
 
-    fn fromRow(row: Row) Pub {
+    fn fromRow(row: db.Row) Pub {
         return .{
             .uri = row.text(0),
             .did = row.text(1),
@@ -135,7 +133,9 @@ const PubSearch = zql.Query(
     \\ORDER BY rank LIMIT 10
 );
 
-pub fn search(c: *Client, alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
+pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
@@ -175,7 +175,9 @@ pub fn search(c: *Client, alloc: Allocator, query: []const u8, tag_filter: ?[]co
 }
 
 /// Find documents similar to a given document using vector similarity
-pub fn findSimilar(c: *Client, alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
+pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
