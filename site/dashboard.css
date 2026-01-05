@@ -1,0 +1,137 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: monospace;
+  background: #0a0a0a;
+  color: #ccc;
+  min-height: 100vh;
+  padding: 1rem;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.container { max-width: 600px; margin: 0 auto; }
+
+a { color: #1B7340; text-decoration: none; }
+a:hover { color: #2a9d5c; }
+
+h1 {
+  font-size: 12px;
+  font-weight: normal;
+  margin-bottom: 1.5rem;
+}
+h1 a.title { color: #888; }
+h1 a.title:hover { color: #fff; }
+h1 .dim { color: #555; }
+
+section { margin-bottom: 2rem; }
+
+.section-title {
+  font-size: 11px;
+  color: #555;
+  margin-bottom: 0.75rem;
+}
+
+.metrics {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.metric-value {
+  font-size: 16px;
+  color: #888;
+  font-weight: normal;
+}
+
+.metric-label {
+  font-size: 10px;
+  color: #444;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chart-box {
+  background: #111;
+  border: 1px solid #222;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 0.75rem;
+}
+
+.timeline {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 60px;
+}
+
+.bar {
+  flex: 1;
+  background: #1B7340;
+  min-height: 2px;
+}
+.bar:hover { background: #2a9d5c; }
+
+.doc-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #1a1a1a;
+}
+.doc-row:last-child { border-bottom: none; }
+.doc-type { color: #888; }
+.doc-count { color: #ccc; }
+
+.pub-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #1a1a1a;
+}
+.pub-row:last-child { border-bottom: none; }
+.pub-name { color: #888; }
+.pub-count { color: #666; }
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: #151515;
+  border: 1px solid #252525;
+  border-radius: 3px;
+  color: #777;
+}
+.tag:hover {
+  background: #1a1a1a;
+  border-color: #333;
+  color: #aaa;
+}
+.tag .n { color: #444; margin-left: 4px; }
+
+.live { font-size: 11px; color: #555; }
+.live span { color: #4ade80; }
+
+footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #222;
+  font-size: 11px;
+  color: #444;
+}
+footer a { color: #555; }
+footer a:hover { color: #888; }

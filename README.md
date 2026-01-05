@@ -33,7 +33,7 @@ GET /health                      # health check
 
 search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). tag filtering applies to documents only.
 
-## stack
+## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 
 - [Fly.io](https://fly.io) hosts backend + tap
 - [Turso](https://turso.tech) cloud SQLite

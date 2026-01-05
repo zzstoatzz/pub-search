@@ -100,7 +100,7 @@ fn connect(allocator: Allocator) !void {
 /// TAP record envelope - extracted via zat.json.extractAt
 const TapRecord = struct {
     collection: []const u8,
-    action: []const u8,
+    action: zat.CommitAction,
     did: []const u8,
     rkey: []const u8,
 };
@@ -139,26 +139,29 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const uri = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ did.raw, rec.collection, rec.rkey });
     defer allocator.free(uri);
 
-    if (mem.eql(u8, rec.action, "create") or mem.eql(u8, rec.action, "update")) {
-        const record_obj = zat.json.getObject(parsed.value, "record.record") orelse return;
+    switch (rec.action) {
+        .create, .update => {
+            const record_obj = zat.json.getObject(parsed.value, "record.record") orelse return;
 
-        if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
-            processDocument(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
-                std.debug.print("document processing error: {}\n", .{err});
-            };
-        } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
-            processPublication(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
-                std.debug.print("publication processing error: {}\n", .{err});
-            };
-        }
-    } else if (mem.eql(u8, rec.action, "delete")) {
-        if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
-            db.deleteDocument(uri);
-            std.debug.print("deleted document: {s}\n", .{uri});
-        } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
-            db.deletePublication(uri);
-            std.debug.print("deleted publication: {s}\n", .{uri});
-        }
+            if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
+                processDocument(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
+                    std.debug.print("document processing error: {}\n", .{err});
+                };
+            } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
+                processPublication(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
+                    std.debug.print("publication processing error: {}\n", .{err});
+                };
+            }
+        },
+        .delete => {
+            if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
+                db.deleteDocument(uri);
+                std.debug.print("deleted document: {s}\n", .{uri});
+            } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
+                db.deletePublication(uri);
+                std.debug.print("deleted publication: {s}\n", .{uri});
+            }
+        },
     }
 }
 

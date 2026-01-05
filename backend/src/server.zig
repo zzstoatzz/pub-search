@@ -56,6 +56,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try handlePopular(request);
     } else if (mem.eql(u8, target, "/dashboard")) {
         try handleDashboard(request);
+    } else if (mem.eql(u8, target, "/api/dashboard")) {
+        try handleDashboardApi(request);
     } else if (mem.startsWith(u8, target, "/similar")) {
         try handleSimilar(request, target);
     } else if (mem.eql(u8, target, "/activity")) {
@@ -175,29 +177,29 @@ fn sendNotFound(request: *http.Server.Request) !void {
     });
 }
 
-fn handleDashboard(request: *http.Server.Request) !void {
+fn handleDashboardApi(request: *http.Server.Request) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
     const data = dashboard.fetch(alloc) catch {
-        try sendNotFound(request);
+        try sendJson(request, "{\"error\":\"failed to fetch dashboard data\"}");
         return;
     };
 
-    const html = dashboard.render(alloc, data) catch {
-        try sendNotFound(request);
+    const json_response = dashboard.toJson(alloc, data) catch {
+        try sendJson(request, "{\"error\":\"failed to serialize dashboard data\"}");
         return;
     };
 
-    try sendHtml(request, html);
+    try sendJson(request, json_response);
 }
 
-fn sendHtml(request: *http.Server.Request, body: []const u8) !void {
-    try request.respond(body, .{
-        .status = .ok,
+fn handleDashboard(request: *http.Server.Request) !void {
+    try request.respond("", .{
+        .status = .moved_permanently,
         .extra_headers = &.{
-            .{ .name = "content-type", .value = "text/html; charset=utf-8" },
+            .{ .name = "location", .value = "https://leaflet-search.pages.dev/dashboard.html" },
         },
     });
 }

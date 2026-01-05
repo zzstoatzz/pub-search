@@ -1,0 +1,103 @@
+const std = @import("std");
+const json = std.json;
+const Allocator = std.mem.Allocator;
+const zql = @import("zql");
+const Client = @import("Client.zig");
+const activity = @import("activity.zig");
+
+const TagJson = struct { tag: []const u8, count: i64 };
+const PopularJson = struct { query: []const u8, count: i64 };
+
+const TagsQuery = zql.Query(
+    \\SELECT tag, COUNT(*) as count
+    \\FROM document_tags
+    \\GROUP BY tag
+    \\ORDER BY count DESC
+    \\LIMIT 100
+);
+
+pub fn getTags(c: *Client, alloc: Allocator) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var res = c.query(TagsQuery.positional, &.{}) catch {
+        try output.writer.writeAll("{\"error\":\"failed to fetch tags\"}");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+pub const Stats = struct {
+    documents: i64,
+    publications: i64,
+    searches: i64,
+    errors: i64,
+    started_at: i64,
+};
+
+pub fn getStats(c: *Client) Stats {
+    var res = c.query(
+        \\SELECT
+        \\  (SELECT COUNT(*) FROM documents) as docs,
+        \\  (SELECT COUNT(*) FROM publications) as pubs,
+        \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
+        \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
+        \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at
+    , &.{}) catch return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0, .started_at = 0 };
+    defer res.deinit();
+
+    const row = res.first() orelse return .{ .documents = 0, .publications = 0, .searches = 0, .errors = 0, .started_at = 0 };
+    return .{
+        .documents = row.int(0),
+        .publications = row.int(1),
+        .searches = row.int(2),
+        .errors = row.int(3),
+        .started_at = row.int(4),
+    };
+}
+
+pub fn recordSearch(c: *Client, query: []const u8) void {
+    activity.record();
+    c.exec("UPDATE stats SET total_searches = total_searches + 1 WHERE id = 1", &.{}) catch {};
+
+    // track popular searches (skip empty/very short queries)
+    if (query.len >= 2) {
+        c.exec(
+            "INSERT INTO popular_searches (query, count) VALUES (?, 1) ON CONFLICT(query) DO UPDATE SET count = count + 1",
+            &.{query},
+        ) catch {};
+    }
+}
+
+pub fn recordError(c: *Client) void {
+    c.exec("UPDATE stats SET total_errors = total_errors + 1 WHERE id = 1", &.{}) catch {};
+}
+
+pub fn getPopular(c: *Client, alloc: Allocator, limit: usize) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var buf: [8]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&buf, "{d}", .{limit}) catch "3";
+
+    var res = c.query(
+        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT ?",
+        &.{limit_str},
+    ) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}

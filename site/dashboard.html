@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>leaflet search / stats</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='18' width='6' height='10' fill='%231B7340'/><rect x='13' y='12' width='6' height='16' fill='%231B7340'/><rect x='22' y='6' width='6' height='22' fill='%231B7340'/></svg>">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="container">
+    <h1><a href="https://leaflet-search.pages.dev" class="title">leaflet search</a> <span class="dim">/ stats</span></h1>
+
+    <section>
+      <div class="metrics">
+        <div>
+          <div class="metric-value" id="age">--</div>
+          <div class="metric-label">uptime</div>
+        </div>
+        <div>
+          <div class="metric-value" id="searches">--</div>
+          <div class="metric-label">searches</div>
+        </div>
+        <div>
+          <div class="metric-value" id="publications">--</div>
+          <div class="metric-label">publications</div>
+        </div>
+      </div>
+      <div class="live" id="live"></div>
+    </section>
+
+    <section>
+      <div class="section-title">documents</div>
+      <div class="chart-box">
+        <div class="doc-row">
+          <span class="doc-type">articles</span>
+          <span class="doc-count" id="articles">--</span>
+        </div>
+        <div class="doc-row">
+          <span class="doc-type">looseleafs</span>
+          <span class="doc-count" id="looseleafs">--</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">activity (last 30 days)</div>
+      <div class="chart-box">
+        <div class="timeline" id="timeline"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">top publications</div>
+      <div class="chart-box">
+        <div id="pubs"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">tags</div>
+      <div class="tags" id="tags"></div>
+    </section>
+
+    <footer>
+      <a href="https://leaflet-search.pages.dev">back</a> · source on <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search">tangled</a>
+    </footer>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
