@@ -175,6 +175,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 }
 
 /// Find documents similar to a given document using vector similarity
+/// Uses brute-force cosine distance (no index required, ~7s for 3500 docs)
 pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
@@ -182,20 +183,22 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     errdefer output.deinit();
 
     var limit_buf: [8]u8 = undefined;
-    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit + 1}) catch "6"; // +1 to exclude self
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch "5";
 
-    // vector similarity search using the document's embedding
-    // note: CAST required because Hrana sends all values as text
+    // brute-force cosine similarity search (no vector index needed)
     var res = c.query(
-        \\SELECT d.uri, d.did, d.title, '' as snippet,
-        \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
-        \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
-        \\FROM vector_top_k('documents_embedding_idx',
-        \\  (SELECT embedding FROM documents WHERE uri = ?), CAST(? AS INTEGER)) AS v
-        \\JOIN documents d ON d.rowid = v.id
-        \\LEFT JOIN publications p ON d.publication_uri = p.uri
-        \\WHERE d.uri != ?
-    , &.{ uri, limit_str, uri }) catch {
+        \\SELECT d2.uri, d2.did, d2.title, '' as snippet,
+        \\  d2.created_at, d2.rkey, COALESCE(p.base_path, '') as base_path,
+        \\  CASE WHEN d2.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+        \\FROM documents d1, documents d2
+        \\LEFT JOIN publications p ON d2.publication_uri = p.uri
+        \\WHERE d1.uri = ?
+        \\  AND d2.uri != d1.uri
+        \\  AND d1.embedding IS NOT NULL
+        \\  AND d2.embedding IS NOT NULL
+        \\ORDER BY vector_distance_cos(d1.embedding, d2.embedding)
+        \\LIMIT ?
+    , &.{ uri, limit_str }) catch {
         try output.writer.writeAll("[]");
         return try output.toOwnedSlice();
     };

@@ -75,26 +75,47 @@ def turso_query(settings: Settings, sql: str, args: list | None = None) -> list[
     return [dict(zip(cols, [extract_value(cell) for cell in row])) for row in rows]
 
 
-def turso_exec(settings: Settings, sql: str, args: list | None = None) -> None:
-    """Execute a statement against Turso."""
-    stmt = {"sql": sql}
-    if args:
-        stmt["args"] = [{"type": "text", "value": str(a)} for a in args]
+def turso_exec(settings: Settings, sql: str, args: list | None = None, retries: int = 3) -> None:
+    """Execute a statement against Turso with retry logic."""
+    turso_batch_exec(settings, [(sql, args)], retries)
 
-    response = httpx.post(
-        f"https://{settings.turso_host}/v2/pipeline",
-        headers={
-            "Authorization": f"Bearer {settings.turso_token}",
-            "Content-Type": "application/json",
-        },
-        json={"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    result = data["results"][0]
-    if result["type"] == "error":
-        raise Exception(f"Turso error: {result['error']}")
+
+def turso_batch_exec(settings: Settings, statements: list[tuple[str, list | None]], retries: int = 3) -> None:
+    """Execute multiple statements in a single pipeline request."""
+    import time
+
+    requests = []
+    for sql, args in statements:
+        stmt = {"sql": sql}
+        if args:
+            stmt["args"] = [{"type": "text", "value": str(a)} for a in args]
+        requests.append({"type": "execute", "stmt": stmt})
+    requests.append({"type": "close"})
+
+    for attempt in range(retries):
+        try:
+            response = httpx.post(
+                f"https://{settings.turso_host}/v2/pipeline",
+                headers={
+                    "Authorization": f"Bearer {settings.turso_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"requests": requests},
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            for i, result in enumerate(data["results"][:-1]):  # skip the close result
+                if result["type"] == "error":
+                    raise Exception(f"Turso error on statement {i}: {result['error']}")
+            return
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError) as e:
+            if attempt < retries - 1:
+                wait = 2 ** (attempt + 1)
+                print(f"  {type(e).__name__}, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def voyage_embed(settings: Settings, texts: list[str]) -> list[list[float]]:
@@ -162,25 +183,36 @@ def main():
             print(f"  ... and {len(docs) - 10} more")
         return
 
-    # process in batches
-    processed = 0
-    for i in range(0, len(docs), args.batch_size):
-        batch = docs[i : i + args.batch_size]
+    # process in batches with concurrency
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def process_batch(batch_info):
+        batch_num, batch = batch_info
         texts = [f"{doc['title']} {doc['content']}" for doc in batch]
-
-        print(f"embedding batch {i // args.batch_size + 1} ({len(batch)} docs)...")
         embeddings = voyage_embed(settings, texts)
-
+        statements = []
         for doc, embedding in zip(batch, embeddings):
             embedding_json = json.dumps(embedding)
-            turso_exec(
-                settings,
+            statements.append((
                 "UPDATE documents SET embedding = vector32(?) WHERE uri = ?",
                 [embedding_json, doc["uri"]],
-            )
-            processed += 1
+            ))
+        turso_batch_exec(settings, statements)
+        return batch_num, len(batch)
 
-        print(f"  updated {processed}/{len(docs)}")
+    batches = [(i // args.batch_size + 1, docs[i : i + args.batch_size])
+               for i in range(0, len(docs), args.batch_size)]
+
+    processed = 0
+    workers = min(8, len(batches))  # more workers now that index is dropped
+    print(f"processing {len(batches)} batches with {workers} workers...")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(process_batch, b): b[0] for b in batches}
+        for future in as_completed(futures):
+            batch_num, count = future.result()
+            processed += count
+            print(f"batch {batch_num} done ({processed}/{len(docs)})", flush=True)
 
     print(f"done! processed {processed} documents")
 

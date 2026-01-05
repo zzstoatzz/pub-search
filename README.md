@@ -25,18 +25,47 @@ see [mcp/README.md](mcp/README.md) for local setup and usage details.
 ## api
 
 ```
-GET /search?q=<query>&tag=<tag>  # search with query, tag, or both
+GET /search?q=<query>&tag=<tag>  # full-text search with query, tag, or both
+GET /similar?uri=<at-uri>        # find similar documents via vector embeddings
 GET /tags                        # list all tags with counts
+GET /popular                     # popular search queries
 GET /stats                       # document/publication counts
 GET /health                      # health check
 ```
 
 search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). tag filtering applies to documents only.
 
+`/similar` uses [Voyage AI](https://voyageai.com) embeddings with brute-force cosine similarity (~0.15s for 3500 docs).
+
 ## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 
 - [Fly.io](https://fly.io) hosts backend + tap
-- [Turso](https://turso.tech) cloud SQLite
+- [Turso](https://turso.tech) cloud SQLite with vector support
+- [Voyage AI](https://voyageai.com) embeddings (voyage-3-lite)
 - [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs leaflet content from ATProto firehose
 - [Zig](https://ziglang.org) HTTP server, search API, content indexing
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend
+
+## embeddings
+
+documents are embedded using Voyage AI's `voyage-3-lite` model (512 dimensions). new documents from the firehose don't automatically get embeddings - they need to be backfilled periodically.
+
+### backfill embeddings
+
+requires `TURSO_URL`, `TURSO_TOKEN`, and `VOYAGE_API_KEY` in `.env`:
+
+```bash
+# check how many docs need embeddings
+./scripts/backfill-embeddings --dry-run
+
+# run the backfill (uses batching + concurrency)
+./scripts/backfill-embeddings --batch-size 50
+```
+
+the script:
+- fetches docs where `embedding IS NULL`
+- batches them to Voyage API (50 docs/batch default)
+- writes embeddings to Turso in batched transactions
+- runs 8 concurrent workers
+
+**note:** we use brute-force cosine similarity instead of a vector index. Turso's DiskANN index has ~60s write latency per row, making it impractical for incremental updates. brute-force on 3500 vectors runs in ~0.15s which is fine for this scale.
