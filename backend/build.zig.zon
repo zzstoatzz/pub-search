@@ -12,6 +12,10 @@
             .url = "https://github.com/zzstoatzz/zql/archive/main.tar.gz",
             .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
         },
+        .zat = .{
+            .url = "https://github.com/zzstoatzz/zat/archive/main.tar.gz",
+            .hash = "zat-0.0.2-5PuC7hJbAQAx5-PTup-GhBRIRAKqjbyBlIQq8YTEObTu",
+        },
     },
     .paths = .{
         "build.zig",

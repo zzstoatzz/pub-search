@@ -412,6 +412,7 @@ pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
 
 /// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
 /// Uses OR for better recall with BM25 ranking (more matches = higher score)
+/// Quoted queries are passed through as phrase matches: "exact phrase" -> "exact phrase"
 fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
 
@@ -423,6 +424,11 @@ fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (start >= end) return "";
 
     const trimmed = query[start..end];
+
+    // quoted phrase: pass through to FTS5 for exact phrase matching
+    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
+        return try alloc.dupe(u8, trimmed);
+    }
 
     // count words and total length
     var word_count: usize = 0;

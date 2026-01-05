@@ -14,6 +14,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zat = b.dependency("zat", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "leaflet-search",
         .root_module = b.createModule(.{
@@ -23,6 +28,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "websocket", .module = websocket.module("websocket") },
                 .{ .name = "zql", .module = zql.module("zql") },
+                .{ .name = "zat", .module = zat.module("zat") },
             },
         }),
     });

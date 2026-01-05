@@ -4,54 +4,11 @@ const json = std.json;
 const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
+const zat = @import("zat");
 const db = @import("db/mod.zig");
 
 const DOCUMENT_COLLECTION = "pub.leaflet.document";
 const PUBLICATION_COLLECTION = "pub.leaflet.publication";
-
-// domain types
-const Did = struct {
-    raw: []const u8,
-
-    fn parse(s: []const u8) ?Did {
-        if (!mem.startsWith(u8, s, "did:")) return null;
-        const rest = s[4..];
-        const colon = mem.indexOf(u8, rest, ":") orelse return null;
-        if (colon == 0 or colon == rest.len - 1) return null;
-        return .{ .raw = s };
-    }
-
-    fn str(self: Did) []const u8 {
-        return self.raw;
-    }
-};
-
-const AtUri = struct {
-    raw: []const u8,
-    did_end: usize,
-    collection_end: usize,
-
-    fn build(allocator: Allocator, d: Did, coll: []const u8, rk: []const u8) !AtUri {
-        const raw = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ d.raw, coll, rk });
-        return .{
-            .raw = raw,
-            .did_end = 5 + d.raw.len,
-            .collection_end = 5 + d.raw.len + 1 + coll.len,
-        };
-    }
-
-    fn did(self: AtUri) Did {
-        return .{ .raw = self.raw[5..self.did_end] };
-    }
-
-    fn rkey(self: AtUri) []const u8 {
-        return self.raw[self.collection_end + 1 ..];
-    }
-
-    fn str(self: AtUri) []const u8 {
-        return self.raw;
-    }
-};
 
 fn getTapHost() []const u8 {
     return posix.getenv("TAP_HOST") orelse "leaflet-search-tap.fly.dev";
@@ -140,127 +97,111 @@ fn connect(allocator: Allocator) !void {
     };
 }
 
+/// TAP record envelope - extracted via zat.json.extractAt
+const TapRecord = struct {
+    collection: []const u8,
+    action: []const u8,
+    did: []const u8,
+    rkey: []const u8,
+};
+
+/// Leaflet document fields
+const LeafletDocument = struct {
+    title: []const u8,
+    publication: ?[]const u8 = null,
+    publishedAt: ?[]const u8 = null,
+    createdAt: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+};
+
+/// Leaflet publication fields
+const LeafletPublication = struct {
+    name: []const u8,
+    description: ?[]const u8 = null,
+    base_path: ?[]const u8 = null,
+};
+
 fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch return;
     defer parsed.deinit();
 
-    const root = parsed.value.object;
+    // check message type
+    const msg_type = zat.json.getString(parsed.value, "type") orelse return;
+    if (!mem.eql(u8, msg_type, "record")) return;
 
-    // tap format: { "id": 123, "type": "record", "record": { ... } }
-    const msg_type = root.get("type") orelse return;
-    if (msg_type != .string) return;
-    if (!mem.eql(u8, msg_type.string, "record")) return;
+    // extract record envelope
+    const rec = zat.json.extractAt(TapRecord, allocator, parsed.value, .{"record"}) catch return;
 
-    const record_wrapper = root.get("record") orelse return;
-    if (record_wrapper != .object) return;
+    // validate DID
+    const did = zat.Did.parse(rec.did) orelse return;
 
-    const rec = record_wrapper.object;
+    // build AT-URI string
+    const uri = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ did.raw, rec.collection, rec.rkey });
+    defer allocator.free(uri);
 
-    const collection = rec.get("collection") orelse return;
-    if (collection != .string) return;
+    if (mem.eql(u8, rec.action, "create") or mem.eql(u8, rec.action, "update")) {
+        const record_obj = zat.json.getObject(parsed.value, "record.record") orelse return;
 
-    const action = rec.get("action") orelse return;
-    if (action != .string) return;
-
-    const did_val = rec.get("did") orelse return;
-    if (did_val != .string) return;
-    const did = Did.parse(did_val.string) orelse return;
-
-    const rkey = rec.get("rkey") orelse return;
-    if (rkey != .string) return;
-
-    const uri = AtUri.build(allocator, did, collection.string, rkey.string) catch return;
-    defer allocator.free(uri.raw);
-
-    if (mem.eql(u8, action.string, "create") or mem.eql(u8, action.string, "update")) {
-        const record = rec.get("record") orelse return;
-        if (record != .object) return;
-
-        if (mem.eql(u8, collection.string, DOCUMENT_COLLECTION)) {
-            processDocument(allocator, uri, record.object) catch |err| {
+        if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
+            processDocument(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
                 std.debug.print("document processing error: {}\n", .{err});
             };
-        } else if (mem.eql(u8, collection.string, PUBLICATION_COLLECTION)) {
-            processPublication(uri, record.object) catch |err| {
+        } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
+            processPublication(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
                 std.debug.print("publication processing error: {}\n", .{err});
             };
         }
-    } else if (mem.eql(u8, action.string, "delete")) {
-        if (mem.eql(u8, collection.string, DOCUMENT_COLLECTION)) {
-            db.deleteDocument(uri.str());
-            std.debug.print("deleted document: {s}\n", .{uri.str()});
-        } else if (mem.eql(u8, collection.string, PUBLICATION_COLLECTION)) {
-            db.deletePublication(uri.str());
-            std.debug.print("deleted publication: {s}\n", .{uri.str()});
+    } else if (mem.eql(u8, rec.action, "delete")) {
+        if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
+            db.deleteDocument(uri);
+            std.debug.print("deleted document: {s}\n", .{uri});
+        } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
+            db.deletePublication(uri);
+            std.debug.print("deleted publication: {s}\n", .{uri});
         }
     }
 }
 
-fn processDocument(allocator: Allocator, uri: AtUri, record: json.ObjectMap) !void {
-    // get title
-    const title_val = record.get("title") orelse return;
-    if (title_val != .string) return;
-    const title = title_val.string;
+fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+    const record_val: json.Value = .{ .object = record };
 
-    // get publication URI
-    const publication_uri: ?[]const u8 = blk: {
-        if (record.get("publication")) |v| {
-            if (v == .string) break :blk v.string;
-        }
-        break :blk null;
-    };
+    // extract known fields via struct
+    const doc = zat.json.extractAt(LeafletDocument, allocator, record_val, .{}) catch return;
+    const created_at = doc.publishedAt orelse doc.createdAt;
 
-    // get createdAt (optional, might be publishedAt)
-    const created_at: ?[]const u8 = blk: {
-        if (record.get("publishedAt")) |v| {
-            if (v == .string) break :blk v.string;
-        }
-        if (record.get("createdAt")) |v| {
-            if (v == .string) break :blk v.string;
-        }
-        break :blk null;
-    };
-
-    // extract tags
+    // extract tags array
     var tags_list: std.ArrayList([]const u8) = .{};
     defer tags_list.deinit(allocator);
-    if (record.get("tags")) |tags_val| {
-        if (tags_val == .array) {
-            for (tags_val.array.items) |tag_item| {
-                if (tag_item == .string) {
-                    try tags_list.append(allocator, tag_item.string);
-                }
+    if (zat.json.getArray(record_val, "tags")) |tags| {
+        for (tags) |tag_item| {
+            if (tag_item == .string) {
+                try tags_list.append(allocator, tag_item.string);
             }
         }
     }
 
+    // extract plaintext from pages
     var content_buf: std.ArrayList(u8) = .{};
     defer content_buf.deinit(allocator);
 
-    // include document description if present
-    if (record.get("description")) |desc_val| {
-        if (desc_val == .string and desc_val.string.len > 0) {
-            try content_buf.appendSlice(allocator, desc_val.string);
+    if (doc.description) |desc| {
+        if (desc.len > 0) {
+            try content_buf.appendSlice(allocator, desc);
         }
     }
 
-    // extract plaintext from pages
-    if (record.get("pages")) |pages_val| {
-        if (pages_val == .array) {
-            for (pages_val.array.items) |page| {
-                if (page != .object) continue;
+    if (zat.json.getArray(record_val, "pages")) |pages| {
+        for (pages) |page| {
+            if (page == .object) {
                 try extractPlaintextFromPage(allocator, &content_buf, page.object);
             }
         }
     }
 
-    if (content_buf.items.len == 0) {
-        // no content extracted, skip
-        return;
-    }
+    if (content_buf.items.len == 0) return;
 
-    try db.insertDocument(uri.str(), uri.did().str(), uri.rkey(), title, content_buf.items, created_at, publication_uri, tags_list.items);
-    std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri.str(), content_buf.items.len, tags_list.items.len });
+    try db.insertDocument(uri, did, rkey, doc.title, content_buf.items, created_at, doc.publication, tags_list.items);
+    std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri, content_buf.items.len, tags_list.items.len });
 }
 
 fn extractPlaintextFromPage(allocator: Allocator, buf: *std.ArrayList(u8), page: json.ObjectMap) !void {
@@ -344,25 +285,10 @@ fn extractListItemText(allocator: Allocator, buf: *std.ArrayList(u8), item: json
     }
 }
 
-fn processPublication(uri: AtUri, record: json.ObjectMap) !void {
-    const name_val = record.get("name") orelse return;
-    if (name_val != .string) return;
-    const name = name_val.string;
+fn processPublication(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+    const record_val: json.Value = .{ .object = record };
+    const pub_data = zat.json.extractAt(LeafletPublication, allocator, record_val, .{}) catch return;
 
-    const description: ?[]const u8 = blk: {
-        if (record.get("description")) |v| {
-            if (v == .string) break :blk v.string;
-        }
-        break :blk null;
-    };
-
-    const base_path: ?[]const u8 = blk: {
-        if (record.get("base_path")) |v| {
-            if (v == .string) break :blk v.string;
-        }
-        break :blk null;
-    };
-
-    try db.insertPublication(uri.str(), uri.did().str(), uri.rkey(), name, description, base_path);
-    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri.str(), base_path orelse "none" });
+    try db.insertPublication(uri, did, rkey, pub_data.name, pub_data.description, pub_data.base_path);
+    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, pub_data.base_path orelse "none" });
 }
