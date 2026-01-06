@@ -429,35 +429,29 @@
 
         for (const doc of results) {
           const entityType = doc.type || 'article';
-
-          // build URL based on entity type
-          let leafletUrl = null;
-          if (entityType === 'publication') {
-            // publications link to their base path
-            leafletUrl = doc.basePath ? `https://${doc.basePath}` : null;
-          } else {
-            // articles and looseleafs link to specific document
-            leafletUrl = doc.basePath && doc.rkey
-              ? `https://${doc.basePath}/${doc.rkey}`
-              : (doc.did && doc.rkey ? `https://leaflet.pub/p/${doc.did}/${doc.rkey}` : null);
-          }
-
-          const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           const platform = doc.platform || 'leaflet';
+
+          // build URL based on entity type and platform
+          const docUrl = buildDocUrl(doc, entityType, platform);
           const platformBadge = platform !== 'leaflet' ? `<span class="platform-badge">${escapeHtml(platform)}</span>` : '';
+          const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
+
+          // platform home URL for meta link
+          const platformHome = getPlatformHome(platform, doc.basePath);
+
           html += `
             <div class="result">
               <div class="result-title">
                 <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}
-                ${leafletUrl
-                  ? `<a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
+                ${docUrl
+                  ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
                   : escapeHtml(doc.title || 'Untitled')}
               </div>
               <div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>
               <div class="result-meta">
-                ${date ? `${date} | ` : ''}${doc.basePath
-                  ? `<a href="https://${doc.basePath}" target="_blank">${doc.basePath}</a>`
-                  : `<a href="https://leaflet.pub" target="_blank">leaflet.pub</a>`}
+                ${date ? `${date} | ` : ''}${platformHome.url
+                  ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
+                  : platformHome.label}
               </div>
             </div>
           `;
@@ -483,6 +477,44 @@
       return str.replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       })[c]);
+    }
+
+    // platform-specific URL patterns
+    const PLATFORM_CONFIG = {
+      leaflet: {
+        home: 'https://leaflet.pub',
+        label: 'leaflet.pub',
+        docUrl: (did, rkey) => `https://leaflet.pub/p/${did}/${rkey}`
+      },
+      // add other platforms as we learn their URL patterns
+      // pckt: { home: '...', label: '...', docUrl: (did, rkey) => '...' },
+      // offprint: { home: '...', label: '...', docUrl: (did, rkey) => '...' },
+    };
+
+    function buildDocUrl(doc, entityType, platform) {
+      if (entityType === 'publication') {
+        return doc.basePath ? `https://${doc.basePath}` : null;
+      }
+      // documents: prefer basePath, fallback to platform-specific pattern
+      if (doc.basePath && doc.rkey) {
+        return `https://${doc.basePath}/${doc.rkey}`;
+      }
+      const config = PLATFORM_CONFIG[platform];
+      if (config && config.docUrl && doc.did && doc.rkey) {
+        return config.docUrl(doc.did, doc.rkey);
+      }
+      return null; // no URL available for this platform
+    }
+
+    function getPlatformHome(platform, basePath) {
+      if (basePath) {
+        return { url: `https://${basePath}`, label: basePath };
+      }
+      const config = PLATFORM_CONFIG[platform];
+      if (config) {
+        return { url: config.home, label: config.label };
+      }
+      return { url: null, label: platform }; // just show platform name, no link
     }
 
     function highlightTerms(text, query) {
@@ -660,9 +692,8 @@
         if (filtered.length === 0) return;
 
         const items = filtered.map(doc => {
-          const url = doc.basePath && doc.rkey
-            ? `https://${doc.basePath}/${doc.rkey}`
-            : (doc.did && doc.rkey ? `https://leaflet.pub/p/${doc.did}/${doc.rkey}` : null);
+          const platform = doc.platform || 'leaflet';
+          const url = buildDocUrl(doc, doc.type || 'article', platform);
           return url
             ? `<a href="${url}" target="_blank" class="related-item">${escapeHtml(doc.title || 'Untitled')}</a>`
             : `<span class="related-item">${escapeHtml(doc.title || 'Untitled')}</span>`;
