@@ -344,3 +344,51 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     buf[pos] = '*';
     return buf;
 }
+
+// --- tests ---
+
+test "buildFtsQuery: empty string" {
+    const result = try buildFtsQuery(std.testing.allocator, "");
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "buildFtsQuery: whitespace only" {
+    const result = try buildFtsQuery(std.testing.allocator, "   ");
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "buildFtsQuery: single word" {
+    const result = try buildFtsQuery(std.testing.allocator, "hello");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("hello*", result);
+}
+
+test "buildFtsQuery: single word with whitespace" {
+    const result = try buildFtsQuery(std.testing.allocator, "  hello  ");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("hello*", result);
+}
+
+test "buildFtsQuery: multiple words" {
+    const result = try buildFtsQuery(std.testing.allocator, "cat dog");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("cat OR dog*", result);
+}
+
+test "buildFtsQuery: three words" {
+    const result = try buildFtsQuery(std.testing.allocator, "one two three");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("one OR two OR three*", result);
+}
+
+test "buildFtsQuery: quoted phrase passthrough" {
+    const result = try buildFtsQuery(std.testing.allocator, "\"exact phrase\"");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("\"exact phrase\"", result);
+}
+
+test "buildFtsQuery: dots as separators" {
+    const result = try buildFtsQuery(std.testing.allocator, "foo.bar");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("foo OR bar*", result);
+}
