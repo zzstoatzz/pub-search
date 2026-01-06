@@ -119,5 +119,13 @@ fn runMigrations(client: *Client) !void {
     client.exec("ALTER TABLE stats ADD COLUMN cache_hits INTEGER DEFAULT 0", &.{}) catch {};
     client.exec("ALTER TABLE stats ADD COLUMN cache_misses INTEGER DEFAULT 0", &.{}) catch {};
 
+    // multi-platform support: track source platform and collection
+    client.exec("ALTER TABLE documents ADD COLUMN platform TEXT DEFAULT 'leaflet'", &.{}) catch {};
+    client.exec("ALTER TABLE documents ADD COLUMN source_collection TEXT DEFAULT 'pub.leaflet.document'", &.{}) catch {};
+
+    // backfill existing records (idempotent - only updates NULLs)
+    client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform IS NULL", &.{}) catch {};
+    client.exec("UPDATE documents SET source_collection = 'pub.leaflet.document' WHERE source_collection IS NULL", &.{}) catch {};
+
     // vector embeddings column already added by backfill script
 }
