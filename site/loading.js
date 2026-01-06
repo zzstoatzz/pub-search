@@ -82,78 +82,70 @@ function createLoader(opts = {}) {
   const style = document.createElement('style');
   style.id = 'loader-styles';
   style.textContent = `
-    /* skeleton shimmer for loading values */
+    /* skeleton shimmer - subtle pulse */
     .loading .metric-value,
     .loading .doc-count,
     .loading .pub-count {
-      background: linear-gradient(90deg, #1a1a1a 25%, #252525 50%, #1a1a1a 75%);
-      background-size: 200% 100%;
-      animation: shimmer 1.5s infinite;
-      border-radius: 3px;
-      color: transparent !important;
-      min-width: 3ch;
-      display: inline-block;
+      color: #333 !important;
+      animation: dim-pulse 2s ease-in-out infinite;
     }
 
-    @keyframes shimmer {
-      0% { background-position: 200% 0; }
-      100% { background-position: -200% 0; }
+    @keyframes dim-pulse {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 0.6; }
     }
 
-    /* wake message */
+    /* wake message - terminal style, ephemeral */
     .wake-message {
       position: fixed;
-      top: 1rem;
-      right: 1rem;
+      bottom: 1rem;
+      left: 1rem;
+      font-family: monospace;
       font-size: 11px;
-      color: #666;
-      background: #111;
-      border: 1px solid #222;
-      padding: 6px 12px;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      color: #444;
       z-index: 1000;
-      animation: fade-in 0.2s ease;
+      animation: fade-in 0.5s ease;
+    }
+
+    .wake-message::before {
+      content: '>';
+      margin-right: 6px;
+      opacity: 0.5;
     }
 
     .wake-dot {
-      width: 6px;
-      height: 6px;
-      background: #4ade80;
+      display: inline-block;
+      width: 4px;
+      height: 4px;
+      background: #555;
       border-radius: 50%;
-      animation: pulse-dot 1s infinite;
+      margin-left: 4px;
+      animation: blink 1s step-end infinite;
     }
 
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 0.3; }
-      50% { opacity: 1; }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
     }
 
     @keyframes fade-in {
-      from { opacity: 0; transform: translateY(-4px); }
-      to { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; }
+      to { opacity: 1; }
     }
 
     .wake-message.fade-out {
-      animation: fade-out 0.3s ease forwards;
+      animation: fade-out 0.5s ease forwards;
     }
 
     @keyframes fade-out {
-      to { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 0; }
     }
 
     /* loaded transition */
     .loaded .metric-value,
     .loaded .doc-count,
     .loaded .pub-count {
-      animation: reveal 0.3s ease;
-    }
-
-    @keyframes reveal {
-      from { opacity: 0; }
-      to { opacity: 1; }
+      animation: none;
     }
   `;
   document.head.appendChild(style);
