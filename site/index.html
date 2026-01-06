@@ -452,7 +452,7 @@
         }
 
         resultsDiv.innerHTML = html;
-        statsDiv.textContent = `${results.length} results`;
+        statsDiv.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
 
         // load related documents based on top result
         if (results.length > 0 && results[0].uri) {
