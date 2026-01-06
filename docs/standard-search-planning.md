@@ -25,6 +25,15 @@ added similarity cache to improve `/similar` endpoint performance:
 
 also added loading indicator for "related to" results in frontend.
 
+### recent work (2026-01-06)
+
+- merged PR1: multi-platform schema (platform + source_collection columns)
+- added `loading.js` - portable loading state handler for dashboards
+  - skeleton shimmer while loading
+  - "waking up" toast after 2s threshold (fly.io cold start handling)
+  - designed to be copied to other projects
+- fixed pluralization ("1 result" vs "2 results")
+
 ## what we know
 
 ### standard.site lexicons
@@ -195,15 +204,59 @@ leaning toward **path B** - can't lose 3500 leaflet docs.
 - [ ] should we dedupe platform-specific vs standard records?
 - [ ] embeddings: regenerate for all, or use same model?
 
+## implementation plan (PRs)
+
+breaking work into reviewable chunks:
+
+### PR1: database schema for multi-platform ✅ MERGED
+- add `platform TEXT` column to documents (default 'leaflet')
+- add `source_collection TEXT` column (default 'pub.leaflet.document')
+- backfill existing ~3500 records
+- no behavior change, just schema prep
+- https://github.com/zzstoatzz/leaflet-search/pull/1
+
+### PR2: generalized content extraction
+- new `extractor.zig` module with platform-agnostic interface
+- `textContent` extraction for standard.site records
+- keep existing block parser for `pub.leaflet.*`
+- platform detection from `content.$type`
+
+### PR3: TAP subscriber for site.standard.document
+- subscribe to `site.standard.document` + `site.standard.publication`
+- route to appropriate extractor
+- starts ingesting pckt.blog content
+
+### PR4: API platform filter
+- add `?platform=` query param to `/search`
+- include `platform` field in results
+- frontend: show platform badge, optional filter
+
+### PR5 (optional, separate track): witness cache
+- `witness_cache` table for raw records
+- replay tooling for backfills
+- independent of above work
+
+## operational notes
+
+- **cloudflare pages**: `leaflet-search` does NOT auto-deploy from git. manual deploy required:
+  ```bash
+  wrangler pages deploy site --project-name leaflet-search
+  ```
+- **fly.io backend**: deploy from backend directory:
+  ```bash
+  cd backend && fly deploy
+  ```
+- **git remotes**: push to both `origin` (tangled.sh) and `github` (for MCP + PRs)
+
 ## next steps
 
 1. ~~verify leaflet's site.standard.document structure~~ (done - they don't have any)
 2. ~~find and examine offprint records~~ (done - no public content yet)
-3. decide on hybrid vs wait approach
-4. consider witness cache architecture (see below)
-5. design database migration
-6. implement generalized tap subscriber
-7. test with multi-platform data
+3. ~~PR1: database schema~~ (merged)
+4. PR2: generalized content extraction
+5. PR3: TAP subscriber
+6. PR4: API platform filter
+7. consider witness cache architecture (see below)
 
 ---
 
