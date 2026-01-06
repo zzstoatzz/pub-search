@@ -74,9 +74,10 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    // parse query param: /search?q=something&tag=foo
+    // parse query params: /search?q=something&tag=foo&platform=leaflet
     const query = parseQueryParam(alloc, target, "q") catch "";
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
+    const platform_filter = parseQueryParam(alloc, target, "platform") catch null;
 
     if (query.len == 0 and tag_filter == null) {
         try sendJson(request, "{\"error\":\"enter a search term\"}");
@@ -84,7 +85,7 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     }
 
     // perform FTS search - arena handles cleanup
-    const results = search.search(alloc, query, tag_filter) catch |err| {
+    const results = search.search(alloc, query, tag_filter, platform_filter) catch |err| {
         stats.recordError();
         return err;
     };

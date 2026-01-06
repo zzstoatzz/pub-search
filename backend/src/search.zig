@@ -15,6 +15,7 @@ const SearchResultJson = struct {
     createdAt: []const u8 = "",
     rkey: []const u8,
     basePath: []const u8,
+    platform: []const u8,
 };
 
 /// Document search result (internal)
@@ -27,6 +28,7 @@ const Doc = struct {
     rkey: []const u8,
     basePath: []const u8,
     hasPublication: bool,
+    platform: []const u8,
 
     fn fromRow(row: db.Row) Doc {
         return .{
@@ -38,6 +40,7 @@ const Doc = struct {
             .rkey = row.text(5),
             .basePath = row.text(6),
             .hasPublication = row.int(7) != 0,
+            .platform = row.text(8),
         };
     }
 
@@ -51,14 +54,16 @@ const Doc = struct {
             .createdAt = self.createdAt,
             .rkey = self.rkey,
             .basePath = self.basePath,
+            .platform = self.platform,
         };
     }
 };
 
 const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
-    \\  d.created_at, d.rkey, p.base_path,
-    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+    \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
@@ -69,8 +74,9 @@ const DocsByTag = zql.Query(
 const DocsByFtsAndTag = zql.Query(
     \\SELECT f.uri, d.did, d.title,
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
-    \\  d.created_at, d.rkey, p.base_path,
-    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+    \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
@@ -82,8 +88,9 @@ const DocsByFtsAndTag = zql.Query(
 const DocsByFts = zql.Query(
     \\SELECT f.uri, d.did, d.title,
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
-    \\  d.created_at, d.rkey, p.base_path,
-    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+    \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
@@ -120,6 +127,7 @@ const Pub = struct {
             .snippet = self.snippet,
             .rkey = self.rkey,
             .basePath = self.basePath,
+            .platform = "leaflet", // publications are leaflet-only for now
         };
     }
 };
@@ -134,7 +142,7 @@ const PubSearch = zql.Query(
     \\ORDER BY rank LIMIT 10
 );
 
-pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]const u8 {
+pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -155,11 +163,18 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 
     if (doc_result) |*res| {
         defer res.deinit();
-        for (res.rows) |row| try jw.write(Doc.fromRow(row).toJson());
+        for (res.rows) |row| {
+            const doc = Doc.fromRow(row);
+            // filter by platform if specified
+            if (platform_filter) |pf| {
+                if (!std.mem.eql(u8, doc.platform, pf)) continue;
+            }
+            try jw.write(doc.toJson());
+        }
     }
 
-    // publications are excluded when filtering by tag (tags only apply to documents)
-    if (tag_filter == null) {
+    // publications are excluded when filtering by tag or platform (only leaflet has publications)
+    if (tag_filter == null and (platform_filter == null or std.mem.eql(u8, platform_filter.?, "leaflet"))) {
         var pub_result = c.query(
             PubSearch.positional,
             PubSearch.bind(.{ .query = fts_query }),
@@ -201,7 +216,8 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     var res = c.query(
         \\SELECT d2.uri, d2.did, d2.title, '' as snippet,
         \\  d2.created_at, d2.rkey, COALESCE(p.base_path, '') as base_path,
-        \\  CASE WHEN d2.publication_uri != '' THEN 1 ELSE 0 END as has_publication
+        \\  CASE WHEN d2.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+        \\  d2.platform
         \\FROM documents d1, documents d2
         \\LEFT JOIN publications p ON d2.publication_uri = p.uri
         \\WHERE d1.uri = ?
