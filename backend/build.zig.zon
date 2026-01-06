@@ -13,8 +13,8 @@
             .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
         },
         .zat = .{
-            .url = "https://tangled.sh/zzstoatzz.io/zat/archive/main",
-            .hash = "zat-0.1.0-5PuC7ntmAQA9_8rALQwWad2riXWTY9p_ohVOD54_Y-2c",
+            .url = "https://tangled.sh/zat.dev/zat/archive/main",
+            .hash = "zat-0.1.0-5PuC7iF5AQAzKo9Vc8MMRcSlwRrkHE0QI1aLZlJXKEsP",
         },
     },
     .paths = .{
