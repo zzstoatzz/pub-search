@@ -10,12 +10,14 @@ pub fn insertDocument(
     created_at: ?[]const u8,
     publication_uri: ?[]const u8,
     tags: []const []const u8,
+    platform: []const u8,
+    source_collection: []const u8,
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
     try c.exec(
-        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        &.{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "" },
+        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        &.{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "", platform, source_collection },
     );
 
     // update FTS index

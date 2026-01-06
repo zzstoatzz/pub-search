@@ -6,6 +6,7 @@ const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const zat = @import("zat");
 const indexer = @import("indexer.zig");
+const extractor = @import("extractor.zig");
 
 const DOCUMENT_COLLECTION = "pub.leaflet.document";
 const PUBLICATION_COLLECTION = "pub.leaflet.publication";
@@ -105,15 +106,6 @@ const TapRecord = struct {
     rkey: []const u8,
 };
 
-/// Leaflet document fields
-const LeafletDocument = struct {
-    title: []const u8,
-    publication: ?[]const u8 = null,
-    publishedAt: ?[]const u8 = null,
-    createdAt: ?[]const u8 = null,
-    description: ?[]const u8 = null,
-};
-
 /// Leaflet publication fields
 const LeafletPublication = struct {
     name: []const u8,
@@ -144,7 +136,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
             const record_obj = zat.json.getObject(parsed.value, "record.record") orelse return;
 
             if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
-                processDocument(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
+                processDocument(allocator, uri, did.raw, rec.rkey, record_obj, rec.collection) catch |err| {
                     std.debug.print("document processing error: {}\n", .{err});
                 };
             } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
@@ -165,127 +157,28 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     }
 }
 
-fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
-    const record_val: json.Value = .{ .object = record };
-
-    // extract known fields via struct
-    const doc = zat.json.extractAt(LeafletDocument, allocator, record_val, .{}) catch return;
-    const created_at = doc.publishedAt orelse doc.createdAt;
-
-    // extract tags array
-    var tags_list: std.ArrayList([]const u8) = .{};
-    defer tags_list.deinit(allocator);
-    if (zat.json.getArray(record_val, "tags")) |tags| {
-        for (tags) |tag_item| {
-            if (tag_item == .string) {
-                try tags_list.append(allocator, tag_item.string);
-            }
+fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8) !void {
+    var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
+        if (err != error.NoContent and err != error.MissingTitle) {
+            std.debug.print("extraction error for {s}: {}\n", .{ uri, err });
         }
-    }
+        return;
+    };
+    defer doc.deinit();
 
-    // extract plaintext from pages
-    var content_buf: std.ArrayList(u8) = .{};
-    defer content_buf.deinit(allocator);
-
-    if (doc.description) |desc| {
-        if (desc.len > 0) {
-            try content_buf.appendSlice(allocator, desc);
-        }
-    }
-
-    if (zat.json.getArray(record_val, "pages")) |pages| {
-        for (pages) |page| {
-            if (page == .object) {
-                try extractPlaintextFromPage(allocator, &content_buf, page.object);
-            }
-        }
-    }
-
-    if (content_buf.items.len == 0) return;
-
-    try indexer.insertDocument(uri, did, rkey, doc.title, content_buf.items, created_at, doc.publication, tags_list.items);
-    std.debug.print("indexed document: {s} ({} chars, {} tags)\n", .{ uri, content_buf.items.len, tags_list.items.len });
-}
-
-fn extractPlaintextFromPage(allocator: Allocator, buf: *std.ArrayList(u8), page: json.ObjectMap) !void {
-    // pages can be linearDocument or canvas
-    // linearDocument has blocks array
-    const blocks_val = page.get("blocks") orelse return;
-    if (blocks_val != .array) return;
-
-    for (blocks_val.array.items) |block_wrapper| {
-        if (block_wrapper != .object) continue;
-
-        // block wrapper has "block" field with actual content
-        const block_val = block_wrapper.object.get("block") orelse continue;
-        if (block_val != .object) continue;
-
-        try extractTextFromBlock(allocator, buf, block_val.object);
-    }
-}
-
-fn extractTextFromBlock(allocator: Allocator, buf: *std.ArrayList(u8), block: json.ObjectMap) Allocator.Error!void {
-    const type_val = block.get("$type") orelse return;
-    if (type_val != .string) return;
-
-    const block_type = type_val.string;
-
-    // blocks with plaintext field: text, header, blockquote, code
-    if (mem.eql(u8, block_type, "pub.leaflet.blocks.text") or
-        mem.eql(u8, block_type, "pub.leaflet.blocks.header") or
-        mem.eql(u8, block_type, "pub.leaflet.blocks.blockquote") or
-        mem.eql(u8, block_type, "pub.leaflet.blocks.code"))
-    {
-        if (block.get("plaintext")) |plaintext_val| {
-            if (plaintext_val == .string) {
-                if (buf.items.len > 0) {
-                    try buf.appendSlice(allocator, " ");
-                }
-                try buf.appendSlice(allocator, plaintext_val.string);
-            }
-        }
-    }
-    // button has text field
-    else if (mem.eql(u8, block_type, "pub.leaflet.blocks.button")) {
-        if (block.get("text")) |text_val| {
-            if (text_val == .string) {
-                if (buf.items.len > 0) {
-                    try buf.appendSlice(allocator, " ");
-                }
-                try buf.appendSlice(allocator, text_val.string);
-            }
-        }
-    }
-    // unorderedList has children array with nested content
-    else if (mem.eql(u8, block_type, "pub.leaflet.blocks.unorderedList")) {
-        if (block.get("children")) |children_val| {
-            if (children_val == .array) {
-                for (children_val.array.items) |child| {
-                    try extractListItemText(allocator, buf, child);
-                }
-            }
-        }
-    }
-}
-
-fn extractListItemText(allocator: Allocator, buf: *std.ArrayList(u8), item: json.Value) Allocator.Error!void {
-    if (item != .object) return;
-
-    // list item has content field which is a block
-    if (item.object.get("content")) |content_val| {
-        if (content_val == .object) {
-            try extractTextFromBlock(allocator, buf, content_val.object);
-        }
-    }
-
-    // nested children
-    if (item.object.get("children")) |children_val| {
-        if (children_val == .array) {
-            for (children_val.array.items) |child| {
-                try extractListItemText(allocator, buf, child);
-            }
-        }
-    }
+    try indexer.insertDocument(
+        uri,
+        did,
+        rkey,
+        doc.title,
+        doc.content,
+        doc.created_at,
+        doc.publication_uri,
+        doc.tags,
+        doc.platformName(),
+        doc.source_collection,
+    );
+    std.debug.print("indexed document: {s} [{s}] ({} chars, {} tags)\n", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
 }
 
 fn processPublication(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
