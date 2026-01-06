@@ -2,6 +2,12 @@ const API_BASE = 'https://leaflet-search-backend.fly.dev';
 
 let startedAt = 0;
 
+// loading state handler
+const loader = createLoader({
+  container: '.container',
+  wakeThreshold: 2000,
+});
+
 function formatAge(ms) {
   const s = Math.floor(ms / 1000);
   const d = Math.floor(s / 86400);
@@ -66,6 +72,8 @@ function escapeHtml(str) {
 }
 
 async function fetchDashboard() {
+  loader.start();
+
   try {
     const r = await fetch(API_BASE + '/api/dashboard');
     const data = await r.json();
@@ -81,8 +89,11 @@ async function fetchDashboard() {
     renderTimeline(data.timeline);
     renderPubs(data.topPubs);
     renderTags(data.tags);
+
+    loader.done();
   } catch (e) {
     console.error('failed to fetch dashboard:', e);
+    loader.done();
   }
 }
 
