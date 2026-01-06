@@ -8,8 +8,23 @@ const zat = @import("zat");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
 
-const DOCUMENT_COLLECTION = "pub.leaflet.document";
-const PUBLICATION_COLLECTION = "pub.leaflet.publication";
+// leaflet-specific collections
+const LEAFLET_DOCUMENT = "pub.leaflet.document";
+const LEAFLET_PUBLICATION = "pub.leaflet.publication";
+
+// standard.site collections (cross-platform)
+const STANDARD_DOCUMENT = "site.standard.document";
+const STANDARD_PUBLICATION = "site.standard.publication";
+
+fn isDocumentCollection(collection: []const u8) bool {
+    return mem.eql(u8, collection, LEAFLET_DOCUMENT) or
+        mem.eql(u8, collection, STANDARD_DOCUMENT);
+}
+
+fn isPublicationCollection(collection: []const u8) bool {
+    return mem.eql(u8, collection, LEAFLET_PUBLICATION) or
+        mem.eql(u8, collection, STANDARD_PUBLICATION);
+}
 
 fn getTapHost() []const u8 {
     return posix.getenv("TAP_HOST") orelse "leaflet-search-tap.fly.dev";
@@ -135,21 +150,21 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
         .create, .update => {
             const record_obj = zat.json.getObject(parsed.value, "record.record") orelse return;
 
-            if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
+            if (isDocumentCollection(rec.collection)) {
                 processDocument(allocator, uri, did.raw, rec.rkey, record_obj, rec.collection) catch |err| {
                     std.debug.print("document processing error: {}\n", .{err});
                 };
-            } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
+            } else if (isPublicationCollection(rec.collection)) {
                 processPublication(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
                     std.debug.print("publication processing error: {}\n", .{err});
                 };
             }
         },
         .delete => {
-            if (mem.eql(u8, rec.collection, DOCUMENT_COLLECTION)) {
+            if (isDocumentCollection(rec.collection)) {
                 indexer.deleteDocument(uri);
                 std.debug.print("deleted document: {s}\n", .{uri});
-            } else if (mem.eql(u8, rec.collection, PUBLICATION_COLLECTION)) {
+            } else if (isPublicationCollection(rec.collection)) {
                 indexer.deletePublication(uri);
                 std.debug.print("deleted publication: {s}\n", .{uri});
             }
