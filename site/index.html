@@ -480,15 +480,27 @@
     }
 
     // platform-specific URL patterns
+    // note: some platforms use basePath from publication, which we prefer
+    // fallback docUrl() is used when basePath is missing
     const PLATFORM_CONFIG = {
       leaflet: {
         home: 'https://leaflet.pub',
         label: 'leaflet.pub',
+        // leaflet uses did/rkey pattern for fallback URLs
         docUrl: (did, rkey) => `https://leaflet.pub/p/${did}/${rkey}`
       },
-      // add other platforms as we learn their URL patterns
-      // pckt: { home: '...', label: '...', docUrl: (did, rkey) => '...' },
-      // offprint: { home: '...', label: '...', docUrl: (did, rkey) => '...' },
+      pckt: {
+        home: 'https://pckt.blog',
+        label: 'pckt.blog',
+        // pckt uses blog slugs + path, not did/rkey - needs basePath from publication
+        docUrl: null
+      },
+      offprint: {
+        home: 'https://offprint.app',
+        label: 'offprint.app',
+        // offprint is in early beta, URL pattern unknown
+        docUrl: null
+      },
     };
 
     function buildDocUrl(doc, entityType, platform) {
