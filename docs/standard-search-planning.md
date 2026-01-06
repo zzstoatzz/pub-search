@@ -1,0 +1,290 @@
+# standard-search planning
+
+expanding leaflet-search to index all standard.site records.
+
+## references
+
+- [standard.site](https://standard.site/) - shared lexicons for long-form publishing on ATProto
+- [leaflet.pub](https://leaflet.pub/) - implements `pub.leaflet.*` lexicons
+- [pckt.blog](https://pckt.blog/) - implements `blog.pckt.*` lexicons
+- [offprint.app](https://offprint.app/) - implements `app.offprint.*` lexicons (early beta)
+- [ATProto docs](https://atproto.com/docs) - protocol documentation
+
+## context
+
+discussion with pckt.blog team about building global search for standard.site ecosystem.
+current leaflet-search is tightly coupled to `pub.leaflet.*` lexicons.
+
+### recent work (2026-01-05)
+
+added similarity cache to improve `/similar` endpoint performance:
+- `similarity_cache` table stores computed results keyed by `(source_uri, doc_count)`
+- cache auto-invalidates when document count changes
+- `/stats` endpoint now shows `cache_hits` and `cache_misses`
+- first request ~3s (cold), cached requests ~0.15s
+
+also added loading indicator for "related to" results in frontend.
+
+## what we know
+
+### standard.site lexicons
+
+two shared lexicons for long-form publishing on ATProto:
+- `site.standard.document` - document content and metadata
+- `site.standard.publication` - publication/blog metadata
+
+implementing platforms:
+- leaflet.pub (`pub.leaflet.*`)
+- pckt.blog (`blog.pckt.*`)
+- offprint.app (`app.offprint.*`)
+
+### site.standard.document schema
+
+examined real records from pckt.blog. key fields:
+
+```
+textContent    - PRE-FLATTENED TEXT FOR SEARCH (the holy grail)
+content        - platform-specific block structure
+  .$type       - identifies platform (e.g., "blog.pckt.content")
+title          - document title
+tags           - array of strings
+site           - AT-URI reference to site.standard.publication
+path           - URL path (e.g., "/my-post-abc123")
+publishedAt    - ISO timestamp
+updatedAt      - ISO timestamp
+coverImage     - blob reference
+```
+
+### the textContent field
+
+this is huge. platforms flatten their block content into a single text field:
+
+```json
+{
+  "content": {
+    "$type": "blog.pckt.content",
+    "items": [ /* platform-specific blocks */ ]
+  },
+  "textContent": "i have been writing a lot of atproto things in zig!..."
+}
+```
+
+no need to parse platform-specific blocks - just index `textContent` directly.
+
+### platform detection
+
+derive platform from `content.$type` prefix:
+- `blog.pckt.content` → pckt
+- `pub.leaflet.content` → leaflet (TBD - need to verify)
+- `app.offprint.content` → offprint (TBD - need to verify)
+
+### current leaflet-search architecture
+
+```
+ATProto firehose (via tap)
+    ↓
+tap.zig - subscribes to pub.leaflet.document/publication
+    ↓
+indexer.zig - extracts content from nested pages[].blocks[] structure
+    ↓
+turso (sqlite) - documents table + FTS5 + embeddings
+    ↓
+search.zig - FTS5 queries + vector similarity
+    ↓
+server.zig - HTTP API (/search, /similar, /stats)
+```
+
+leaflet-specific code:
+- tap.zig lines 10-11: hardcoded collection names
+- tap.zig lines 234-268: block type extraction (pub.leaflet.blocks.*)
+- recursive page/block traversal logic
+
+generalizable code:
+- database schema (FTS5, tags, stats, similarity cache)
+- search/similar logic
+- HTTP API
+- embedding pipeline
+
+## proposed architecture for standard-search
+
+### ingestion changes
+
+subscribe to:
+- `site.standard.document`
+- `site.standard.publication`
+
+optionally also subscribe to platform-specific collections for richer data:
+- `pub.leaflet.document/publication`
+- `blog.pckt.document/publication` (if they have these)
+- `app.offprint.document/publication` (if they have these)
+
+### content extraction
+
+for `site.standard.document`:
+1. use `textContent` field directly - no block parsing!
+2. fall back to title + description if textContent missing
+
+for platform-specific records (if needed):
+- keep existing leaflet block parser
+- add parsers for other platforms as needed
+
+### database changes
+
+add to documents table:
+- `platform` TEXT - derived from content.$type (leaflet, pckt, offprint)
+- `source_collection` TEXT - the actual lexicon (site.standard.document, pub.leaflet.document)
+- `standard_uri` TEXT - if platform-specific record, link to corresponding site.standard.document
+
+### API changes
+
+- `/search?q=...&platform=leaflet` - optional platform filter
+- results include `platform` field
+- `/similar` works across all platforms
+
+### naming/deployment
+
+options:
+1. rename leaflet-search → standard-search (breaking change)
+2. new repo/deployment, keep leaflet-search as-is
+3. branch and generalize, decide naming later
+
+leaning toward option 3 for now.
+
+## findings from exploration
+
+### pckt.blog - READY
+- writes `site.standard.document` records
+- has `textContent` field (pre-flattened)
+- `content.$type` = `blog.pckt.content`
+- 6+ records found on pckt.blog service account
+
+### leaflet.pub - NOT YET MIGRATED
+- still using `pub.leaflet.document` only
+- no `site.standard.document` records found
+- no `textContent` field - content is in nested `pages[].blocks[]`
+- will need to continue parsing blocks OR wait for migration
+
+### offprint.app - LIKELY EARLY BETA
+- no `site.standard.document` records found on offprint.app account
+- no `app.offprint.document` collection visible
+- website shows no example users/content
+- probably in early/private beta - no public records yet
+
+### implication for architecture
+
+two paths:
+
+**path A: wait for leaflet migration**
+- simpler: just index `site.standard.document` with `textContent`
+- all platforms converge on same schema
+- downside: loses existing leaflet search until they migrate
+
+**path B: hybrid approach**
+- index `site.standard.document` (pckt, future leaflet, offprint)
+- ALSO index `pub.leaflet.document` with existing block parser
+- dedupe by URI or store both with `source_collection` indicator
+- more complex but maintains backwards compat
+
+leaning toward **path B** - can't lose 3500 leaflet docs.
+
+## open questions
+
+- [x] does leaflet write site.standard.document records? **NO, not yet**
+- [x] does offprint write site.standard.document records? **UNKNOWN - no public content yet**
+- [ ] when will leaflet migrate to standard.site?
+- [ ] should we dedupe platform-specific vs standard records?
+- [ ] embeddings: regenerate for all, or use same model?
+
+## next steps
+
+1. ~~verify leaflet's site.standard.document structure~~ (done - they don't have any)
+2. ~~find and examine offprint records~~ (done - no public content yet)
+3. decide on hybrid vs wait approach
+4. consider witness cache architecture (see below)
+5. design database migration
+6. implement generalized tap subscriber
+7. test with multi-platform data
+
+---
+
+## architectural consideration: witness cache
+
+[paul frazee's post on witness caches](https://bsky.app/profile/pfrazee.com/post/3lfarplxvcs2e) (2026-01-05):
+
+> I'm increasingly convinced that many Atmosphere backends start with a local "witness cache" of the repositories.
+>
+> A witness cache is a copy of the repository records, plus a timestamp of when the record was indexed (the "witness time") which you want to keep
+>
+> The key feature is: you can replay it
+
+> With local replay, you can add new tables or indexes to your backend and quickly backfill the data. If you don't have a witness cache, you would have to do backfill from the network, which is slow
+
+### current leaflet-search architecture (no witness cache)
+
+```
+Firehose → TAP → Parse & Transform → Store DERIVED data → Discard raw record
+```
+
+we store:
+- `uri`, `did`, `rkey`
+- `title` (extracted)
+- `content` (flattened from blocks)
+- `created_at`, `publication_uri`
+
+we discard: the raw record JSON
+
+### witness cache architecture
+
+```
+Firehose → Store RAW record + witness_time → Derive indexes on demand (replayable)
+```
+
+would store:
+- `uri`, `collection`, `rkey`
+- `raw_record` (full JSON blob)
+- `witness_time` (when we indexed it)
+
+then derive FTS, embeddings, etc. from local data via replay.
+
+### comparison
+
+| scenario | current (no cache) | with witness cache |
+|----------|-------------------|-------------------|
+| add new parser (offprint) | re-crawl network | replay local |
+| leaflet adds textContent | wait for new records | replay & re-extract |
+| fix parsing bug | re-crawl affected | replay & re-derive |
+| change embedding model | re-fetch content | replay local |
+| add new index/table | backfill from network | replay locally |
+
+### trade-offs
+
+**storage cost:**
+- ~3500 docs × ~10KB avg = ~35MB (not huge)
+- turso free tier: 9GB, so plenty of room
+
+**complexity:**
+- two-phase: store raw, then derive
+- vs current one-phase: derive immediately
+
+**benefits for standard-search:**
+- could add offprint/pckt parsers and replay existing data
+- when leaflet migrates to standard.site, re-derive without network
+- embedding backfill becomes local-only (no voyage API for content fetch)
+
+### implementation options
+
+1. **add `raw_record TEXT` column to existing tables**
+   - simple, backwards compatible
+   - can migrate incrementally
+
+2. **separate `witness_cache` table**
+   - `(uri PRIMARY KEY, collection, raw_record, witness_time)`
+   - cleaner separation of concerns
+   - documents/publications tables become derived views
+
+3. **use duckdb/clickhouse for witness cache** (paul's suggestion)
+   - better compression for JSON blobs
+   - good for analytics queries
+   - adds operational complexity
+
+for our scale, option 1 or 2 with turso is probably fine.

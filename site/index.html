@@ -234,6 +234,18 @@
       margin-bottom: 0.75rem;
     }
 
+    .related-loading {
+      font-size: 11px;
+      color: #666;
+      margin-top: 1rem;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 0.8; }
+    }
+
     .related-items {
       display: flex;
       flex-wrap: wrap;
@@ -614,9 +626,17 @@
     }
 
     async function loadRelated(topResult) {
+      // show loading state
+      const loadingEl = document.createElement('div');
+      loadingEl.className = 'related-loading';
+      loadingEl.textContent = 'finding related...';
+      resultsDiv.appendChild(loadingEl);
+
       try {
         const res = await fetch(`${API_URL}/similar?uri=${encodeURIComponent(topResult.uri)}`);
         const related = await res.json();
+
+        loadingEl.remove();
 
         if (!related || related.length === 0) return;
 
@@ -645,7 +665,7 @@
 
         resultsDiv.insertAdjacentHTML('beforeend', relatedHtml);
       } catch (e) {
-        // silently fail - related is optional
+        loadingEl.remove();
       }
     }
 

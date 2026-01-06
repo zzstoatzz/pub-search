@@ -98,6 +98,17 @@ fn createTables(client: *Client) !void {
         \\  deleted_at INTEGER NOT NULL
         \\)
     , &.{});
+
+    // similarity cache: stores precomputed similar documents
+    // invalidated when doc_count changes (new docs added/removed)
+    try client.exec(
+        \\CREATE TABLE IF NOT EXISTS similarity_cache (
+        \\  source_uri TEXT PRIMARY KEY,
+        \\  results TEXT NOT NULL,
+        \\  doc_count INTEGER NOT NULL,
+        \\  computed_at INTEGER NOT NULL
+        \\)
+    , &.{});
 }
 
 fn runMigrations(client: *Client) !void {
@@ -105,6 +116,8 @@ fn runMigrations(client: *Client) !void {
     client.exec("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch {};
     client.exec("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch {};
     client.exec("ALTER TABLE stats ADD COLUMN service_started_at INTEGER", &.{}) catch {};
+    client.exec("ALTER TABLE stats ADD COLUMN cache_hits INTEGER DEFAULT 0", &.{}) catch {};
+    client.exec("ALTER TABLE stats ADD COLUMN cache_misses INTEGER DEFAULT 0", &.{}) catch {};
 
     // vector embeddings column already added by backfill script
 }

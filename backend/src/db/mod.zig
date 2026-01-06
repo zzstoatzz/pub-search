@@ -1,10 +1,10 @@
 const std = @import("std");
 
-const Client = @import("Client.zig");
 const schema = @import("schema.zig");
 const result = @import("result.zig");
 
 // re-exports
+pub const Client = @import("Client.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
 pub const BatchResult = result.BatchResult;

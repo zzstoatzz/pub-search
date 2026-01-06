@@ -141,7 +141,7 @@ fn handleStats(request: *http.Server.Request) !void {
     var response: std.ArrayList(u8) = .{};
     defer response.deinit(alloc);
 
-    try response.print(alloc, "{{\"documents\":{d},\"publications\":{d}}}", .{ db_stats.documents, db_stats.publications });
+    try response.print(alloc, "{{\"documents\":{d},\"publications\":{d},\"cache_hits\":{d},\"cache_misses\":{d}}}", .{ db_stats.documents, db_stats.publications, db_stats.cache_hits, db_stats.cache_misses });
 
     try sendJson(request, response.items);
 }

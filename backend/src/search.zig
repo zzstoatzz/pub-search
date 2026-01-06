@@ -3,6 +3,7 @@ const json = std.json;
 const Allocator = std.mem.Allocator;
 const zql = @import("zql");
 const db = @import("db/mod.zig");
+const stats = @import("stats.zig");
 
 // JSON output type for search results
 const SearchResultJson = struct {
@@ -175,10 +176,21 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8) ![]c
 }
 
 /// Find documents similar to a given document using vector similarity
-/// Uses brute-force cosine distance (no index required, ~7s for 3500 docs)
+/// Uses brute-force cosine distance with caching (cache invalidated when doc count changes)
 pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
+    // get current doc count (for cache invalidation)
+    const doc_count = getEmbeddedDocCount(c) orelse return error.QueryFailed;
+
+    // check cache
+    if (getCachedSimilar(alloc, c, uri, doc_count)) |cached| {
+        stats.recordCacheHit();
+        return cached;
+    }
+    stats.recordCacheMiss();
+
+    // cache miss - compute similarity
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
@@ -208,7 +220,47 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     try jw.beginArray();
     for (res.rows) |row| try jw.write(Doc.fromRow(row).toJson());
     try jw.endArray();
-    return try output.toOwnedSlice();
+
+    const results = try output.toOwnedSlice();
+
+    // cache the results (fire and forget)
+    cacheSimilarResults(c, uri, results, doc_count);
+
+    return results;
+}
+
+fn getEmbeddedDocCount(c: *db.Client) ?i64 {
+    var res = c.query("SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL", &.{}) catch return null;
+    defer res.deinit();
+    if (res.rows.len == 0) return null;
+    return res.rows[0].int(0);
+}
+
+fn getCachedSimilar(alloc: Allocator, c: *db.Client, uri: []const u8, current_doc_count: i64) ?[]const u8 {
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{current_doc_count}) catch return null;
+
+    var res = c.query(
+        "SELECT results FROM similarity_cache WHERE source_uri = ? AND doc_count = ?",
+        &.{ uri, count_str },
+    ) catch return null;
+    defer res.deinit();
+
+    if (res.rows.len == 0) return null;
+    return alloc.dupe(u8, res.rows[0].text(0)) catch null;
+}
+
+fn cacheSimilarResults(c: *db.Client, uri: []const u8, results: []const u8, doc_count: i64) void {
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{doc_count}) catch return;
+
+    var ts_buf: [20]u8 = undefined;
+    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch return;
+
+    c.exec(
+        "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
+        &.{ uri, results, count_str, ts_str },
+    ) catch {};
 }
 
 /// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
