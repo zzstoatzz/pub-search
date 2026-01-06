@@ -157,6 +157,16 @@
       color: #6a9fd4;
     }
 
+    .platform-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-right: 8px;
+      text-transform: lowercase;
+      background: rgba(180, 100, 64, 0.2);
+      color: #d4956a;
+    }
+
     .status {
       padding: 1rem;
       text-align: center;
@@ -433,10 +443,12 @@
           }
 
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
+          const platform = doc.platform || 'leaflet';
+          const platformBadge = platform !== 'leaflet' ? `<span class="platform-badge">${escapeHtml(platform)}</span>` : '';
           html += `
             <div class="result">
               <div class="result-title">
-                <span class="entity-type ${entityType}">${entityType}</span>
+                <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}
                 ${leafletUrl
                   ? `<a href="${leafletUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
                   : escapeHtml(doc.title || 'Untitled')}
