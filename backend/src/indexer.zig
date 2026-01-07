@@ -15,6 +15,21 @@ pub fn insertDocument(
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
+    // dedupe: if (did, rkey) exists with different uri, clean up old record first
+    // this handles cross-collection duplicates (e.g., pub.leaflet.document + site.standard.document)
+    if (c.query("SELECT uri FROM documents WHERE did = ? AND rkey = ?", &.{ did, rkey })) |result_val| {
+        var result = result_val;
+        defer result.deinit();
+        if (result.first()) |row| {
+            const old_uri = row.text(0);
+            if (!std.mem.eql(u8, old_uri, uri)) {
+                c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{old_uri}) catch {};
+                c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{old_uri}) catch {};
+                c.exec("DELETE FROM documents WHERE uri = ?", &.{old_uri}) catch {};
+            }
+        }
+    } else |_| {}
+
     try c.exec(
         "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         &.{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "", platform, source_collection },
@@ -46,6 +61,19 @@ pub fn insertPublication(
     base_path: ?[]const u8,
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
+
+    // dedupe: if (did, rkey) exists with different uri, clean up old record first
+    if (c.query("SELECT uri FROM publications WHERE did = ? AND rkey = ?", &.{ did, rkey })) |result_val| {
+        var result = result_val;
+        defer result.deinit();
+        if (result.first()) |row| {
+            const old_uri = row.text(0);
+            if (!std.mem.eql(u8, old_uri, uri)) {
+                c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{old_uri}) catch {};
+                c.exec("DELETE FROM publications WHERE uri = ?", &.{old_uri}) catch {};
+            }
+        }
+    } else |_| {}
 
     try c.exec(
         "INSERT OR REPLACE INTO publications (uri, did, rkey, name, description, base_path) VALUES (?, ?, ?, ?, ?, ?)",

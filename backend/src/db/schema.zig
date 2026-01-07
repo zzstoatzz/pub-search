@@ -134,4 +134,9 @@ fn runMigrations(client: *Client) !void {
     client.exec("UPDATE publications SET source_collection = 'pub.leaflet.publication' WHERE source_collection IS NULL", &.{}) catch {};
 
     // vector embeddings column already added by backfill script
+
+    // dedupe index: same (did, rkey) across collections = same document
+    // e.g., pub.leaflet.document/abc and site.standard.document/abc are the same content
+    client.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_did_rkey ON documents(did, rkey)", &.{}) catch {};
+    client.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_did_rkey ON publications(did, rkey)", &.{}) catch {};
 }
