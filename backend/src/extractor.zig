@@ -11,10 +11,10 @@ pub const Platform = enum {
     offprint,
     unknown,
 
-    pub fn fromContentType(content_type: []const u8) Platform {
-        if (mem.startsWith(u8, content_type, "pub.leaflet.")) return .leaflet;
-        if (mem.startsWith(u8, content_type, "blog.pckt.")) return .pckt;
-        if (mem.startsWith(u8, content_type, "app.offprint.")) return .offprint;
+    pub fn fromCollection(collection: []const u8) Platform {
+        if (mem.startsWith(u8, collection, "pub.leaflet.")) return .leaflet;
+        if (mem.startsWith(u8, collection, "blog.pckt.")) return .pckt;
+        if (mem.startsWith(u8, collection, "app.offprint.")) return .offprint;
         return .unknown;
     }
 
@@ -54,15 +54,9 @@ const plaintext_blocks = std.StaticStringMap(void).initComptime(.{
     .{ "pub.leaflet.blocks.code", {} },
 });
 
-/// Detect platform from record's content.$type field
-pub fn detectPlatform(record: json.ObjectMap) Platform {
-    const content = record.get("content") orelse return .unknown;
-    if (content != .object) return .unknown;
-
-    const type_val = content.object.get("$type") orelse return .unknown;
-    if (type_val != .string) return .unknown;
-
-    return Platform.fromContentType(type_val.string);
+/// Detect platform from collection name
+pub fn detectPlatform(collection: []const u8) Platform {
+    return Platform.fromCollection(collection);
 }
 
 /// Extract document content from a record.
@@ -73,7 +67,7 @@ pub fn extractDocument(
     collection: []const u8,
 ) !ExtractedDocument {
     const record_val: json.Value = .{ .object = record };
-    const platform = detectPlatform(record);
+    const platform = detectPlatform(collection);
 
     // extract required fields
     const title = zat.json.getString(record_val, "title") orelse return error.MissingTitle;
@@ -222,23 +216,23 @@ fn extractListItem(allocator: Allocator, buf: *std.ArrayList(u8), item: json.Val
 
 // --- tests ---
 
-test "Platform.fromContentType: leaflet" {
-    try std.testing.expectEqual(Platform.leaflet, Platform.fromContentType("pub.leaflet.content"));
-    try std.testing.expectEqual(Platform.leaflet, Platform.fromContentType("pub.leaflet.blocks.text"));
+test "Platform.fromCollection: leaflet" {
+    try std.testing.expectEqual(Platform.leaflet, Platform.fromCollection("pub.leaflet.document"));
+    try std.testing.expectEqual(Platform.leaflet, Platform.fromCollection("pub.leaflet.publication"));
 }
 
-test "Platform.fromContentType: pckt" {
-    try std.testing.expectEqual(Platform.pckt, Platform.fromContentType("blog.pckt.content"));
-    try std.testing.expectEqual(Platform.pckt, Platform.fromContentType("blog.pckt.blocks.whatever"));
+test "Platform.fromCollection: pckt" {
+    try std.testing.expectEqual(Platform.pckt, Platform.fromCollection("blog.pckt.document"));
+    try std.testing.expectEqual(Platform.pckt, Platform.fromCollection("blog.pckt.site"));
 }
 
-test "Platform.fromContentType: offprint" {
-    try std.testing.expectEqual(Platform.offprint, Platform.fromContentType("app.offprint.content"));
+test "Platform.fromCollection: offprint" {
+    try std.testing.expectEqual(Platform.offprint, Platform.fromCollection("app.offprint.document"));
 }
 
-test "Platform.fromContentType: unknown" {
-    try std.testing.expectEqual(Platform.unknown, Platform.fromContentType("something.else"));
-    try std.testing.expectEqual(Platform.unknown, Platform.fromContentType(""));
+test "Platform.fromCollection: unknown" {
+    try std.testing.expectEqual(Platform.unknown, Platform.fromCollection("something.else"));
+    try std.testing.expectEqual(Platform.unknown, Platform.fromCollection(""));
 }
 
 test "Platform.name" {
