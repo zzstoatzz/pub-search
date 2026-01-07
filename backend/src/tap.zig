@@ -60,15 +60,39 @@ pub fn consumer(allocator: Allocator) void {
 
 const Handler = struct {
     allocator: Allocator,
+    client: *websocket.Client,
     msg_count: usize = 0,
+    ack_buf: [64]u8 = undefined,
 
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
         self.msg_count += 1;
         if (self.msg_count % 100 == 1) {
             std.debug.print("tap: received {} messages\n", .{self.msg_count});
         }
+
+        // extract message ID for ACK
+        const msg_id = extractMessageId(self.allocator, data);
+
+        // process the message
         processMessage(self.allocator, data) catch |err| {
             std.debug.print("message processing error: {}\n", .{err});
+            // still ACK even on error to avoid infinite retries
+        };
+
+        // send ACK if we have a message ID
+        if (msg_id) |id| {
+            self.sendAck(id);
+        }
+    }
+
+    fn sendAck(self: *Handler, msg_id: i64) void {
+        const ack_json = std.fmt.bufPrint(&self.ack_buf, "{{\"type\":\"ack\",\"id\":{d}}}", .{msg_id}) catch |err| {
+            std.debug.print("tap: ACK format error: {}\n", .{err});
+            return;
+        };
+        std.debug.print("tap: sending ACK for id={d}\n", .{msg_id});
+        self.client.write(@constCast(ack_json)) catch |err| {
+            std.debug.print("tap: failed to send ACK: {}\n", .{err});
         };
     }
 
@@ -76,6 +100,12 @@ const Handler = struct {
         std.debug.print("tap connection closed\n", .{});
     }
 };
+
+fn extractMessageId(allocator: Allocator, payload: []const u8) ?i64 {
+    const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch return null;
+    defer parsed.deinit();
+    return zat.json.getInt(parsed.value, "id");
+}
 
 fn connect(allocator: Allocator) !void {
     const host = getTapHost();
@@ -106,7 +136,7 @@ fn connect(allocator: Allocator) !void {
 
     std.debug.print("tap connected!\n", .{});
 
-    var handler = Handler{ .allocator = allocator };
+    var handler = Handler{ .allocator = allocator, .client = &client };
     client.readLoop(&handler) catch |err| {
         std.debug.print("websocket read loop error: {}\n", .{err});
         return err;
