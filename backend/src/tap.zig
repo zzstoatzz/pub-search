@@ -151,9 +151,6 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
         return;
     };
 
-    // log ALL message types to see what's coming through
-    std.debug.print("tap: msg_type={s}\n", .{msg_type});
-
     if (!mem.eql(u8, msg_type, "record")) return;
 
     // extract record envelope manually (zat.extractAt was failing)
@@ -186,8 +183,6 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
         .did = did_str,
         .rkey = rkey,
     };
-
-    std.debug.print("tap: record collection={s} action={s}\n", .{ rec.collection, rec.action });
 
     // validate DID
     const did = zat.Did.parse(rec.did) orelse return;
