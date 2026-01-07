@@ -4,22 +4,33 @@ const json = std.json;
 const Allocator = mem.Allocator;
 const zat = @import("zat");
 
-/// Detected platform from content.$type
+/// Detected platform from collection name
 pub const Platform = enum {
     leaflet,
     pckt,
     offprint,
+    standardsite,
     unknown,
 
     pub fn fromCollection(collection: []const u8) Platform {
         if (mem.startsWith(u8, collection, "pub.leaflet.")) return .leaflet;
         if (mem.startsWith(u8, collection, "blog.pckt.")) return .pckt;
         if (mem.startsWith(u8, collection, "app.offprint.")) return .offprint;
+        if (mem.startsWith(u8, collection, "site.standard.")) return .standardsite;
         return .unknown;
     }
 
+    /// Internal name (for DB storage)
     pub fn name(self: Platform) []const u8 {
         return @tagName(self);
+    }
+
+    /// Display name (for UI)
+    pub fn displayName(self: Platform) []const u8 {
+        return switch (self) {
+            .standardsite => "standard.site",
+            else => @tagName(self),
+        };
     }
 };
 
@@ -230,6 +241,11 @@ test "Platform.fromCollection: offprint" {
     try std.testing.expectEqual(Platform.offprint, Platform.fromCollection("app.offprint.document"));
 }
 
+test "Platform.fromCollection: standardsite" {
+    try std.testing.expectEqual(Platform.standardsite, Platform.fromCollection("site.standard.document"));
+    try std.testing.expectEqual(Platform.standardsite, Platform.fromCollection("site.standard.publication"));
+}
+
 test "Platform.fromCollection: unknown" {
     try std.testing.expectEqual(Platform.unknown, Platform.fromCollection("something.else"));
     try std.testing.expectEqual(Platform.unknown, Platform.fromCollection(""));
@@ -239,5 +255,11 @@ test "Platform.name" {
     try std.testing.expectEqualStrings("leaflet", Platform.leaflet.name());
     try std.testing.expectEqualStrings("pckt", Platform.pckt.name());
     try std.testing.expectEqualStrings("offprint", Platform.offprint.name());
+    try std.testing.expectEqualStrings("standardsite", Platform.standardsite.name());
     try std.testing.expectEqualStrings("unknown", Platform.unknown.name());
+}
+
+test "Platform.displayName" {
+    try std.testing.expectEqualStrings("leaflet", Platform.leaflet.displayName());
+    try std.testing.expectEqualStrings("standard.site", Platform.standardsite.displayName());
 }
