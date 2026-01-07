@@ -25,24 +25,41 @@ see [mcp/README.md](mcp/README.md) for local setup and usage details.
 ## api
 
 ```
-GET /search?q=<query>&tag=<tag>  # full-text search with query, tag, or both
-GET /similar?uri=<at-uri>        # find similar documents via vector embeddings
-GET /tags                        # list all tags with counts
-GET /popular                     # popular search queries
-GET /stats                       # document/publication counts
-GET /health                      # health check
+GET /search?q=<query>&tag=<tag>&platform=<platform>  # full-text search
+GET /similar?uri=<at-uri>                            # find similar documents
+GET /tags                                            # list all tags with counts
+GET /popular                                         # popular search queries
+GET /stats                                           # document/publication counts
+GET /health                                          # health check
 ```
 
-search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). tag filtering applies to documents only.
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field. tag and platform filtering apply to documents only.
 
 `/similar` uses [Voyage AI](https://voyageai.com) embeddings with brute-force cosine similarity (~0.15s for 3500 docs).
+
+## configuration
+
+the backend is fully configurable via environment variables:
+
+| variable | default | description |
+|----------|---------|-------------|
+| `APP_NAME` | `leaflet-search` | name shown in startup logs |
+| `DASHBOARD_URL` | `https://leaflet-search.pages.dev/dashboard.html` | redirect target for `/dashboard` |
+| `TAP_HOST` | `leaflet-search-tap.fly.dev` | TAP websocket host |
+| `TAP_PORT` | `443` | TAP websocket port |
+| `PORT` | `3000` | HTTP server port |
+| `TURSO_URL` | - | Turso database URL (required) |
+| `TURSO_TOKEN` | - | Turso auth token (required) |
+| `VOYAGE_API_KEY` | - | Voyage AI API key (for embeddings) |
+
+the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `site.standard.*` collections. platform is stored per-document and returned in search results.
 
 ## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 
 - [Fly.io](https://fly.io) hosts backend + tap
 - [Turso](https://turso.tech) cloud SQLite with vector support
 - [Voyage AI](https://voyageai.com) embeddings (voyage-3-lite)
-- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs leaflet content from ATProto firehose
+- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs content from ATProto firehose
 - [Zig](https://ziglang.org) HTTP server, search API, content indexing
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend
 
