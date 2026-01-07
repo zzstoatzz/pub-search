@@ -139,4 +139,9 @@ fn runMigrations(client: *Client) !void {
     // e.g., pub.leaflet.document/abc and site.standard.document/abc are the same content
     client.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_did_rkey ON documents(did, rkey)", &.{}) catch {};
     client.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_did_rkey ON publications(did, rkey)", &.{}) catch {};
+
+    // backfill platform from source_collection for records indexed before platform detection fix
+    client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform = 'unknown' AND source_collection LIKE 'pub.leaflet.%'", &.{}) catch {};
+    client.exec("UPDATE documents SET platform = 'pckt' WHERE platform = 'unknown' AND source_collection LIKE 'blog.pckt.%'", &.{}) catch {};
+    client.exec("UPDATE documents SET platform = 'standardsite' WHERE platform = 'unknown' AND source_collection LIKE 'site.standard.%'", &.{}) catch {};
 }
