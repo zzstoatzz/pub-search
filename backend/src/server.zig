@@ -198,11 +198,16 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
     try sendJson(request, json_response);
 }
 
+fn getDashboardUrl() []const u8 {
+    return std.posix.getenv("DASHBOARD_URL") orelse "https://leaflet-search.pages.dev/dashboard.html";
+}
+
 fn handleDashboard(request: *http.Server.Request) !void {
+    const dashboard_url = getDashboardUrl();
     try request.respond("", .{
         .status = .moved_permanently,
         .extra_headers = &.{
-            .{ .name = "location", .value = "https://leaflet-search.pages.dev/dashboard.html" },
+            .{ .name = "location", .value = dashboard_url },
         },
     });
 }

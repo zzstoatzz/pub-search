@@ -43,7 +43,8 @@ pub fn main() !void {
     var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
 
-    std.debug.print("leaflet-search listening on http://0.0.0.0:{d} (max {} workers)\n", .{ port, MAX_HTTP_WORKERS });
+    const app_name = posix.getenv("APP_NAME") orelse "leaflet-search";
+    std.debug.print("{s} listening on http://0.0.0.0:{d} (max {} workers)\n", .{ app_name, port, MAX_HTTP_WORKERS });
 
     while (true) {
         const conn = listener.accept() catch |err| {
