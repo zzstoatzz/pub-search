@@ -127,5 +127,11 @@ fn runMigrations(client: *Client) !void {
     client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform IS NULL", &.{}) catch {};
     client.exec("UPDATE documents SET source_collection = 'pub.leaflet.document' WHERE source_collection IS NULL", &.{}) catch {};
 
+    // multi-platform support for publications
+    client.exec("ALTER TABLE publications ADD COLUMN platform TEXT DEFAULT 'leaflet'", &.{}) catch {};
+    client.exec("ALTER TABLE publications ADD COLUMN source_collection TEXT DEFAULT 'pub.leaflet.publication'", &.{}) catch {};
+    client.exec("UPDATE publications SET platform = 'leaflet' WHERE platform IS NULL", &.{}) catch {};
+    client.exec("UPDATE publications SET source_collection = 'pub.leaflet.publication' WHERE source_collection IS NULL", &.{}) catch {};
+
     // vector embeddings column already added by backfill script
 }

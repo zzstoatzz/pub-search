@@ -12,6 +12,8 @@ primary_region = 'iad'
   TAP_COLLECTION_FILTERS = 'pub.leaflet.document,pub.leaflet.publication'
   TAP_DISABLE_ACKS = 'true'
   TAP_LOG_LEVEL = 'info'
+  TAP_RESYNC_PARALLELISM = '2'
+  TAP_IDENT_CACHE_SIZE = '10000'
   TAP_CURSOR_SAVE_INTERVAL = '5s'
   TAP_REPO_FETCH_TIMEOUT = '600s'
 

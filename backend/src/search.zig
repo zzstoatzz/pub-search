@@ -106,6 +106,7 @@ const Pub = struct {
     snippet: []const u8,
     rkey: []const u8,
     basePath: []const u8,
+    platform: []const u8,
 
     fn fromRow(row: db.Row) Pub {
         return .{
@@ -115,6 +116,7 @@ const Pub = struct {
             .snippet = row.text(3),
             .rkey = row.text(4),
             .basePath = row.text(5),
+            .platform = row.text(6),
         };
     }
 
@@ -127,7 +129,7 @@ const Pub = struct {
             .snippet = self.snippet,
             .rkey = self.rkey,
             .basePath = self.basePath,
-            .platform = "leaflet", // publications are leaflet-only for now
+            .platform = self.platform,
         };
     }
 };
@@ -135,7 +137,7 @@ const Pub = struct {
 const PubSearch = zql.Query(
     \\SELECT f.uri, p.did, p.name,
     \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
-    \\  p.rkey, p.base_path
+    \\  p.rkey, p.base_path, p.platform
     \\FROM publications_fts f
     \\JOIN publications p ON f.uri = p.uri
     \\WHERE publications_fts MATCH :query
@@ -173,8 +175,8 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
         }
     }
 
-    // publications are excluded when filtering by tag or platform (only leaflet has publications)
-    if (tag_filter == null and (platform_filter == null or std.mem.eql(u8, platform_filter.?, "leaflet"))) {
+    // publications are excluded when filtering by tag
+    if (tag_filter == null) {
         var pub_result = c.query(
             PubSearch.positional,
             PubSearch.bind(.{ .query = fts_query }),
@@ -182,7 +184,14 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
 
         if (pub_result) |*res| {
             defer res.deinit();
-            for (res.rows) |row| try jw.write(Pub.fromRow(row).toJson());
+            for (res.rows) |row| {
+                const publication = Pub.fromRow(row);
+                // filter by platform if specified
+                if (platform_filter) |pf| {
+                    if (!std.mem.eql(u8, publication.platform, pf)) continue;
+                }
+                try jw.write(publication.toJson());
+            }
         }
     }
 
