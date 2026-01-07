@@ -1,5 +1,5 @@
 app = 'leaflet-search-tap'
-primary_region = 'iad'
+primary_region = 'ewr'
 
 [build]
   image = 'ghcr.io/bluesky-social/indigo/tap:latest'

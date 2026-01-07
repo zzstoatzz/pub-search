@@ -14,7 +14,7 @@
         },
         .zat = .{
             .url = "https://tangled.sh/zat.dev/zat/archive/main",
-            .hash = "zat-0.1.0-5PuC7iF5AQAzKo9Vc8MMRcSlwRrkHE0QI1aLZlJXKEsP",
+            .hash = "zat-0.1.0-5PuC7jCDAQALUWX2KlMvtxPfiUvfvv_pUQfloalBnQkA",
         },
     },
     .paths = .{

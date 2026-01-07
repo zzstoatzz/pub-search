@@ -116,9 +116,19 @@ fn connect(allocator: Allocator) !void {
 /// TAP record envelope - extracted via zat.json.extractAt
 const TapRecord = struct {
     collection: []const u8,
-    action: zat.CommitAction,
+    action: []const u8, // "create", "update", "delete"
     did: []const u8,
     rkey: []const u8,
+
+    pub fn isCreate(self: TapRecord) bool {
+        return mem.eql(u8, self.action, "create");
+    }
+    pub fn isUpdate(self: TapRecord) bool {
+        return mem.eql(u8, self.action, "update");
+    }
+    pub fn isDelete(self: TapRecord) bool {
+        return mem.eql(u8, self.action, "delete");
+    }
 };
 
 /// Leaflet publication fields
@@ -129,15 +139,55 @@ const LeafletPublication = struct {
 };
 
 fn processMessage(allocator: Allocator, payload: []const u8) !void {
-    const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch return;
+    const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch {
+        std.debug.print("tap: JSON parse failed, first 100 bytes: {s}\n", .{payload[0..@min(payload.len, 100)]});
+        return;
+    };
     defer parsed.deinit();
 
     // check message type
-    const msg_type = zat.json.getString(parsed.value, "type") orelse return;
+    const msg_type = zat.json.getString(parsed.value, "type") orelse {
+        std.debug.print("tap: no type field in message\n", .{});
+        return;
+    };
+
+    // log ALL message types to see what's coming through
+    std.debug.print("tap: msg_type={s}\n", .{msg_type});
+
     if (!mem.eql(u8, msg_type, "record")) return;
 
-    // extract record envelope
-    const rec = zat.json.extractAt(TapRecord, allocator, parsed.value, .{"record"}) catch return;
+    // extract record envelope manually (zat.extractAt was failing)
+    const record_obj = zat.json.getObject(parsed.value, "record") orelse {
+        std.debug.print("tap: no 'record' object in message\n", .{});
+        return;
+    };
+    const record_val: json.Value = .{ .object = record_obj };
+
+    const collection = zat.json.getString(record_val, "collection") orelse {
+        std.debug.print("tap: record missing collection\n", .{});
+        return;
+    };
+    const action = zat.json.getString(record_val, "action") orelse {
+        std.debug.print("tap: record missing action\n", .{});
+        return;
+    };
+    const did_str = zat.json.getString(record_val, "did") orelse {
+        std.debug.print("tap: record missing did\n", .{});
+        return;
+    };
+    const rkey = zat.json.getString(record_val, "rkey") orelse {
+        std.debug.print("tap: record missing rkey\n", .{});
+        return;
+    };
+
+    const rec = TapRecord{
+        .collection = collection,
+        .action = action,
+        .did = did_str,
+        .rkey = rkey,
+    };
+
+    std.debug.print("tap: record collection={s} action={s}\n", .{ rec.collection, rec.action });
 
     // validate DID
     const did = zat.Did.parse(rec.did) orelse return;
@@ -146,29 +196,26 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const uri = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ did.raw, rec.collection, rec.rkey });
     defer allocator.free(uri);
 
-    switch (rec.action) {
-        .create, .update => {
-            const record_obj = zat.json.getObject(parsed.value, "record.record") orelse return;
+    if (rec.isCreate() or rec.isUpdate()) {
+        const inner_record = zat.json.getObject(parsed.value, "record.record") orelse return;
 
-            if (isDocumentCollection(rec.collection)) {
-                processDocument(allocator, uri, did.raw, rec.rkey, record_obj, rec.collection) catch |err| {
-                    std.debug.print("document processing error: {}\n", .{err});
-                };
-            } else if (isPublicationCollection(rec.collection)) {
-                processPublication(allocator, uri, did.raw, rec.rkey, record_obj) catch |err| {
-                    std.debug.print("publication processing error: {}\n", .{err});
-                };
-            }
-        },
-        .delete => {
-            if (isDocumentCollection(rec.collection)) {
-                indexer.deleteDocument(uri);
-                std.debug.print("deleted document: {s}\n", .{uri});
-            } else if (isPublicationCollection(rec.collection)) {
-                indexer.deletePublication(uri);
-                std.debug.print("deleted publication: {s}\n", .{uri});
-            }
-        },
+        if (isDocumentCollection(rec.collection)) {
+            processDocument(allocator, uri, did.raw, rec.rkey, inner_record, rec.collection) catch |err| {
+                std.debug.print("document processing error: {}\n", .{err});
+            };
+        } else if (isPublicationCollection(rec.collection)) {
+            processPublication(allocator, uri, did.raw, rec.rkey, inner_record) catch |err| {
+                std.debug.print("publication processing error: {}\n", .{err});
+            };
+        }
+    } else if (rec.isDelete()) {
+        if (isDocumentCollection(rec.collection)) {
+            indexer.deleteDocument(uri);
+            std.debug.print("deleted document: {s}\n", .{uri});
+        } else if (isPublicationCollection(rec.collection)) {
+            indexer.deletePublication(uri);
+            std.debug.print("deleted publication: {s}\n", .{uri});
+        }
     }
 }
 
