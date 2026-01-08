@@ -535,7 +535,8 @@
       if (config) {
         return { url: config.home, label: config.label };
       }
-      return { url: null, label: platform }; // just show platform name, no link
+      // unknown platform using standard.site lexicon - link to standard.site
+      return { url: 'https://standard.site', label: 'standard.site' };
     }
 
     function highlightTerms(text, query) {

@@ -143,5 +143,19 @@ fn runMigrations(client: *Client) !void {
     // backfill platform from source_collection for records indexed before platform detection fix
     client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform = 'unknown' AND source_collection LIKE 'pub.leaflet.%'", &.{}) catch {};
     client.exec("UPDATE documents SET platform = 'pckt' WHERE platform = 'unknown' AND source_collection LIKE 'blog.pckt.%'", &.{}) catch {};
-    client.exec("UPDATE documents SET platform = 'standardsite' WHERE platform = 'unknown' AND source_collection LIKE 'site.standard.%'", &.{}) catch {};
+
+    // detect platform from publication basePath (site.standard.* is a lexicon, not a platform)
+    // pckt uses site.standard.* lexicon but basePath contains pckt.blog
+    client.exec(
+        \\UPDATE documents SET platform = 'pckt'
+        \\WHERE platform IN ('standardsite', 'unknown')
+        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%pckt.blog%')
+    , &.{}) catch {};
+
+    // leaflet also uses site.standard.* lexicon, detect by basePath
+    client.exec(
+        \\UPDATE documents SET platform = 'leaflet'
+        \\WHERE platform IN ('standardsite', 'unknown')
+        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%')
+    , &.{}) catch {};
 }

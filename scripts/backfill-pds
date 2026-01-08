@@ -133,12 +133,13 @@ def extract_document(record: dict, collection: str) -> dict | None:
     if not isinstance(tags, list):
         tags = []
 
-    # Determine platform from collection
+    # Determine platform from collection (site.standard is a lexicon, not a platform)
     if collection.startswith("pub.leaflet"):
         platform = "leaflet"
-    elif collection.startswith("site.standard"):
-        platform = "standardsite"
+    elif collection.startswith("blog.pckt"):
+        platform = "pckt"
     else:
+        # site.standard.* and others - platform will be detected from publication basePath
         platform = "unknown"
 
     return {
@@ -278,6 +279,27 @@ def main():
                     )
                     print(f"  indexed pub: {name}")
                 total_pubs += 1
+
+    # post-process: detect platform from publication basePath
+    if not args.dry_run and (total_docs > 0 or total_pubs > 0):
+        print("detecting platforms from publication basePath...")
+        turso_exec(
+            settings,
+            """
+            UPDATE documents SET platform = 'pckt'
+            WHERE platform IN ('standardsite', 'unknown')
+            AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%pckt.blog%')
+            """,
+        )
+        turso_exec(
+            settings,
+            """
+            UPDATE documents SET platform = 'leaflet'
+            WHERE platform IN ('standardsite', 'unknown')
+            AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%')
+            """,
+        )
+        print("  done")
 
     print(f"\ndone! {total_docs} documents, {total_pubs} publications")
 
