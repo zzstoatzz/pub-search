@@ -268,10 +268,25 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
     std.debug.print("indexed document: {s} [{s}] ({} chars, {} tags)\n", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
 }
 
-fn processPublication(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
     const record_val: json.Value = .{ .object = record };
-    const pub_data = zat.json.extractAt(LeafletPublication, allocator, record_val, .{}) catch return;
 
-    try indexer.insertPublication(uri, did, rkey, pub_data.name, pub_data.description, pub_data.base_path);
-    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, pub_data.base_path orelse "none" });
+    // extract required field
+    const name = zat.json.getString(record_val, "name") orelse return;
+    const description = zat.json.getString(record_val, "description");
+
+    // base_path: try leaflet's "base_path", then site.standard's "url"
+    // url is full URL like "https://devlog.pckt.blog", we need just the host
+    const base_path = zat.json.getString(record_val, "base_path") orelse
+        stripUrlScheme(zat.json.getString(record_val, "url"));
+
+    try indexer.insertPublication(uri, did, rkey, name, description, base_path);
+    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, base_path orelse "none" });
+}
+
+fn stripUrlScheme(url: ?[]const u8) ?[]const u8 {
+    const u = url orelse return null;
+    if (mem.startsWith(u8, u, "https://")) return u["https://".len..];
+    if (mem.startsWith(u8, u, "http://")) return u["http://".len..];
+    return u;
 }
