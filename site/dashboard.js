@@ -57,9 +57,21 @@ function renderTags(tags) {
   if (!tags) return;
 
   el.innerHTML = tags.slice(0, 20).map(t =>
-    '<a class="tag" href="https://leaflet-search.pages.dev/?tag=' + encodeURIComponent(t.tag) + '">' +
+    '<a class="tag" href="https://pub-search.waow.tech/?tag=' + encodeURIComponent(t.tag) + '">' +
       escapeHtml(t.tag) + '<span class="n">' + t.count + '</span></a>'
   ).join('');
+}
+
+function renderPlatforms(platforms) {
+  const el = document.getElementById('platforms');
+  if (!platforms) return;
+
+  platforms.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'doc-row';
+    row.innerHTML = '<span class="doc-type">' + escapeHtml(p.platform) + '</span><span class="doc-count">' + p.count + '</span>';
+    el.appendChild(row);
+  });
 }
 
 function escapeHtml(str) {
@@ -83,9 +95,8 @@ async function fetchDashboard() {
 
     document.getElementById('searches').textContent = data.searches;
     document.getElementById('publications').textContent = data.publications;
-    document.getElementById('articles').textContent = data.articles;
-    document.getElementById('looseleafs').textContent = data.looseleafs;
 
+    renderPlatforms(data.platforms);
     renderTimeline(data.timeline);
     renderPubs(data.topPubs);
     renderTags(data.tags);

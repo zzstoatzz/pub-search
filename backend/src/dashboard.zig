@@ -7,17 +7,18 @@ const db = @import("db/mod.zig");
 const TagJson = struct { tag: []const u8, count: i64 };
 const TimelineJson = struct { date: []const u8, count: i64 };
 const PubJson = struct { name: []const u8, basePath: []const u8, count: i64 };
+const PlatformJson = struct { platform: []const u8, count: i64 };
 
 /// All data needed to render the dashboard
 pub const Data = struct {
     started_at: i64,
     searches: i64,
     publications: i64,
-    articles: i64,
-    looseleafs: i64,
+    documents: i64,
     tags_json: []const u8,
     timeline_json: []const u8,
     top_pubs_json: []const u8,
+    platforms_json: []const u8,
 };
 
 // all dashboard queries batched into one request
@@ -30,11 +31,11 @@ const STATS_SQL =
     \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at
 ;
 
-const DOC_TYPES_SQL =
-    \\SELECT
-    \\  SUM(CASE WHEN publication_uri != '' THEN 1 ELSE 0 END) as articles,
-    \\  SUM(CASE WHEN publication_uri = '' OR publication_uri IS NULL THEN 1 ELSE 0 END) as looseleafs
+const PLATFORMS_SQL =
+    \\SELECT platform, COUNT(*) as count
     \\FROM documents
+    \\GROUP BY platform
+    \\ORDER BY count DESC
 ;
 
 const TAGS_SQL =
@@ -69,7 +70,7 @@ pub fn fetch(alloc: Allocator) !Data {
     // batch all 5 queries into one HTTP request
     var batch = client.queryBatch(&.{
         .{ .sql = STATS_SQL },
-        .{ .sql = DOC_TYPES_SQL },
+        .{ .sql = PLATFORMS_SQL },
         .{ .sql = TAGS_SQL },
         .{ .sql = TIMELINE_SQL },
         .{ .sql = TOP_PUBS_SQL },
@@ -81,21 +82,17 @@ pub fn fetch(alloc: Allocator) !Data {
     const started_at = if (stats_row) |r| r.int(4) else 0;
     const searches = if (stats_row) |r| r.int(2) else 0;
     const publications = if (stats_row) |r| r.int(1) else 0;
-
-    // extract doc types (query 1)
-    const doc_row = batch.getFirst(1);
-    const articles = if (doc_row) |r| r.int(0) else 0;
-    const looseleafs = if (doc_row) |r| r.int(1) else 0;
+    const documents = if (stats_row) |r| r.int(0) else 0;
 
     return .{
         .started_at = started_at,
         .searches = searches,
         .publications = publications,
-        .articles = articles,
-        .looseleafs = looseleafs,
+        .documents = documents,
         .tags_json = try formatTagsJson(alloc, batch.get(2)),
         .timeline_json = try formatTimelineJson(alloc, batch.get(3)),
         .top_pubs_json = try formatPubsJson(alloc, batch.get(4)),
+        .platforms_json = try formatPlatformsJson(alloc, batch.get(1)),
     };
 }
 
@@ -129,6 +126,16 @@ fn formatPubsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
+fn formatPlatformsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (rows) |row| try jw.write(PlatformJson{ .platform = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
 /// Generate dashboard data as JSON for API endpoint
 pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -146,11 +153,13 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
     try jw.objectField("publications");
     try jw.write(data.publications);
 
-    try jw.objectField("articles");
-    try jw.write(data.articles);
+    try jw.objectField("documents");
+    try jw.write(data.documents);
 
-    try jw.objectField("looseleafs");
-    try jw.write(data.looseleafs);
+    try jw.objectField("platforms");
+    try jw.beginWriteRaw();
+    try jw.writer.writeAll(data.platforms_json);
+    jw.endWriteRaw();
 
     // use beginWriteRaw/endWriteRaw for pre-formatted JSON arrays
     try jw.objectField("tags");
