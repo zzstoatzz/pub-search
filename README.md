@@ -1,14 +1,16 @@
-# leaflet-search
+# pub search
 
 by [@zzstoatzz.io](https://bsky.app/profile/zzstoatzz.io)
 
-search for [leaflet](https://leaflet.pub).
+search ATProto publishing platforms ([leaflet](https://leaflet.pub), [pckt](https://pckt.blog), and others using [standard.site](https://standard.site)).
 
-**live:** [leaflet-search.pages.dev](https://leaflet-search.pages.dev)
+**live:** [pub-search.waow.tech](https://pub-search.waow.tech)
+
+> formerly "leaflet-search" - generalized to support multiple publishing platforms
 
 ## how it works
 
-1. **tap** syncs leaflet content from the network
+1. **tap** syncs content from ATProto firehose (signals on `pub.leaflet.document`, filters `pub.leaflet.*` + `site.standard.*`)
 2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API
 3. **site** static frontend on Cloudflare Pages
 
@@ -17,7 +19,7 @@ search for [leaflet](https://leaflet.pub).
 search is also exposed as an MCP server for AI agents like Claude Code:
 
 ```bash
-claude mcp add-json leaflet '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
+claude mcp add-json leaflet-search '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
 ```
 
 see [mcp/README.md](mcp/README.md) for local setup and usage details.
@@ -33,7 +35,7 @@ GET /stats                                           # document/publication coun
 GET /health                                          # health check
 ```
 
-search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field. tag and platform filtering apply to documents only.
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, etc). tag and platform filtering apply to documents only.
 
 `/similar` uses [Voyage AI](https://voyageai.com) embeddings with brute-force cosine similarity (~0.15s for 3500 docs).
 
@@ -44,7 +46,7 @@ the backend is fully configurable via environment variables:
 | variable | default | description |
 |----------|---------|-------------|
 | `APP_NAME` | `leaflet-search` | name shown in startup logs |
-| `DASHBOARD_URL` | `https://leaflet-search.pages.dev/dashboard.html` | redirect target for `/dashboard` |
+| `DASHBOARD_URL` | `https://pub-search.waow.tech/dashboard.html` | redirect target for `/dashboard` |
 | `TAP_HOST` | `leaflet-search-tap.fly.dev` | TAP websocket host |
 | `TAP_PORT` | `443` | TAP websocket port |
 | `PORT` | `3000` | HTTP server port |

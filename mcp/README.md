@@ -1,13 +1,13 @@
-# leaflet-mcp
+# pub search MCP
 
-MCP server for [Leaflet](https://leaflet.pub) - search decentralized publications on ATProto.
+MCP server for [pub search](https://pub-search.waow.tech) - search ATProto publishing platforms (Leaflet, pckt, standard.site).
 
 ## usage
 
 ### hosted (recommended)
 
 ```bash
-claude mcp add-json leaflet '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
+claude mcp add-json leaflet-search '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
 ```
 
 ### local
@@ -21,7 +21,7 @@ uvx --from git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp leaf
 to add it to claude code as a local stdio server:
 
 ```bash
-claude mcp add leaflet -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp' leaflet-mcp
+claude mcp add leaflet-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp' leaflet-mcp
 ```
 
 ## workflow
