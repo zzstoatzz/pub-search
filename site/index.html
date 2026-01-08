@@ -512,20 +512,28 @@
       if (entityType === 'publication') {
         return doc.basePath ? `https://${doc.basePath}` : null;
       }
-      // documents: prefer basePath + path (from record) over rkey
-      if (doc.basePath && doc.path) {
-        // path already includes leading slash (e.g., "/001")
-        return `https://${doc.basePath}${doc.path}`;
-      }
-      // fallback to basePath + rkey (legacy pattern)
-      if (doc.basePath && doc.rkey) {
+
+      // Platform-specific URL patterns:
+      // 1. Leaflet: basePath + rkey (e.g., https://dad.leaflet.pub/3mburumcnbs2m)
+      if (platform === 'leaflet' && doc.basePath && doc.rkey) {
         return `https://${doc.basePath}/${doc.rkey}`;
       }
-      // fallback to platform-specific URL pattern
-      const config = PLATFORM_CONFIG[platform];
-      if (config && config.docUrl && doc.did && doc.rkey) {
-        return config.docUrl(doc.did, doc.rkey);
+
+      // 2. pckt: basePath + path (e.g., https://devlog.pckt.blog/some-slug-abc123)
+      if (platform === 'pckt' && doc.basePath && doc.path) {
+        return `https://${doc.basePath}${doc.path}`;
       }
+
+      // 3. Other platforms with path: basePath + path
+      if (doc.basePath && doc.path) {
+        return `https://${doc.basePath}${doc.path}`;
+      }
+
+      // 4. Fallback: pdsls.dev universal viewer (always works for any AT Protocol record)
+      if (doc.uri) {
+        return `https://pdsls.dev/${doc.uri}`;
+      }
+
       return null;
     }
 
