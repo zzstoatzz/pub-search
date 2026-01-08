@@ -434,8 +434,11 @@
 
           // build URL based on entity type and platform
           const docUrl = buildDocUrl(doc, entityType, platform);
-          const platformLabel = PLATFORM_CONFIG[platform]?.label || platform;
-          const platformBadge = `<span class="platform-badge">${escapeHtml(platformLabel)}</span>`;
+          // only show platform badge for actual platforms, not for lexicon-only records
+          const platformConfig = PLATFORM_CONFIG[platform];
+          const platformBadge = platformConfig
+            ? `<span class="platform-badge">${escapeHtml(platformConfig.label)}</span>`
+            : '';
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
 
           // platform home URL for meta link
@@ -503,19 +506,13 @@
         // offprint is in early beta, URL pattern unknown
         docUrl: null
       },
-      standardsite: {
-        home: 'https://standard.site',
-        label: 'standard.site',
-        // standard.site uses basePath from publication
-        docUrl: null
-      },
     };
 
     function buildDocUrl(doc, entityType, platform) {
       if (entityType === 'publication') {
         return doc.basePath ? `https://${doc.basePath}` : null;
       }
-      // documents: prefer basePath, fallback to platform-specific pattern
+      // documents: prefer basePath, fallback to platform-specific pattern, then universal fallback
       if (doc.basePath && doc.rkey) {
         return `https://${doc.basePath}/${doc.rkey}`;
       }
@@ -523,7 +520,11 @@
       if (config && config.docUrl && doc.did && doc.rkey) {
         return config.docUrl(doc.did, doc.rkey);
       }
-      return null; // no URL available for this platform
+      // universal fallback: link to AT-URI viewer
+      if (doc.uri) {
+        return `https://pdsls.dev/${doc.uri}`;
+      }
+      return null;
     }
 
     function getPlatformHome(platform, basePath) {
