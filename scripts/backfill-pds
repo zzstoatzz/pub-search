@@ -1,0 +1,286 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Backfill records directly from a PDS.
+
+Usage:
+    ./scripts/backfill-pds did:plc:mkqt76xvfgxuemlwlx6ruc3w
+    ./scripts/backfill-pds zat.dev
+"""
+
+import argparse
+import json
+import os
+import sys
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+def resolve_handle(handle: str) -> str:
+    """Resolve a handle to a DID."""
+    resp = httpx.get(
+        f"https://bsky.social/xrpc/com.atproto.identity.resolveHandle",
+        params={"handle": handle},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["did"]
+
+
+def get_pds_endpoint(did: str) -> str:
+    """Get PDS endpoint from PLC directory."""
+    resp = httpx.get(f"https://plc.directory/{did}", timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    for service in data.get("service", []):
+        if service.get("type") == "AtprotoPersonalDataServer":
+            return service["serviceEndpoint"]
+    raise ValueError(f"No PDS endpoint found for {did}")
+
+
+def list_records(pds: str, did: str, collection: str) -> list[dict]:
+    """List all records from a collection."""
+    records = []
+    cursor = None
+    while True:
+        params = {"repo": did, "collection": collection, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        resp = httpx.get(
+            f"{pds}/xrpc/com.atproto.repo.listRecords", params=params, timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        records.extend(data.get("records", []))
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+    return records
+
+
+def turso_exec(settings: Settings, sql: str, args: list | None = None) -> None:
+    """Execute a statement against Turso."""
+    stmt = {"sql": sql}
+    if args:
+        # Handle None values properly - use null type
+        stmt["args"] = []
+        for a in args:
+            if a is None:
+                stmt["args"].append({"type": "null"})
+            else:
+                stmt["args"].append({"type": "text", "value": str(a)})
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"Turso error: {response.text}", file=sys.stderr)
+    response.raise_for_status()
+
+
+def extract_document(record: dict, collection: str) -> dict | None:
+    """Extract document fields from a record."""
+    value = record.get("value", {})
+
+    # Get title
+    title = value.get("title")
+    if not title:
+        return None
+
+    # Get content - try multiple field names
+    content = value.get("content") or value.get("text") or ""
+    if isinstance(content, dict):
+        # Handle richtext format
+        content = content.get("text", "")
+
+    # Get created_at
+    created_at = value.get("createdAt", "")
+
+    # Get publication reference
+    publication = value.get("publication")
+    publication_uri = None
+    if publication and isinstance(publication, dict):
+        publication_uri = publication.get("uri")
+
+    # Get tags
+    tags = value.get("tags", [])
+    if not isinstance(tags, list):
+        tags = []
+
+    # Determine platform from collection
+    if collection.startswith("pub.leaflet"):
+        platform = "leaflet"
+    elif collection.startswith("site.standard"):
+        platform = "standardsite"
+    else:
+        platform = "unknown"
+
+    return {
+        "title": title,
+        "content": content,
+        "created_at": created_at,
+        "publication_uri": publication_uri,
+        "tags": tags,
+        "platform": platform,
+        "collection": collection,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Backfill records from a PDS")
+    parser.add_argument("identifier", help="DID or handle to backfill")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve identifier to DID
+    identifier = args.identifier
+    if identifier.startswith("did:"):
+        did = identifier
+    else:
+        print(f"resolving handle {identifier}...")
+        did = resolve_handle(identifier)
+        print(f"  -> {did}")
+
+    # Get PDS endpoint
+    print(f"looking up PDS for {did}...")
+    pds = get_pds_endpoint(did)
+    print(f"  -> {pds}")
+
+    # Collections to fetch
+    collections = [
+        "pub.leaflet.document",
+        "pub.leaflet.publication",
+        "site.standard.document",
+        "site.standard.publication",
+    ]
+
+    total_docs = 0
+    total_pubs = 0
+
+    for collection in collections:
+        print(f"fetching {collection}...")
+        try:
+            records = list_records(pds, did, collection)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                print(f"  (no records)")
+                continue
+            raise
+
+        if not records:
+            print(f"  (no records)")
+            continue
+
+        print(f"  found {len(records)} records")
+
+        for record in records:
+            uri = record["uri"]
+            # Parse rkey from URI: at://did/collection/rkey
+            parts = uri.split("/")
+            rkey = parts[-1]
+
+            if collection.endswith(".document"):
+                doc = extract_document(record, collection)
+                if not doc:
+                    print(f"  skip {uri} (no title)")
+                    continue
+
+                if args.dry_run:
+                    print(f"  would insert: {doc['title'][:50]}...")
+                else:
+                    # Insert document
+                    turso_exec(
+                        settings,
+                        """
+                        INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(did, rkey) DO UPDATE SET
+                            uri = excluded.uri,
+                            title = excluded.title,
+                            content = excluded.content,
+                            created_at = excluded.created_at,
+                            publication_uri = excluded.publication_uri,
+                            platform = excluded.platform,
+                            source_collection = excluded.source_collection
+                        """,
+                        [uri, did, rkey, doc["title"], doc["content"], doc["created_at"], doc["publication_uri"], doc["platform"], doc["collection"]],
+                    )
+                    # Insert tags
+                    for tag in doc["tags"]:
+                        turso_exec(
+                            settings,
+                            "INSERT OR IGNORE INTO document_tags (document_uri, tag) VALUES (?, ?)",
+                            [uri, tag],
+                        )
+                    # Update FTS index (delete then insert, FTS5 doesn't support ON CONFLICT)
+                    turso_exec(settings, "DELETE FROM documents_fts WHERE uri = ?", [uri])
+                    turso_exec(
+                        settings,
+                        "INSERT INTO documents_fts (uri, title, content) VALUES (?, ?, ?)",
+                        [uri, doc["title"], doc["content"]],
+                    )
+                    print(f"  indexed: {doc['title'][:50]}...")
+                total_docs += 1
+
+            elif collection.endswith(".publication"):
+                value = record["value"]
+                name = value.get("name", "")
+                description = value.get("description")
+                base_path = value.get("base_path")
+
+                if args.dry_run:
+                    print(f"  would insert pub: {name}")
+                else:
+                    turso_exec(
+                        settings,
+                        """
+                        INSERT INTO publications (uri, did, rkey, name, description, base_path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(uri) DO UPDATE SET
+                            name = excluded.name,
+                            description = excluded.description,
+                            base_path = excluded.base_path
+                        """,
+                        [uri, did, rkey, name, description, base_path],
+                    )
+                    print(f"  indexed pub: {name}")
+                total_pubs += 1
+
+    print(f"\ndone! {total_docs} documents, {total_pubs} publications")
+
+
+if __name__ == "__main__":
+    main()

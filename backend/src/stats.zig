@@ -102,6 +102,57 @@ pub fn recordCacheMiss() void {
     c.exec("UPDATE stats SET cache_misses = COALESCE(cache_misses, 0) + 1 WHERE id = 1", &.{}) catch {};
 }
 
+const PlatformCount = struct { platform: []const u8, count: i64 };
+
+pub fn getPlatformCounts(alloc: Allocator) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
+
+    // documents by platform
+    try jw.objectField("documents");
+    if (c.query("SELECT platform, COUNT(*) as count FROM documents GROUP BY platform ORDER BY count DESC", &.{})) |res_val| {
+        var res = res_val;
+        defer res.deinit();
+        try jw.beginArray();
+        for (res.rows) |row| try jw.write(PlatformCount{ .platform = row.text(0), .count = row.int(1) });
+        try jw.endArray();
+    } else |_| {
+        try jw.beginArray();
+        try jw.endArray();
+    }
+
+    // FTS document count
+    try jw.objectField("fts_count");
+    if (c.query("SELECT COUNT(*) FROM documents_fts", &.{})) |res_val| {
+        var res = res_val;
+        defer res.deinit();
+        if (res.first()) |row| {
+            try jw.write(row.int(0));
+        } else try jw.write(0);
+    } else |_| try jw.write(0);
+
+    // sample URIs from each platform (for debugging)
+    try jw.objectField("sample_standardsite");
+    if (c.query("SELECT uri FROM documents WHERE platform = 'standardsite' LIMIT 3", &.{})) |res_val| {
+        var res = res_val;
+        defer res.deinit();
+        try jw.beginArray();
+        for (res.rows) |row| try jw.write(row.text(0));
+        try jw.endArray();
+    } else |_| {
+        try jw.beginArray();
+        try jw.endArray();
+    }
+
+    try jw.endObject();
+    return try output.toOwnedSlice();
+}
+
 pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 

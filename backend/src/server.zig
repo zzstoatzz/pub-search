@@ -56,6 +56,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try sendJson(request, "{\"status\":\"ok\"}");
     } else if (mem.eql(u8, target, "/popular")) {
         try handlePopular(request);
+    } else if (mem.eql(u8, target, "/platforms")) {
+        try handlePlatforms(request);
     } else if (mem.eql(u8, target, "/dashboard")) {
         try handleDashboard(request);
     } else if (mem.eql(u8, target, "/api/dashboard")) {
@@ -109,6 +111,15 @@ fn handlePopular(request: *http.Server.Request) !void {
 
     const popular = try stats.getPopular(alloc, 5);
     try sendJson(request, popular);
+}
+
+fn handlePlatforms(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const data = try stats.getPlatformCounts(alloc);
+    try sendJson(request, data);
 }
 
 fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const u8) ![]const u8 {

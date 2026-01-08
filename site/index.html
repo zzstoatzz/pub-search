@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>leaflet search</title>
-  <meta name="description" content="search for leaflet">
+  <meta name="description" content="search atproto publishing platforms">
   <meta property="og:title" content="leaflet search">
-  <meta property="og:description" content="search for leaflet">
+  <meta property="og:description" content="search atproto publishing platforms">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="leaflet search">
-  <meta name="twitter:description" content="search for leaflet">
+  <meta name="twitter:description" content="search atproto publishing platforms">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -365,7 +365,8 @@
 
     <div id="results" class="results">
       <div class="empty-state">
-        <p>search for <a href="https://leaflet.pub" target="_blank">leaflet.pub</a></p>
+        <p>search atproto publishing platforms</p>
+        <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://standard.site" target="_blank">standard.site</a></p>
       </div>
     </div>
 
@@ -433,7 +434,8 @@
 
           // build URL based on entity type and platform
           const docUrl = buildDocUrl(doc, entityType, platform);
-          const platformBadge = platform !== 'leaflet' ? `<span class="platform-badge">${escapeHtml(platform)}</span>` : '';
+          const platformLabel = PLATFORM_CONFIG[platform]?.label || platform;
+          const platformBadge = `<span class="platform-badge">${escapeHtml(platformLabel)}</span>`;
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
 
           // platform home URL for meta link
@@ -499,6 +501,12 @@
         home: 'https://offprint.app',
         label: 'offprint.app',
         // offprint is in early beta, URL pattern unknown
+        docUrl: null
+      },
+      standardsite: {
+        home: 'https://standard.site',
+        label: 'standard.site',
+        // standard.site uses basePath from publication
         docUrl: null
       },
     };
@@ -645,7 +653,8 @@
     function renderEmptyState() {
       resultsDiv.innerHTML = `
         <div class="empty-state">
-          <p>search for <a href="https://leaflet.pub" target="_blank">leaflet.pub</a></p>
+          <p>search atproto publishing platforms</p>
+          <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://standard.site" target="_blank">standard.site</a></p>
         </div>
       `;
     }
