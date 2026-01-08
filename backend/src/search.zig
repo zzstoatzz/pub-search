@@ -105,6 +105,20 @@ const DocsByFts = zql.Query(
     \\ORDER BY rank LIMIT 40
 );
 
+const DocsByFtsAndPlatform = zql.Query(
+    \\SELECT f.uri, d.did, d.title,
+    \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents_fts f
+    \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\WHERE documents_fts MATCH :query AND d.platform = :platform
+    \\ORDER BY rank LIMIT 40
+);
+
 /// Publication search result (internal)
 const Pub = struct {
     uri: []const u8,
@@ -167,23 +181,21 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
         c.query(DocsByTag.positional, DocsByTag.bind(.{ .tag = tag_filter.? })) catch null
     else if (tag_filter) |tag|
         c.query(DocsByFtsAndTag.positional, DocsByFtsAndTag.bind(.{ .query = fts_query, .tag = tag })) catch null
+    else if (platform_filter) |pf|
+        c.query(DocsByFtsAndPlatform.positional, DocsByFtsAndPlatform.bind(.{ .query = fts_query, .platform = pf })) catch null
     else
         c.query(DocsByFts.positional, DocsByFts.bind(.{ .query = fts_query })) catch null;
 
     if (doc_result) |*res| {
         defer res.deinit();
         for (res.rows) |row| {
-            const doc = Doc.fromRow(row);
-            // filter by platform if specified
-            if (platform_filter) |pf| {
-                if (!std.mem.eql(u8, doc.platform, pf)) continue;
-            }
-            try jw.write(doc.toJson());
+            try jw.write(Doc.fromRow(row).toJson());
         }
     }
 
-    // publications are excluded when filtering by tag
-    if (tag_filter == null) {
+    // publications are excluded when filtering by tag or platform
+    // (platform filter is for documents only - publications don't have meaningful platform distinction)
+    if (tag_filter == null and platform_filter == null) {
         var pub_result = c.query(
             PubSearch.positional,
             PubSearch.bind(.{ .query = fts_query }),
@@ -192,12 +204,7 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
         if (pub_result) |*res| {
             defer res.deinit();
             for (res.rows) |row| {
-                const publication = Pub.fromRow(row);
-                // filter by platform if specified
-                if (platform_filter) |pf| {
-                    if (!std.mem.eql(u8, publication.platform, pf)) continue;
-                }
-                try jw.write(publication.toJson());
+                try jw.write(Pub.fromRow(row).toJson());
             }
         }
     }

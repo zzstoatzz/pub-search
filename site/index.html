@@ -75,7 +75,7 @@
       flex: 1;
       padding: 0.5rem;
       font-family: monospace;
-      font-size: 14px;
+      font-size: 16px; /* prevents iOS auto-zoom on focus */
       background: #111;
       border: 1px solid #333;
       color: #ccc;
@@ -325,6 +325,43 @@
       margin-left: 4px;
     }
 
+    .platform-filter {
+      margin-bottom: 1rem;
+    }
+
+    .platform-filter-label {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 0.5rem;
+    }
+
+    .platform-filter-list {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .platform-option {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #151515;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #777;
+    }
+
+    .platform-option:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
+    }
+
+    .platform-option.active {
+      background: rgba(180, 100, 64, 0.2);
+      border-color: #d4956a;
+      color: #d4956a;
+    }
+
     .active-filter {
       display: flex;
       align-items: center;
@@ -363,6 +400,8 @@
 
     <div id="tags" class="tags"></div>
 
+    <div id="platform-filter" class="platform-filter"></div>
+
     <div id="results" class="results">
       <div class="empty-state">
         <p>search atproto publishing platforms</p>
@@ -385,17 +424,20 @@
     const tagsDiv = document.getElementById('tags');
     const activeFilterDiv = document.getElementById('active-filter');
     const suggestionsDiv = document.getElementById('suggestions');
+    const platformFilterDiv = document.getElementById('platform-filter');
 
     let currentTag = null;
+    let currentPlatform = null;
     let allTags = [];
     let popularSearches = [];
 
-    async function search(query, tag = null) {
-      if (!query.trim() && !tag) return;
+    async function search(query, tag = null, platform = null) {
+      if (!query.trim() && !tag && !platform) return;
 
       searchBtn.disabled = true;
       let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
+      if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
       resultsDiv.innerHTML = `<div class="status">searching...</div>`;
 
       try {
@@ -418,7 +460,7 @@
         if (results.length === 0) {
           resultsDiv.innerHTML = `
             <div class="empty-state">
-              <p>no results${query ? ` for "${escapeHtml(query)}"` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}</p>
+              <p>no results${query ? ` for "${escapeHtml(query)}"` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
               <p>try different keywords</p>
             </div>
           `;
@@ -567,13 +609,14 @@
       const q = queryInput.value.trim();
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
+      if (currentPlatform) params.set('platform', currentPlatform);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
     }
 
     function doSearch() {
       updateUrl();
-      search(queryInput.value, currentTag);
+      search(queryInput.value, currentTag, currentPlatform);
     }
 
     function setTag(tag) {
@@ -592,22 +635,62 @@
       renderActiveFilter();
       renderTags();
       updateUrl();
-      if (queryInput.value.trim()) {
-        search(queryInput.value, null);
+      if (queryInput.value.trim() || currentPlatform) {
+        search(queryInput.value, null, currentPlatform);
       } else {
         renderEmptyState();
       }
     }
 
+    function setPlatform(platform) {
+      if (currentPlatform === platform) {
+        clearPlatform();
+        return;
+      }
+      currentPlatform = platform;
+      renderActiveFilter();
+      renderPlatformFilter();
+      doSearch();
+    }
+
+    function clearPlatform() {
+      currentPlatform = null;
+      renderActiveFilter();
+      renderPlatformFilter();
+      updateUrl();
+      if (queryInput.value.trim() || currentTag) {
+        search(queryInput.value, currentTag, null);
+      } else {
+        renderEmptyState();
+      }
+    }
+
+    function renderPlatformFilter() {
+      const platforms = [
+        { id: 'leaflet', label: 'leaflet' },
+        { id: 'pckt', label: 'pckt' },
+      ];
+      const html = platforms.map(p => `
+        <span class="platform-option${currentPlatform === p.id ? ' active' : ''}" onclick="setPlatform('${p.id}')">${p.label}</span>
+      `).join('');
+      platformFilterDiv.innerHTML = `<div class="platform-filter-label">filter by platform:</div><div class="platform-filter-list">${html}</div>`;
+    }
+
     function renderActiveFilter() {
-      if (!currentTag) {
+      if (!currentTag && !currentPlatform) {
         activeFilterDiv.innerHTML = '';
         return;
       }
+      let parts = [];
+      if (currentTag) parts.push(`tag: <strong>#${escapeHtml(currentTag)}</strong>`);
+      if (currentPlatform) parts.push(`platform: <strong>${escapeHtml(currentPlatform)}</strong>`);
+      const clearActions = [];
+      if (currentTag) clearActions.push(`<span class="clear" onclick="clearTag()">× tag</span>`);
+      if (currentPlatform) clearActions.push(`<span class="clear" onclick="clearPlatform()">× platform</span>`);
       activeFilterDiv.innerHTML = `
         <div class="active-filter">
-          <span>filtering by tag: <strong>#${escapeHtml(currentTag)}</strong> <span style="color:#666;font-size:10px">(documents only)</span></span>
-          <span class="clear" onclick="clearTag()">× clear</span>
+          <span>filtering by ${parts.join(', ')} <span style="color:#666;font-size:10px">(documents only)</span></span>
+          ${clearActions.join(' ')}
         </div>
       `;
     }
@@ -689,21 +772,26 @@
       const params = new URLSearchParams(location.search);
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
+      currentPlatform = params.get('platform') || null;
       renderActiveFilter();
       renderTags();
-      if (queryInput.value || currentTag) search(queryInput.value, currentTag);
+      renderPlatformFilter();
+      if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
     });
 
     // init
     const initialParams = new URLSearchParams(location.search);
     const initialQuery = initialParams.get('q');
     const initialTag = initialParams.get('tag');
+    const initialPlatform = initialParams.get('platform');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
+    if (initialPlatform) currentPlatform = initialPlatform;
     renderActiveFilter();
+    renderPlatformFilter();
 
-    if (initialQuery || initialTag) {
-      search(initialQuery || '', initialTag);
+    if (initialQuery || initialTag || initialPlatform) {
+      search(initialQuery || '', initialTag, initialPlatform);
     }
 
     async function loadRelated(topResult) {
