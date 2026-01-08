@@ -1,0 +1,109 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""
+Enumerate repos with site.standard.* records and add them to TAP.
+
+TAP only signals on one collection, so we use this to discover repos
+that use site.standard.publication (pckt, etc) and add them to TAP.
+
+Usage:
+    ./scripts/enumerate-standard-repos
+    ./scripts/enumerate-standard-repos --dry-run
+"""
+
+import argparse
+import sys
+
+import httpx
+
+RELAY_URL = "https://relay1.us-east.bsky.network"
+TAP_URL = "http://leaflet-search-tap.internal:2480"  # fly internal network
+COLLECTION = "site.standard.publication"
+
+
+def enumerate_repos(relay_url: str, collection: str) -> list[str]:
+    """Enumerate all repos with records in the given collection."""
+    dids = []
+    cursor = None
+
+    print(f"enumerating repos with {collection}...")
+
+    while True:
+        params = {"collection": collection, "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = httpx.get(
+            f"{relay_url}/xrpc/com.atproto.sync.listReposByCollection",
+            params=params,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        repos = data.get("repos", [])
+        for repo in repos:
+            dids.append(repo["did"])
+
+        if not repos:
+            break
+
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+
+        print(f"  found {len(dids)} repos so far...")
+
+    return dids
+
+
+def add_repos_to_tap(tap_url: str, dids: list[str]) -> None:
+    """Add repos to TAP for syncing."""
+    if not dids:
+        return
+
+    # batch in chunks of 100
+    batch_size = 100
+    for i in range(0, len(dids), batch_size):
+        batch = dids[i:i + batch_size]
+        resp = httpx.post(
+            f"{tap_url}/repos/add",
+            json={"dids": batch},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        print(f"  added batch {i // batch_size + 1}: {len(batch)} repos")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Enumerate and add standard.site repos to TAP")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
+    parser.add_argument("--relay-url", default=RELAY_URL, help="Relay URL")
+    parser.add_argument("--tap-url", default=TAP_URL, help="TAP URL")
+    args = parser.parse_args()
+
+    dids = enumerate_repos(args.relay_url, COLLECTION)
+    print(f"found {len(dids)} repos with {COLLECTION}")
+
+    if not dids:
+        print("no repos to add")
+        return
+
+    if args.dry_run:
+        print("dry run - would add these repos to TAP:")
+        for did in dids[:10]:
+            print(f"  {did}")
+        if len(dids) > 10:
+            print(f"  ... and {len(dids) - 10} more")
+        return
+
+    print(f"adding {len(dids)} repos to TAP...")
+    add_repos_to_tap(args.tap_url, dids)
+    print("done!")
+
+
+if __name__ == "__main__":
+    main()
