@@ -24,9 +24,9 @@ primary_region = 'ewr'
   min_machines_running = 1
 
 [[vm]]
-  memory = '4gb'
+  memory = '512mb'
   cpu_kind = 'shared'
-  cpus = 2
+  cpus = 1
 
 [mounts]
   source = 'leaflet_tap_data'
