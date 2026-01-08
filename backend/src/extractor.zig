@@ -86,8 +86,13 @@ pub fn extractDocument(
     // extract optional fields
     const created_at = zat.json.getString(record_val, "publishedAt") orelse
         zat.json.getString(record_val, "createdAt");
+
+    // publication/site can be a string (direct URI) or strongRef object ({uri, cid})
+    // zat.json.getString supports paths like "publication.uri"
     const publication_uri = zat.json.getString(record_val, "publication") orelse
-        zat.json.getString(record_val, "site"); // site.standard uses "site"
+        zat.json.getString(record_val, "publication.uri") orelse
+        zat.json.getString(record_val, "site") orelse
+        zat.json.getString(record_val, "site.uri");
 
     // extract tags - allocate owned slice
     const tags = try extractTags(allocator, record_val);

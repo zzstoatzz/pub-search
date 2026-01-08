@@ -512,17 +512,14 @@
       if (entityType === 'publication') {
         return doc.basePath ? `https://${doc.basePath}` : null;
       }
-      // documents: prefer basePath, fallback to platform-specific pattern, then universal fallback
+      // documents: prefer basePath from publication
       if (doc.basePath && doc.rkey) {
         return `https://${doc.basePath}/${doc.rkey}`;
       }
+      // fallback to platform-specific URL pattern
       const config = PLATFORM_CONFIG[platform];
       if (config && config.docUrl && doc.did && doc.rkey) {
         return config.docUrl(doc.did, doc.rkey);
-      }
-      // universal fallback: link to AT-URI viewer
-      if (doc.uri) {
-        return `https://pdsls.dev/${doc.uri}`;
       }
       return null;
     }
