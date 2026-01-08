@@ -65,7 +65,8 @@ const Doc = struct {
 
 const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
-    \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path
     \\FROM documents d
@@ -78,7 +79,8 @@ const DocsByTag = zql.Query(
 const DocsByFtsAndTag = zql.Query(
     \\SELECT f.uri, d.did, d.title,
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
-    \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path
     \\FROM documents_fts f
@@ -92,7 +94,8 @@ const DocsByFtsAndTag = zql.Query(
 const DocsByFts = zql.Query(
     \\SELECT f.uri, d.did, d.title,
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
-    \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path
     \\FROM documents_fts f
@@ -228,7 +231,8 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     // brute-force cosine similarity search (no vector index needed)
     var res = c.query(
         \\SELECT d2.uri, d2.did, d2.title, '' as snippet,
-        \\  d2.created_at, d2.rkey, COALESCE(p.base_path, '') as base_path,
+        \\  d2.created_at, d2.rkey,
+        \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d2.did LIMIT 1), '') as base_path,
         \\  CASE WHEN d2.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
         \\  d2.platform, COALESCE(d2.path, '') as path
         \\FROM documents d1, documents d2
