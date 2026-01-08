@@ -45,6 +45,7 @@ pub const ExtractedDocument = struct {
     tags: [][]const u8,
     platform: Platform,
     source_collection: []const u8,
+    path: ?[]const u8, // URL path from record (e.g., "/001" for zat.dev)
 
     pub fn deinit(self: *ExtractedDocument) void {
         self.allocator.free(self.content);
@@ -94,6 +95,9 @@ pub fn extractDocument(
         zat.json.getString(record_val, "site") orelse
         zat.json.getString(record_val, "site.uri");
 
+    // extract URL path (site.standard.document uses "path" field like "/001")
+    const path = zat.json.getString(record_val, "path");
+
     // extract tags - allocate owned slice
     const tags = try extractTags(allocator, record_val);
     errdefer allocator.free(tags);
@@ -110,6 +114,7 @@ pub fn extractDocument(
         .tags = tags,
         .platform = platform,
         .source_collection = collection,
+        .path = path,
     };
 }
 

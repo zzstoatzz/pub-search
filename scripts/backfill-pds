@@ -113,8 +113,8 @@ def extract_document(record: dict, collection: str) -> dict | None:
     if not title:
         return None
 
-    # Get content - try multiple field names
-    content = value.get("content") or value.get("text") or ""
+    # Get content - try textContent (site.standard), then content/text
+    content = value.get("textContent") or value.get("content") or value.get("text") or ""
     if isinstance(content, dict):
         # Handle richtext format
         content = content.get("text", "")
@@ -122,11 +122,17 @@ def extract_document(record: dict, collection: str) -> dict | None:
     # Get created_at
     created_at = value.get("createdAt", "")
 
-    # Get publication reference
-    publication = value.get("publication")
+    # Get publication reference - try "publication" (leaflet) then "site" (site.standard)
+    publication = value.get("publication") or value.get("site")
     publication_uri = None
-    if publication and isinstance(publication, dict):
-        publication_uri = publication.get("uri")
+    if publication:
+        if isinstance(publication, dict):
+            publication_uri = publication.get("uri")
+        elif isinstance(publication, str):
+            publication_uri = publication
+
+    # Get URL path (site.standard.document uses "path" field like "/001")
+    path = value.get("path")
 
     # Get tags
     tags = value.get("tags", [])
@@ -150,6 +156,7 @@ def extract_document(record: dict, collection: str) -> dict | None:
         "tags": tags,
         "platform": platform,
         "collection": collection,
+        "path": path,
     }
 
 
@@ -226,8 +233,8 @@ def main():
                     turso_exec(
                         settings,
                         """
-                        INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(did, rkey) DO UPDATE SET
                             uri = excluded.uri,
                             title = excluded.title,
@@ -235,9 +242,10 @@ def main():
                             created_at = excluded.created_at,
                             publication_uri = excluded.publication_uri,
                             platform = excluded.platform,
-                            source_collection = excluded.source_collection
+                            source_collection = excluded.source_collection,
+                            path = excluded.path
                         """,
-                        [uri, did, rkey, doc["title"], doc["content"], doc["created_at"], doc["publication_uri"], doc["platform"], doc["collection"]],
+                        [uri, did, rkey, doc["title"], doc["content"], doc["created_at"], doc["publication_uri"], doc["platform"], doc["collection"], doc["path"]],
                     )
                     # Insert tags
                     for tag in doc["tags"]:
@@ -260,7 +268,18 @@ def main():
                 value = record["value"]
                 name = value.get("name", "")
                 description = value.get("description")
+                # base_path: try leaflet's "base_path", then strip scheme from site.standard's "url"
                 base_path = value.get("base_path")
+                if not base_path:
+                    url = value.get("url")
+                    if url:
+                        # Strip https:// or http:// prefix
+                        if url.startswith("https://"):
+                            base_path = url[len("https://"):]
+                        elif url.startswith("http://"):
+                            base_path = url[len("http://"):]
+                        else:
+                            base_path = url
 
                 if args.dry_run:
                     print(f"  would insert pub: {name}")

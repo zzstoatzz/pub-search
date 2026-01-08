@@ -158,4 +158,8 @@ fn runMigrations(client: *Client) !void {
         \\WHERE platform IN ('standardsite', 'unknown')
         \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%')
     , &.{}) catch {};
+
+    // URL path field for documents (e.g., "/001" for zat.dev)
+    // used to build full URL: publication.url + document.path
+    client.exec("ALTER TABLE documents ADD COLUMN path TEXT", &.{}) catch {};
 }

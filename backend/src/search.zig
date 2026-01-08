@@ -16,6 +16,7 @@ const SearchResultJson = struct {
     rkey: []const u8,
     basePath: []const u8,
     platform: []const u8,
+    path: []const u8 = "", // URL path from record (e.g., "/001")
 };
 
 /// Document search result (internal)
@@ -29,6 +30,7 @@ const Doc = struct {
     basePath: []const u8,
     hasPublication: bool,
     platform: []const u8,
+    path: []const u8,
 
     fn fromRow(row: db.Row) Doc {
         return .{
@@ -41,6 +43,7 @@ const Doc = struct {
             .basePath = row.text(6),
             .hasPublication = row.int(7) != 0,
             .platform = row.text(8),
+            .path = row.text(9),
         };
     }
 
@@ -55,6 +58,7 @@ const Doc = struct {
             .rkey = self.rkey,
             .basePath = self.basePath,
             .platform = self.platform,
+            .path = self.path,
         };
     }
 };
@@ -63,7 +67,7 @@ const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
-    \\  d.platform
+    \\  d.platform, COALESCE(d.path, '') as path
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
@@ -76,7 +80,7 @@ const DocsByFtsAndTag = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
-    \\  d.platform
+    \\  d.platform, COALESCE(d.path, '') as path
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
@@ -90,7 +94,7 @@ const DocsByFts = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, COALESCE(p.base_path, '') as base_path,
     \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
-    \\  d.platform
+    \\  d.platform, COALESCE(d.path, '') as path
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
@@ -226,7 +230,7 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
         \\SELECT d2.uri, d2.did, d2.title, '' as snippet,
         \\  d2.created_at, d2.rkey, COALESCE(p.base_path, '') as base_path,
         \\  CASE WHEN d2.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
-        \\  d2.platform
+        \\  d2.platform, COALESCE(d2.path, '') as path
         \\FROM documents d1, documents d2
         \\LEFT JOIN publications p ON d2.publication_uri = p.uri
         \\WHERE d1.uri = ?

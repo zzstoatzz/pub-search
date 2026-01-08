@@ -512,7 +512,12 @@
       if (entityType === 'publication') {
         return doc.basePath ? `https://${doc.basePath}` : null;
       }
-      // documents: prefer basePath from publication
+      // documents: prefer basePath + path (from record) over rkey
+      if (doc.basePath && doc.path) {
+        // path already includes leading slash (e.g., "/001")
+        return `https://${doc.basePath}${doc.path}`;
+      }
+      // fallback to basePath + rkey (legacy pattern)
       if (doc.basePath && doc.rkey) {
         return `https://${doc.basePath}/${doc.rkey}`;
       }

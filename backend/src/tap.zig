@@ -264,6 +264,7 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.tags,
         doc.platformName(),
         doc.source_collection,
+        doc.path,
     );
     std.debug.print("indexed document: {s} [{s}] ({} chars, {} tags)\n", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
 }
