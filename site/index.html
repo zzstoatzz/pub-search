@@ -577,6 +577,10 @@
     }
 
     function setTag(tag) {
+      if (currentTag === tag) {
+        clearTag();
+        return;
+      }
       currentTag = tag;
       renderActiveFilter();
       renderTags();
