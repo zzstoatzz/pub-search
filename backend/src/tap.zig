@@ -217,9 +217,9 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     // validate DID
     const did = zat.Did.parse(rec.did) orelse return;
 
-    // build AT-URI string
-    const uri = try std.fmt.allocPrint(allocator, "at://{s}/{s}/{s}", .{ did.raw, rec.collection, rec.rkey });
-    defer allocator.free(uri);
+    // build AT-URI string (no allocation - uses stack buffer)
+    var uri_buf: [256]u8 = undefined;
+    const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse return;
 
     if (rec.isCreate() or rec.isUpdate()) {
         const inner_record = zat.json.getObject(parsed.value, "record.record") orelse return;
