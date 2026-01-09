@@ -104,6 +104,54 @@ def turso_exec(settings: Settings, sql: str, args: list | None = None) -> None:
     response.raise_for_status()
 
 
+def extract_leaflet_blocks(pages: list) -> str:
+    """Extract text from leaflet pages/blocks structure."""
+    texts = []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        blocks = page.get("blocks", [])
+        for wrapper in blocks:
+            if not isinstance(wrapper, dict):
+                continue
+            block = wrapper.get("block", {})
+            if not isinstance(block, dict):
+                continue
+            # Extract plaintext from text, header, blockquote, code blocks
+            block_type = block.get("$type", "")
+            if block_type in (
+                "pub.leaflet.blocks.text",
+                "pub.leaflet.blocks.header",
+                "pub.leaflet.blocks.blockquote",
+                "pub.leaflet.blocks.code",
+            ):
+                plaintext = block.get("plaintext", "")
+                if plaintext:
+                    texts.append(plaintext)
+            # Handle lists
+            elif block_type == "pub.leaflet.blocks.unorderedList":
+                texts.extend(extract_list_items(block.get("children", [])))
+    return " ".join(texts)
+
+
+def extract_list_items(children: list) -> list[str]:
+    """Recursively extract text from list items."""
+    texts = []
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        content = child.get("content", {})
+        if isinstance(content, dict):
+            plaintext = content.get("plaintext", "")
+            if plaintext:
+                texts.append(plaintext)
+        # Recurse into nested children
+        nested = child.get("children", [])
+        if nested:
+            texts.extend(extract_list_items(nested))
+    return texts
+
+
 def extract_document(record: dict, collection: str) -> dict | None:
     """Extract document fields from a record."""
     value = record.get("value", {})
@@ -113,8 +161,16 @@ def extract_document(record: dict, collection: str) -> dict | None:
     if not title:
         return None
 
-    # Get content - try textContent (site.standard), then content/text
-    content = value.get("textContent") or value.get("content") or value.get("text") or ""
+    # Get content - try textContent (site.standard), then leaflet blocks, then content/text
+    content = value.get("textContent") or ""
+    if not content:
+        # Try leaflet-style pages/blocks
+        pages = value.get("pages", [])
+        if pages:
+            content = extract_leaflet_blocks(pages)
+    if not content:
+        # Fall back to simple content/text fields
+        content = value.get("content") or value.get("text") or ""
     if isinstance(content, dict):
         # Handle richtext format
         content = content.get("text", "")
