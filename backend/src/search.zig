@@ -119,6 +119,46 @@ const DocsByFtsAndPlatform = zql.Query(
     \\ORDER BY rank LIMIT 40
 );
 
+const DocsByTagAndPlatform = zql.Query(
+    \\SELECT d.uri, d.did, d.title, '' as snippet,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN document_tags dt ON d.uri = dt.document_uri
+    \\WHERE dt.tag = :tag AND d.platform = :platform
+    \\ORDER BY d.created_at DESC LIMIT 40
+);
+
+const DocsByFtsAndTagAndPlatform = zql.Query(
+    \\SELECT f.uri, d.did, d.title,
+    \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents_fts f
+    \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN document_tags dt ON d.uri = dt.document_uri
+    \\WHERE documents_fts MATCH :query AND dt.tag = :tag AND d.platform = :platform
+    \\ORDER BY rank LIMIT 40
+);
+
+const DocsByPlatform = zql.Query(
+    \\SELECT d.uri, d.did, d.title, '' as snippet,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\WHERE d.platform = :platform
+    \\ORDER BY d.created_at DESC LIMIT 40
+);
+
 /// Publication search result (internal)
 const Pub = struct {
     uri: []const u8,
@@ -175,16 +215,31 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     try jw.beginArray();
 
     const fts_query = try buildFtsQuery(alloc, query);
+    const has_query = query.len > 0;
+    const has_tag = tag_filter != null;
+    const has_platform = platform_filter != null;
 
-    // search documents
-    var doc_result = if (query.len == 0 and tag_filter != null)
+    // search documents - handle all filter combinations
+    var doc_result = if (has_query and has_tag and has_platform)
+        c.query(DocsByFtsAndTagAndPlatform.positional, DocsByFtsAndTagAndPlatform.bind(.{
+            .query = fts_query,
+            .tag = tag_filter.?,
+            .platform = platform_filter.?,
+        })) catch null
+    else if (has_query and has_tag)
+        c.query(DocsByFtsAndTag.positional, DocsByFtsAndTag.bind(.{ .query = fts_query, .tag = tag_filter.? })) catch null
+    else if (has_query and has_platform)
+        c.query(DocsByFtsAndPlatform.positional, DocsByFtsAndPlatform.bind(.{ .query = fts_query, .platform = platform_filter.? })) catch null
+    else if (has_query)
+        c.query(DocsByFts.positional, DocsByFts.bind(.{ .query = fts_query })) catch null
+    else if (has_tag and has_platform)
+        c.query(DocsByTagAndPlatform.positional, DocsByTagAndPlatform.bind(.{ .tag = tag_filter.?, .platform = platform_filter.? })) catch null
+    else if (has_tag)
         c.query(DocsByTag.positional, DocsByTag.bind(.{ .tag = tag_filter.? })) catch null
-    else if (tag_filter) |tag|
-        c.query(DocsByFtsAndTag.positional, DocsByFtsAndTag.bind(.{ .query = fts_query, .tag = tag })) catch null
-    else if (platform_filter) |pf|
-        c.query(DocsByFtsAndPlatform.positional, DocsByFtsAndPlatform.bind(.{ .query = fts_query, .platform = pf })) catch null
+    else if (has_platform)
+        c.query(DocsByPlatform.positional, DocsByPlatform.bind(.{ .platform = platform_filter.? })) catch null
     else
-        c.query(DocsByFts.positional, DocsByFts.bind(.{ .query = fts_query })) catch null;
+        null; // no filters at all - return empty
 
     if (doc_result) |*res| {
         defer res.deinit();
