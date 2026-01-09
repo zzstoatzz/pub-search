@@ -571,7 +571,13 @@
         return `https://${doc.basePath}${doc.path}`;
       }
 
-      // 4. Fallback: pdsls.dev universal viewer (always works for any AT Protocol record)
+      // 4. Platform-specific fallback URL (e.g., leaflet.pub/p/did/rkey)
+      const config = PLATFORM_CONFIG[platform];
+      if (config?.docUrl && doc.did && doc.rkey) {
+        return config.docUrl(doc.did, doc.rkey);
+      }
+
+      // 5. Fallback: pdsls.dev universal viewer (always works for any AT Protocol record)
       if (doc.uri) {
         return `https://pdsls.dev/${doc.uri}`;
       }
