@@ -183,35 +183,10 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 
     if (!mem.eql(u8, msg_type, "record")) return;
 
-    // extract record envelope manually (zat.extractAt was failing)
-    const record_obj = zat.json.getObject(parsed.value, "record") orelse {
-        std.debug.print("tap: no 'record' object in message\n", .{});
+    // extract record envelope (extractAt ignores extra fields like live, rev, cid)
+    const rec = zat.json.extractAt(TapRecord, allocator, parsed.value, .{"record"}) catch |err| {
+        std.debug.print("tap: failed to extract record: {}\n", .{err});
         return;
-    };
-    const record_val: json.Value = .{ .object = record_obj };
-
-    const collection = zat.json.getString(record_val, "collection") orelse {
-        std.debug.print("tap: record missing collection\n", .{});
-        return;
-    };
-    const action = zat.json.getString(record_val, "action") orelse {
-        std.debug.print("tap: record missing action\n", .{});
-        return;
-    };
-    const did_str = zat.json.getString(record_val, "did") orelse {
-        std.debug.print("tap: record missing did\n", .{});
-        return;
-    };
-    const rkey = zat.json.getString(record_val, "rkey") orelse {
-        std.debug.print("tap: record missing rkey\n", .{});
-        return;
-    };
-
-    const rec = TapRecord{
-        .collection = collection,
-        .action = action,
-        .did = did_str,
-        .rkey = rkey,
     };
 
     // validate DID
