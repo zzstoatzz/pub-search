@@ -7,7 +7,7 @@ MCP server for [pub search](https://pub-search.waow.tech) - search ATProto publi
 ### hosted (recommended)
 
 ```bash
-claude mcp add-json leaflet-search '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
+claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'
 ```
 
 ### local
@@ -15,13 +15,13 @@ claude mcp add-json leaflet-search '{"type": "http", "url": "https://leaflet-sea
 run the MCP server locally with `uvx`:
 
 ```bash
-uvx --from git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp leaflet-mcp
+uvx --from git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp pub-search
 ```
 
 to add it to claude code as a local stdio server:
 
 ```bash
-claude mcp add leaflet-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp' leaflet-mcp
+claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp' pub-search
 ```
 
 ## workflow

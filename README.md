@@ -19,7 +19,7 @@ search ATProto publishing platforms ([leaflet](https://leaflet.pub), [pckt](http
 search is also exposed as an MCP server for AI agents like Claude Code:
 
 ```bash
-claude mcp add-json leaflet-search '{"type": "http", "url": "https://leaflet-search-by-zzstoatzz.fastmcp.app/mcp"}'
+claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'
 ```
 
 see [mcp/README.md](mcp/README.md) for local setup and usage details.

@@ -1,4 +1,4 @@
-"""Leaflet MCP server implementation using fastmcp."""
+"""MCP server for searching ATProto publishing platforms."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from leaflet_mcp._types import Document, PopularSearch, SearchResult, Stats, Tag
-from leaflet_mcp.client import get_http_client
+from pub_search._types import Document, PopularSearch, SearchResult, Stats, Tag
+from pub_search.client import get_http_client
 
-mcp = FastMCP("leaflet")
+mcp = FastMCP("pub-search")
 
 
 # -----------------------------------------------------------------------------
@@ -19,12 +19,11 @@ mcp = FastMCP("leaflet")
 
 @mcp.prompt("usage_guide")
 def usage_guide() -> str:
-    """instructions for using leaflet MCP tools."""
+    """instructions for using pub-search MCP tools."""
     return """\
-# Leaflet MCP server usage guide
+# pub-search MCP usage guide
 
-Leaflet is a decentralized publishing platform on ATProto (the protocol behind Bluesky).
-This MCP server provides search and discovery tools for Leaflet publications.
+search documents across ATProto publishing platforms including Leaflet, pckt, and others.
 
 ## core tools
 
@@ -53,7 +52,7 @@ search returns three types of results:
 documents are identified by AT-URIs like:
   `at://did:plc:abc123/pub.leaflet.document/xyz789`
 
-you can also browse documents on the web at leaflet.pub
+browse the web UI at pub-search.waow.tech
 """
 
 
@@ -61,7 +60,7 @@ you can also browse documents on the web at leaflet.pub
 def search_tips() -> str:
     """tips for effective searching."""
     return """\
-# Leaflet search tips
+# search tips
 
 ## text search
 - searches both document titles and content
@@ -95,7 +94,7 @@ async def search(
     tag: str | None = None,
     limit: int = 5,
 ) -> list[SearchResult]:
-    """search leaflet documents and publications.
+    """search documents and publications.
 
     searches the full text of documents (titles and content) and publications.
     results include a snippet showing where the match was found.
@@ -231,7 +230,7 @@ async def get_tags() -> list[Tag]:
 
 @mcp.tool
 async def get_stats() -> Stats:
-    """get leaflet index statistics.
+    """get index statistics.
 
     returns:
         document and publication counts
@@ -246,7 +245,7 @@ async def get_stats() -> Stats:
 async def get_popular(limit: int = 5) -> list[PopularSearch]:
     """get popular search queries.
 
-    see what others are searching for on leaflet.
+    see what others are searching for.
     can inspire new research directions.
 
     args:
@@ -268,11 +267,11 @@ async def get_popular(limit: int = 5) -> list[PopularSearch]:
 # -----------------------------------------------------------------------------
 
 
-@mcp.resource("leaflet://stats")
+@mcp.resource("pub-search://stats")
 async def stats_resource() -> str:
-    """current leaflet index statistics."""
+    """current index statistics."""
     stats = await get_stats()
-    return f"Leaflet index: {stats.documents} documents, {stats.publications} publications"
+    return f"pub search index: {stats.documents} documents, {stats.publications} publications"
 
 
 # -----------------------------------------------------------------------------

@@ -1,13 +1,13 @@
 [project]
-name = "leaflet-mcp"
+name = "pub-search"
 dynamic = ["version"]
-description = "MCP server for Leaflet - search decentralized publications on ATProto"
+description = "MCP server for searching ATProto publishing platforms (Leaflet, pckt, and more)"
 readme = "README.md"
 authors = [{ name = "zzstoatzz", email = "thrast36@gmail.com" }]
 requires-python = ">=3.10"
 license = "MIT"
 
-keywords = ["leaflet", "mcp", "atproto", "publications", "search", "fastmcp"]
+keywords = ["pub-search", "mcp", "atproto", "publications", "search", "fastmcp", "leaflet", "pckt"]
 
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -27,14 +27,14 @@ dependencies = [
 ]
 
 [project.scripts]
-leaflet-mcp = "leaflet_mcp.server:main"
+pub-search = "pub_search.server:main"
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning>=0.7.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/leaflet_mcp"]
+packages = ["src/pub_search"]
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"

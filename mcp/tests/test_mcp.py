@@ -1,4 +1,4 @@
-"""tests for leaflet MCP server."""
+"""tests for pub-search MCP server."""
 
 import pytest
 from mcp.types import TextContent
@@ -6,8 +6,8 @@ from mcp.types import TextContent
 from fastmcp.client import Client
 from fastmcp.client.transports import FastMCPTransport
 
-from leaflet_mcp._types import Document, PopularSearch, SearchResult, Stats, Tag
-from leaflet_mcp.server import mcp
+from pub_search._types import Document, PopularSearch, SearchResult, Stats, Tag
+from pub_search.server import mcp
 
 
 class TestTypes:
@@ -93,13 +93,13 @@ class TestMcpServerImports:
 
     def test_mcp_server_imports(self):
         """mcp server can be imported without errors."""
-        from leaflet_mcp import mcp
+        from pub_search import mcp
 
-        assert mcp.name == "leaflet"
+        assert mcp.name == "pub-search"
 
     def test_exports(self):
         """all expected exports are available."""
-        from leaflet_mcp import main, mcp
+        from pub_search import main, mcp
 
         assert mcp is not None
         assert main is not None
@@ -138,7 +138,7 @@ class TestMcpServerRegistration:
             resources = await client.list_resources()
 
         resource_uris = {str(r.uri) for r in resources}
-        assert "leaflet://stats" in resource_uris
+        assert "pub-search://stats" in resource_uris
 
     async def test_usage_guide_prompt_content(self, client):
         """usage_guide prompt returns helpful content."""
@@ -148,7 +148,7 @@ class TestMcpServerRegistration:
         assert len(result.messages) > 0
         content = result.messages[0].content
         assert isinstance(content, TextContent)
-        assert "Leaflet" in content.text
+        assert "pub-search" in content.text
         assert "search" in content.text
 
     async def test_search_tips_prompt_content(self, client):
