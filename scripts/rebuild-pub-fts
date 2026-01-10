@@ -1,0 +1,86 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Rebuild publications_fts with base_path column for subdomain search."""
+import os
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+settings = Settings()  # type: ignore
+
+print("Rebuilding publications_fts with base_path column...")
+
+response = httpx.post(
+    f"https://{settings.turso_host}/v2/pipeline",
+    headers={
+        "Authorization": f"Bearer {settings.turso_token}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "requests": [
+            {"type": "execute", "stmt": {"sql": "DROP TABLE IF EXISTS publications_fts"}},
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": """
+                CREATE VIRTUAL TABLE publications_fts USING fts5(
+                    uri UNINDEXED,
+                    name,
+                    description,
+                    base_path
+                )
+            """
+                },
+            },
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": """
+                INSERT INTO publications_fts (uri, name, description, base_path)
+                SELECT uri, name, COALESCE(description, ''), COALESCE(base_path, '')
+                FROM publications
+            """
+                },
+            },
+            {"type": "execute", "stmt": {"sql": "SELECT COUNT(*) FROM publications_fts"}},
+            {"type": "close"},
+        ]
+    },
+    timeout=60,
+)
+response.raise_for_status()
+data = response.json()
+
+for i, result in enumerate(data["results"][:-1]):  # skip close
+    if result["type"] == "error":
+        print(f"Step {i} error: {result['error']}")
+    elif result["type"] == "ok":
+        if i == 3:  # count query
+            rows = result["response"]["result"].get("rows", [])
+            if rows:
+                count = (
+                    rows[0][0].get("value", rows[0][0])
+                    if isinstance(rows[0][0], dict)
+                    else rows[0][0]
+                )
+                print(f"Rebuilt with {count} publications")
+
+print("Done!")

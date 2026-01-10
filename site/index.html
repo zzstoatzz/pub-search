@@ -111,6 +111,12 @@
     .result-title {
       color: #fff;
       margin-bottom: 0.5rem;
+      /* prevent long titles from breaking layout */
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
     }
 
     .result-title a { color: inherit; }
@@ -383,6 +389,99 @@
     .active-filter .clear:hover {
       color: #c44;
     }
+
+    /* mobile improvements */
+    @media (max-width: 600px) {
+      body {
+        padding: 0.75rem;
+        font-size: 13px;
+      }
+
+      .container {
+        max-width: 100%;
+      }
+
+      /* ensure minimum 44px touch targets */
+      .tag, .platform-option, .suggestion {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+      }
+
+      button {
+        min-height: 44px;
+        padding: 0.5rem 0.75rem;
+      }
+
+      /* stack search box on very small screens */
+      .search-box {
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .search-box input[type="text"] {
+        width: 100%;
+      }
+
+      .search-box button {
+        width: 100%;
+      }
+
+      /* result card mobile tweaks */
+      .result {
+        padding: 0.75rem 0;
+      }
+
+      .result:hover {
+        margin: 0 -0.75rem;
+        padding: 0.75rem;
+      }
+
+      .result-title {
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .result-snippet {
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      /* badges inline on mobile */
+      .entity-type, .platform-badge {
+        font-size: 9px;
+        padding: 2px 5px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
+      /* tags wrap better on mobile */
+      .tags-list, .platform-filter-list {
+        gap: 0.5rem;
+      }
+
+      /* suggestions responsive */
+      .suggestions {
+        line-height: 2;
+      }
+
+      /* related items more compact */
+      .related-item {
+        max-width: 150px;
+        font-size: 11px;
+        padding: 0.5rem;
+      }
+    }
+
+    /* ensure touch targets on tablets too */
+    @media (hover: none) and (pointer: coarse) {
+      .tag, .platform-option, .suggestion, .related-item {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+      }
+    }
   </style>
 </head>
 <body>
@@ -460,7 +559,7 @@
         if (results.length === 0) {
           resultsDiv.innerHTML = `
             <div class="empty-state">
-              <p>no results${query ? ` for "${escapeHtml(query)}"` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
+              <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
               <p>try different keywords</p>
             </div>
           `;
@@ -524,6 +623,17 @@
       return str.replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       })[c]);
+    }
+
+    // display query without adding redundant quotes
+    function formatQueryForDisplay(query) {
+      if (!query) return '';
+      const escaped = escapeHtml(query);
+      // if query is already fully quoted, don't add more quotes
+      if (query.startsWith('"') && query.endsWith('"')) {
+        return escaped;
+      }
+      return `"${escaped}"`;
     }
 
     // platform-specific URL patterns

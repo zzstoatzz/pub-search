@@ -81,11 +81,11 @@ pub fn insertPublication(
         &.{ uri, did, rkey, name, description orelse "", base_path orelse "" },
     );
 
-    // update FTS index
+    // update FTS index (includes base_path for subdomain search)
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
     c.exec(
-        "INSERT INTO publications_fts (uri, name, description) VALUES (?, ?, ?)",
-        &.{ uri, name, description orelse "" },
+        "INSERT INTO publications_fts (uri, name, description, base_path) VALUES (?, ?, ?, ?)",
+        &.{ uri, name, description orelse "", base_path orelse "" },
     ) catch {};
 }
 

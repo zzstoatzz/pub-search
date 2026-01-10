@@ -44,7 +44,8 @@ fn createTables(client: *Client) !void {
         \\CREATE VIRTUAL TABLE IF NOT EXISTS publications_fts USING fts5(
         \\  uri UNINDEXED,
         \\  name,
-        \\  description
+        \\  description,
+        \\  base_path
         \\)
     , &.{});
 
@@ -162,4 +163,7 @@ fn runMigrations(client: *Client) !void {
     // URL path field for documents (e.g., "/001" for zat.dev)
     // used to build full URL: publication.url + document.path
     client.exec("ALTER TABLE documents ADD COLUMN path TEXT", &.{}) catch {};
+
+    // note: publications_fts was rebuilt with base_path column via scripts/rebuild-pub-fts
+    // new publications will include base_path via insertPublication in indexer.zig
 }

@@ -159,6 +159,34 @@ const DocsByPlatform = zql.Query(
     \\ORDER BY d.created_at DESC LIMIT 40
 );
 
+// Find documents by their publication's base_path (subdomain search)
+// e.g., searching "gyst" finds all docs on gyst.leaflet.pub
+const DocsByPubBasePath = zql.Query(
+    \\SELECT d.uri, d.did, d.title, '' as snippet,
+    \\  d.created_at, d.rkey,
+    \\  p.base_path,
+    \\  1 as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents d
+    \\JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN publications_fts pf ON p.uri = pf.uri
+    \\WHERE publications_fts MATCH :query
+    \\ORDER BY d.created_at DESC LIMIT 40
+);
+
+const DocsByPubBasePathAndPlatform = zql.Query(
+    \\SELECT d.uri, d.did, d.title, '' as snippet,
+    \\  d.created_at, d.rkey,
+    \\  p.base_path,
+    \\  1 as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents d
+    \\JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN publications_fts pf ON p.uri = pf.uri
+    \\WHERE publications_fts MATCH :query AND d.platform = :platform
+    \\ORDER BY d.created_at DESC LIMIT 40
+);
+
 /// Publication search result (internal)
 const Pub = struct {
     uri: []const u8,
@@ -219,7 +247,11 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     const has_tag = tag_filter != null;
     const has_platform = platform_filter != null;
 
-    // search documents - handle all filter combinations
+    // track seen URIs for deduplication (content match + base_path match)
+    var seen_uris = std.StringHashMap(void).init(alloc);
+    defer seen_uris.deinit();
+
+    // search documents by content (title, content) - handle all filter combinations
     var doc_result = if (has_query and has_tag and has_platform)
         c.query(DocsByFtsAndTagAndPlatform.positional, DocsByFtsAndTagAndPlatform.bind(.{
             .query = fts_query,
@@ -244,7 +276,35 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     if (doc_result) |*res| {
         defer res.deinit();
         for (res.rows) |row| {
-            try jw.write(Doc.fromRow(row).toJson());
+            const doc = Doc.fromRow(row);
+            // dupe URI for hash map (outlives result)
+            const uri_dupe = try alloc.dupe(u8, doc.uri);
+            try seen_uris.put(uri_dupe, {});
+            try jw.write(doc.toJson());
+        }
+    }
+
+    // also search documents by publication base_path (subdomain search)
+    // e.g., "gyst" finds all docs on gyst.leaflet.pub even if content doesn't contain "gyst"
+    // skip if tag filter is set (tag filter is content-specific)
+    if (has_query and !has_tag) {
+        var basepath_result = if (has_platform)
+            c.query(DocsByPubBasePathAndPlatform.positional, DocsByPubBasePathAndPlatform.bind(.{
+                .query = fts_query,
+                .platform = platform_filter.?,
+            })) catch null
+        else
+            c.query(DocsByPubBasePath.positional, DocsByPubBasePath.bind(.{ .query = fts_query })) catch null;
+
+        if (basepath_result) |*res| {
+            defer res.deinit();
+            for (res.rows) |row| {
+                const doc = Doc.fromRow(row);
+                // deduplicate: skip if already found by content search
+                if (!seen_uris.contains(doc.uri)) {
+                    try jw.write(doc.toJson());
+                }
+            }
         }
     }
 
