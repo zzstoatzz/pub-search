@@ -439,12 +439,13 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     }
 
     // count words and total length
+    // match FTS5 unicode61 tokenizer: non-alphanumeric = separator
     var word_count: usize = 0;
     var total_word_len: usize = 0;
     var in_word = false;
     for (trimmed) |c| {
-        const is_sep = (c == ' ' or c == '.');
-        if (is_sep) {
+        const is_alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
+        if (!is_alnum) {
             in_word = false;
         } else {
             if (!in_word) word_count += 1;
@@ -460,7 +461,8 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
         const buf = try alloc.alloc(u8, total_word_len + 1);
         var pos: usize = 0;
         for (trimmed) |c| {
-            if (c != ' ' and c != '.') {
+            const is_alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
+            if (is_alnum) {
                 buf[pos] = c;
                 pos += 1;
             }
@@ -479,8 +481,8 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     in_word = false;
 
     for (trimmed) |c| {
-        const is_sep = (c == ' ' or c == '.');
-        if (is_sep) {
+        const is_alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
+        if (!is_alnum) {
             if (in_word) {
                 // end of word - add " OR " if not last
                 current_word += 1;
@@ -546,4 +548,16 @@ test "buildFtsQuery: dots as separators" {
     const result = try buildFtsQuery(std.testing.allocator, "foo.bar");
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("foo OR bar*", result);
+}
+
+test "buildFtsQuery: hyphens as separators" {
+    const result = try buildFtsQuery(std.testing.allocator, "crypto-casino");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("crypto OR casino*", result);
+}
+
+test "buildFtsQuery: mixed punctuation" {
+    const result = try buildFtsQuery(std.testing.allocator, "don't@stop_now");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("don OR t OR stop OR now*", result);
 }
