@@ -27,7 +27,7 @@ normal:
 
 # check indexing status - shows most recent indexed documents
 check:
-    @echo "=== TAP Status ==="
+    @echo "=== tap status ==="
     @fly status --app leaflet-search-tap 2>/dev/null | grep -E "(STATE|started|stopped)"
     @echo ""
     @echo "=== Recent Indexing Activity ==="

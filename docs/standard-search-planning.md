@@ -221,7 +221,7 @@ breaking work into reviewable chunks:
 - keep existing block parser for `pub.leaflet.*`
 - platform detection from `content.$type`
 
-### PR3: TAP subscriber for site.standard.document
+### PR3: tap subscriber for site.standard.document
 - subscribe to `site.standard.document` + `site.standard.publication`
 - route to appropriate extractor
 - starts ingesting pckt.blog content
@@ -254,7 +254,7 @@ breaking work into reviewable chunks:
 2. ~~find and examine offprint records~~ (done - no public content yet)
 3. ~~PR1: database schema~~ (merged)
 4. PR2: generalized content extraction
-5. PR3: TAP subscriber
+5. PR3: tap subscriber
 6. PR4: API platform filter
 7. consider witness cache architecture (see below)
 
@@ -275,7 +275,7 @@ breaking work into reviewable chunks:
 ### current leaflet-search architecture (no witness cache)
 
 ```
-Firehose → TAP → Parse & Transform → Store DERIVED data → Discard raw record
+Firehose → tap → Parse & Transform → Store DERIVED data → Discard raw record
 ```
 
 we store:

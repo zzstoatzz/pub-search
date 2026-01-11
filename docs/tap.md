@@ -1,23 +1,23 @@
 # tap (firehose sync)
 
-leaflet-search uses [TAP](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) from bluesky-social/indigo to receive real-time events from the ATProto firehose.
+leaflet-search uses [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) from bluesky-social/indigo to receive real-time events from the ATProto firehose.
 
 ## what is tap?
 
 tap subscribes to the ATProto firehose, filters for specific collections (e.g., `pub.leaflet.document`), and broadcasts matching events to websocket clients. it also does initial crawling/backfilling of existing records.
 
-key behavior: **TAP backfills historical data when repos are added**. when a repo is added to tracking:
-1. TAP fetches the full repo from the account's PDS using `com.atproto.sync.getRepo`
+key behavior: **tap backfills historical data when repos are added**. when a repo is added to tracking:
+1. tap fetches the full repo from the account's PDS using `com.atproto.sync.getRepo`
 2. live firehose events during backfill are buffered in memory
 3. historical events (marked `live: false`) are delivered first
 4. after historical events complete, buffered live events are released
 5. subsequent firehose events arrive immediately marked as `live: true`
 
-TAP enforces strict per-repo ordering - live events are synchronization barriers that require all prior events to complete first.
+tap enforces strict per-repo ordering - live events are synchronization barriers that require all prior events to complete first.
 
 ## message format
 
-TAP sends JSON messages over websocket. record events look like:
+tap sends JSON messages over websocket. record events look like:
 
 ```json
 {
@@ -46,9 +46,9 @@ TAP sends JSON messages over websocket. record events look like:
 
 ## gotchas
 
-1. **action is a string, not an enum** - TAP sends `"action": "create"` as a JSON string. if your parser expects an enum type, extraction will silently fail. use string comparison.
+1. **action is a string, not an enum** - tap sends `"action": "create"` as a JSON string. if your parser expects an enum type, extraction will silently fail. use string comparison.
 
-2. **collection filters apply to output** - `TAP_COLLECTION_FILTERS` controls which records TAP sends to clients. records from other collections are fetched but not forwarded.
+2. **collection filters apply to output** - `TAP_COLLECTION_FILTERS` controls which records tap sends to clients. records from other collections are fetched but not forwarded.
 
 3. **signal collection vs collection filters** - `TAP_SIGNAL_COLLECTION` controls auto-discovery of repos (which repos to track), while `TAP_COLLECTION_FILTERS` controls which records from those repos to output. a repo must either be auto-discovered via signal collection OR manually added via `/repos/add`.
 
@@ -65,7 +65,7 @@ TAP sends JSON messages over websocket. record events look like:
 
 ## memory and performance tuning
 
-TAP loads **entire repo CARs into memory** during resync. some bsky users have repos that are 100-300MB+. this causes spiky memory usage that can OOM the machine.
+tap loads **entire repo CARs into memory** during resync. some bsky users have repos that are 100-300MB+. this causes spiky memory usage that can OOM the machine.
 
 ### recommended settings for leaflet-search
 
@@ -87,7 +87,7 @@ TAP loads **entire repo CARs into memory** during resync. some bsky users have r
 - **lower firehose/outbox**: we track ~1000 repos, not millions - defaults are overkill
 - **smaller ident cache**: we don't need 2M cached identities
 
-if TAP keeps OOM'ing, check logs for large repo resyncs:
+if tap keeps OOM'ing, check logs for large repo resyncs:
 ```bash
 fly logs -a leaflet-search-tap | grep "parsing repo CAR" | grep -E "size\":[0-9]{8,}"
 ```
@@ -99,11 +99,11 @@ from the `tap/` directory:
 just check
 ```
 
-shows TAP machine state, most recent indexed date, and 7-day timeline. useful for verifying indexing is working after restarts.
+shows tap machine state, most recent indexed date, and 7-day timeline. useful for verifying indexing is working after restarts.
 
 example output:
 ```
-=== TAP Status ===
+=== tap status ===
 app    781417db604d48  23  ewr  started  ...
 
 === Recent Indexing Activity ===
@@ -117,18 +117,18 @@ Docs: 3742 | Pubs: 1231
 ...
 ```
 
-if "Last indexed" is more than a day behind "Today", TAP may be down or catching up.
+if "Last indexed" is more than a day behind "Today", tap may be down or catching up.
 
 ## checking catch-up progress
 
-when TAP restarts after downtime, it replays the firehose from its saved cursor. to check progress:
+when tap restarts after downtime, it replays the firehose from its saved cursor. to check progress:
 
 ```bash
 # see current firehose position (look for timestamps in log messages)
 fly logs -a leaflet-search-tap | grep -E '"time".*"seq"' | tail -3
 ```
 
-the `"time"` field in log messages shows how far behind TAP is. compare to current time to estimate catch-up.
+the `"time"` field in log messages shows how far behind tap is. compare to current time to estimate catch-up.
 
 catch-up speed varies:
 - **~0.3x** when resync queue is full (large repos being fetched)
@@ -143,7 +143,7 @@ fly logs -a leaflet-search-tap --no-tail | tail -30
 
 look for:
 - `"connected to firehose"` - successfully connected to bsky relay
-- `"websocket connected"` - backend connected to TAP
+- `"websocket connected"` - backend connected to tap
 - `"dialing failed"` / `"i/o timeout"` - network issues
 
 ### check backend is receiving
@@ -152,7 +152,7 @@ fly logs -a leaflet-search-backend --no-tail | grep -E "(tap|indexed)"
 ```
 
 look for:
-- `tap connected!` - connected to TAP
+- `tap connected!` - connected to tap
 - `tap: msg_type=record` - receiving messages
 - `indexed document:` - successfully processing
 
@@ -160,17 +160,17 @@ look for:
 
 | symptom | cause | fix |
 |---------|-------|-----|
-| TAP machine stopped, `oom_killed=true` | large repo CARs exhausted memory | increase memory to 2GB, reduce `TAP_RESYNC_PARALLELISM` to 1 |
-| `websocket handshake failed: error.Timeout` | TAP not running or network issue | restart TAP, check regions match |
-| `dialing failed: lookup ... i/o timeout` | DNS issues reaching bsky relay | restart TAP, transient network issue |
+| tap machine stopped, `oom_killed=true` | large repo CARs exhausted memory | increase memory to 2GB, reduce `TAP_RESYNC_PARALLELISM` to 1 |
+| `websocket handshake failed: error.Timeout` | tap not running or network issue | restart tap, check regions match |
+| `dialing failed: lookup ... i/o timeout` | DNS issues reaching bsky relay | restart tap, transient network issue |
 | messages received but not indexed | extraction failing (type mismatch) | enable zat debug logging, check field types |
-| repo shows `records: 0` after adding | resync failed or collection not in filters | check TAP logs for resync errors, verify `TAP_COLLECTION_FILTERS` |
-| new platform records not appearing | platform's collection not in `TAP_COLLECTION_FILTERS` | add collection to filters, restart TAP |
-| indexing stopped, TAP shows "started" | TAP catching up from downtime | check firehose position in logs, wait for catch-up |
+| repo shows `records: 0` after adding | resync failed or collection not in filters | check tap logs for resync errors, verify `TAP_COLLECTION_FILTERS` |
+| new platform records not appearing | platform's collection not in `TAP_COLLECTION_FILTERS` | add collection to filters, restart tap |
+| indexing stopped, tap shows "started" | tap catching up from downtime | check firehose position in logs, wait for catch-up |
 
-## TAP API endpoints
+## tap API endpoints
 
-TAP exposes HTTP endpoints for monitoring and control:
+tap exposes HTTP endpoints for monitoring and control:
 
 | endpoint | description |
 |----------|-------------|
@@ -196,14 +196,14 @@ fly ssh console -a leaflet-search-tap -C 'curl -X POST -H "Content-Type: applica
 
 ## fly.io deployment
 
-both TAP and backend should be in the same region for internal networking:
+both tap and backend should be in the same region for internal networking:
 
 ```bash
 # check current regions
 fly status -a leaflet-search-tap
 fly status -a leaflet-search-backend
 
-# restart TAP if needed
+# restart tap if needed
 fly machine restart -a leaflet-search-tap <machine-id>
 ```
 
@@ -211,5 +211,5 @@ note: changing `primary_region` in fly.toml only affects new machines. to move e
 
 ## references
 
-- [TAP source (bluesky-social/indigo)](https://github.com/bluesky-social/indigo/tree/main/cmd/tap)
+- [tap source (bluesky-social/indigo)](https://github.com/bluesky-social/indigo/tree/main/cmd/tap)
 - [ATProto firehose docs](https://atproto.com/specs/sync#firehose)

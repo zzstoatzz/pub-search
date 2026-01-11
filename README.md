@@ -47,8 +47,8 @@ the backend is fully configurable via environment variables:
 |----------|---------|-------------|
 | `APP_NAME` | `leaflet-search` | name shown in startup logs |
 | `DASHBOARD_URL` | `https://pub-search.waow.tech/dashboard.html` | redirect target for `/dashboard` |
-| `TAP_HOST` | `leaflet-search-tap.fly.dev` | TAP websocket host |
-| `TAP_PORT` | `443` | TAP websocket port |
+| `TAP_HOST` | `leaflet-search-tap.fly.dev` | tap websocket host |
+| `TAP_PORT` | `443` | tap websocket port |
 | `PORT` | `3000` | HTTP server port |
 | `TURSO_URL` | - | Turso database URL (required) |
 | `TURSO_TOKEN` | - | Turso auth token (required) |
@@ -61,7 +61,7 @@ the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `
 - [Fly.io](https://fly.io) hosts backend + tap
 - [Turso](https://turso.tech) cloud SQLite with vector support
 - [Voyage AI](https://voyageai.com) embeddings (voyage-3-lite)
-- [Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs content from ATProto firehose
+- [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs content from ATProto firehose
 - [Zig](https://ziglang.org) HTTP server, search API, content indexing
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend
 
