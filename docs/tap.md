@@ -63,6 +63,77 @@ TAP sends JSON messages over websocket. record events look like:
    debug(zat): extractAt: parse failed for Op at path { "op" }: InvalidEnumTag
    ```
 
+## memory and performance tuning
+
+TAP loads **entire repo CARs into memory** during resync. some bsky users have repos that are 100-300MB+. this causes spiky memory usage that can OOM the machine.
+
+### recommended settings for leaflet-search
+
+```toml
+[[vm]]
+  memory = '2gb'  # 1gb is not enough
+
+[env]
+  TAP_RESYNC_PARALLELISM = '1'      # only one repo CAR in memory at a time (default: 5)
+  TAP_FIREHOSE_PARALLELISM = '5'    # concurrent event processors (default: 10)
+  TAP_OUTBOX_CAPACITY = '10000'     # event buffer size (default: 100000)
+  TAP_IDENT_CACHE_SIZE = '10000'    # identity cache entries (default: 2000000)
+```
+
+### why these values?
+
+- **2GB memory**: 1GB causes OOM kills when resyncing large repos
+- **resync parallelism 1**: prevents multiple large CARs in memory simultaneously
+- **lower firehose/outbox**: we track ~1000 repos, not millions - defaults are overkill
+- **smaller ident cache**: we don't need 2M cached identities
+
+if TAP keeps OOM'ing, check logs for large repo resyncs:
+```bash
+fly logs -a leaflet-search-tap | grep "parsing repo CAR" | grep -E "size\":[0-9]{8,}"
+```
+
+## quick status check
+
+from the `tap/` directory:
+```bash
+just check
+```
+
+shows TAP machine state, most recent indexed date, and 7-day timeline. useful for verifying indexing is working after restarts.
+
+example output:
+```
+=== TAP Status ===
+app    781417db604d48  23  ewr  started  ...
+
+=== Recent Indexing Activity ===
+Last indexed: 2026-01-08 (14 docs)
+Today: 2026-01-11
+Docs: 3742 | Pubs: 1231
+
+=== Timeline (last 7 days) ===
+2026-01-08: 14 docs
+2026-01-07: 29 docs
+...
+```
+
+if "Last indexed" is more than a day behind "Today", TAP may be down or catching up.
+
+## checking catch-up progress
+
+when TAP restarts after downtime, it replays the firehose from its saved cursor. to check progress:
+
+```bash
+# see current firehose position (look for timestamps in log messages)
+fly logs -a leaflet-search-tap | grep -E '"time".*"seq"' | tail -3
+```
+
+the `"time"` field in log messages shows how far behind TAP is. compare to current time to estimate catch-up.
+
+catch-up speed varies:
+- **~0.3x** when resync queue is full (large repos being fetched)
+- **~1x or faster** once resyncs clear
+
 ## debugging
 
 ### check tap connection
@@ -89,11 +160,13 @@ look for:
 
 | symptom | cause | fix |
 |---------|-------|-----|
+| TAP machine stopped, `oom_killed=true` | large repo CARs exhausted memory | increase memory to 2GB, reduce `TAP_RESYNC_PARALLELISM` to 1 |
 | `websocket handshake failed: error.Timeout` | TAP not running or network issue | restart TAP, check regions match |
 | `dialing failed: lookup ... i/o timeout` | DNS issues reaching bsky relay | restart TAP, transient network issue |
 | messages received but not indexed | extraction failing (type mismatch) | enable zat debug logging, check field types |
 | repo shows `records: 0` after adding | resync failed or collection not in filters | check TAP logs for resync errors, verify `TAP_COLLECTION_FILTERS` |
 | new platform records not appearing | platform's collection not in `TAP_COLLECTION_FILTERS` | add collection to filters, restart TAP |
+| indexing stopped, TAP shows "started" | TAP catching up from downtime | check firehose position in logs, wait for catch-up |
 
 ## TAP API endpoints
 
