@@ -1,5 +1,30 @@
 # tap instance for leaflet-search
 
+# get machine id
+_machine_id := `fly status --app leaflet-search-tap --json 2>/dev/null | jq -r '.Machines[0].id'`
+
+# crank up parallelism for faster catch-up (uses more memory + CPU)
+turbo:
+    @echo "Switching to TURBO mode (4GB, 2 CPUs, higher parallelism)..."
+    fly machine update {{ _machine_id }} --app leaflet-search-tap \
+        --vm-memory 4096 \
+        --vm-cpus 2 \
+        -e TAP_RESYNC_PARALLELISM=4 \
+        -e TAP_FIREHOSE_PARALLELISM=10 \
+        --yes
+    @echo "TURBO mode enabled. Run 'just normal' when caught up."
+
+# restore normal settings (lower memory, conservative parallelism)
+normal:
+    @echo "Switching to NORMAL mode (2GB, 1 CPU, conservative parallelism)..."
+    fly machine update {{ _machine_id }} --app leaflet-search-tap \
+        --vm-memory 2048 \
+        --vm-cpus 1 \
+        -e TAP_RESYNC_PARALLELISM=1 \
+        -e TAP_FIREHOSE_PARALLELISM=5 \
+        --yes
+    @echo "NORMAL mode restored."
+
 # check indexing status - shows most recent indexed documents
 check:
     @echo "=== TAP Status ==="
