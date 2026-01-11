@@ -21,7 +21,7 @@ user query: "crypto-casino"
      ↓
 buildFtsQuery(): "crypto OR casino*"
      ↓
-FTS5 MATCH query with BM25 ranking
+FTS5 MATCH query with BM25 + recency decay
      ↓
 results with snippet()
 ```
@@ -30,6 +30,7 @@ key decisions:
 - **OR between terms** for better recall (deliberate, see commit 35ad4b5)
 - **prefix match on last word** for type-ahead feel
 - **unicode61 tokenizer** splits on non-alphanumeric (we match this in buildFtsQuery)
+- **recency decay** boosts recent docs: `ORDER BY rank + (days_old / 30)`
 
 ### what's coupled to FTS5
 

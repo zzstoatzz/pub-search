@@ -88,7 +88,7 @@ const DocsByFtsAndTag = zql.Query(
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE documents_fts MATCH :query AND dt.tag = :tag
-    \\ORDER BY rank LIMIT 40
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
 const DocsByFts = zql.Query(
@@ -102,7 +102,21 @@ const DocsByFts = zql.Query(
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query
-    \\ORDER BY rank LIMIT 40
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+);
+
+const DocsByFtsAndSince = zql.Query(
+    \\SELECT f.uri, d.did, d.title,
+    \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents_fts f
+    \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\WHERE documents_fts MATCH :query AND d.created_at >= :since
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
 const DocsByFtsAndPlatform = zql.Query(
@@ -116,7 +130,21 @@ const DocsByFtsAndPlatform = zql.Query(
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.platform = :platform
-    \\ORDER BY rank LIMIT 40
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+);
+
+const DocsByFtsAndPlatformAndSince = zql.Query(
+    \\SELECT f.uri, d.did, d.title,
+    \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
+    \\  d.created_at, d.rkey,
+    \\  COALESCE(p.base_path, (SELECT base_path FROM publications WHERE did = d.did LIMIT 1), '') as base_path,
+    \\  CASE WHEN d.publication_uri != '' THEN 1 ELSE 0 END as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents_fts f
+    \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\WHERE documents_fts MATCH :query AND d.platform = :platform AND d.created_at >= :since
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
 const DocsByTagAndPlatform = zql.Query(
@@ -144,7 +172,7 @@ const DocsByFtsAndTagAndPlatform = zql.Query(
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE documents_fts MATCH :query AND dt.tag = :tag AND d.platform = :platform
-    \\ORDER BY rank LIMIT 40
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
 const DocsByPlatform = zql.Query(
@@ -161,6 +189,7 @@ const DocsByPlatform = zql.Query(
 
 // Find documents by their publication's base_path (subdomain search)
 // e.g., searching "gyst" finds all docs on gyst.leaflet.pub
+// Uses recency decay: recent docs rank higher than old ones with same match
 const DocsByPubBasePath = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey,
@@ -171,7 +200,7 @@ const DocsByPubBasePath = zql.Query(
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
     \\WHERE publications_fts MATCH :query
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
 const DocsByPubBasePathAndPlatform = zql.Query(
@@ -184,7 +213,7 @@ const DocsByPubBasePathAndPlatform = zql.Query(
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
     \\WHERE publications_fts MATCH :query AND d.platform = :platform
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
 /// Publication search result (internal)
@@ -230,10 +259,10 @@ const PubSearch = zql.Query(
     \\FROM publications_fts f
     \\JOIN publications p ON f.uri = p.uri
     \\WHERE publications_fts MATCH :query
-    \\ORDER BY rank LIMIT 10
+    \\ORDER BY rank + (julianday('now') - julianday(p.created_at)) / 30.0 LIMIT 10
 );
 
-pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8) ![]const u8 {
+pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -246,12 +275,14 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     const has_query = query.len > 0;
     const has_tag = tag_filter != null;
     const has_platform = platform_filter != null;
+    const has_since = since_filter != null;
 
     // track seen URIs for deduplication (content match + base_path match)
     var seen_uris = std.StringHashMap(void).init(alloc);
     defer seen_uris.deinit();
 
     // search documents by content (title, content) - handle all filter combinations
+    // note: since filter only supported with query (not tag-only searches)
     var doc_result = if (has_query and has_tag and has_platform)
         c.query(DocsByFtsAndTagAndPlatform.positional, DocsByFtsAndTagAndPlatform.bind(.{
             .query = fts_query,
@@ -260,8 +291,12 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
         })) catch null
     else if (has_query and has_tag)
         c.query(DocsByFtsAndTag.positional, DocsByFtsAndTag.bind(.{ .query = fts_query, .tag = tag_filter.? })) catch null
+    else if (has_query and has_platform and has_since)
+        c.query(DocsByFtsAndPlatformAndSince.positional, DocsByFtsAndPlatformAndSince.bind(.{ .query = fts_query, .platform = platform_filter.?, .since = since_filter.? })) catch null
     else if (has_query and has_platform)
         c.query(DocsByFtsAndPlatform.positional, DocsByFtsAndPlatform.bind(.{ .query = fts_query, .platform = platform_filter.? })) catch null
+    else if (has_query and has_since)
+        c.query(DocsByFtsAndSince.positional, DocsByFtsAndSince.bind(.{ .query = fts_query, .since = since_filter.? })) catch null
     else if (has_query)
         c.query(DocsByFts.positional, DocsByFts.bind(.{ .query = fts_query })) catch null
     else if (has_tag and has_platform)

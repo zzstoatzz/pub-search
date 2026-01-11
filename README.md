@@ -27,15 +27,17 @@ see [mcp/README.md](mcp/README.md) for local setup and usage details.
 ## api
 
 ```
-GET /search?q=<query>&tag=<tag>&platform=<platform>  # full-text search
-GET /similar?uri=<at-uri>                            # find similar documents
-GET /tags                                            # list all tags with counts
-GET /popular                                         # popular search queries
-GET /stats                                           # document/publication counts
-GET /health                                          # health check
+GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>  # full-text search
+GET /similar?uri=<at-uri>                                          # find similar documents
+GET /tags                                                          # list all tags with counts
+GET /popular                                                       # popular search queries
+GET /stats                                                         # document/publication counts
+GET /health                                                        # health check
 ```
 
 search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, etc). tag and platform filtering apply to documents only.
+
+**ranking**: results use hybrid BM25 + recency scoring. text relevance is primary, but recent documents get a boost (~1 point per 30 days). the `since` parameter filters to documents created after the given ISO date (e.g., `since=2025-01-01`).
 
 `/similar` uses [Voyage AI](https://voyageai.com) embeddings with brute-force cosine similarity (~0.15s for 3500 docs).
 
