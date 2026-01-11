@@ -1,5 +1,16 @@
 # tap instance for leaflet-search
 
+# check indexing status - shows most recent indexed documents
+check:
+    @echo "=== TAP Status ==="
+    @fly status --app leaflet-search-tap 2>/dev/null | grep -E "(STATE|started|stopped)"
+    @echo ""
+    @echo "=== Recent Indexing Activity ==="
+    @curl -s https://leaflet-search-backend.fly.dev/api/dashboard | jq -r '"Last indexed: \(.timeline[0].date) (\(.timeline[0].count) docs)\nToday: '$(date +%Y-%m-%d)'\nDocs: \(.documents) | Pubs: \(.publications)"'
+    @echo ""
+    @echo "=== Timeline (last 7 days) ==="
+    @curl -s https://leaflet-search-backend.fly.dev/api/dashboard | jq -r '.timeline[:7][] | "\(.date): \(.count) docs"'
+
 deploy:
     fly deploy --app leaflet-search-tap
 
