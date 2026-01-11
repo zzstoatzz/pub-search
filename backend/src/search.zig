@@ -456,6 +456,7 @@ fn cacheSimilarResults(c: *db.Client, uri: []const u8, results: []const u8, doc_
 /// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
 /// Uses OR for better recall with BM25 ranking (more matches = higher score)
 /// Quoted queries are passed through as phrase matches: "exact phrase" -> "exact phrase"
+/// Separators match FTS5 unicode61 tokenizer: any non-alphanumeric character
 pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
 
