@@ -160,6 +160,13 @@ fn runMigrations(client: *Client) !void {
         \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%')
     , &.{}) catch {};
 
+    // offprint uses site.standard.* lexicon, detect by basePath
+    client.exec(
+        \\UPDATE documents SET platform = 'offprint'
+        \\WHERE platform IN ('standardsite', 'unknown')
+        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%offprint.app%' OR base_path LIKE '%offprint.test%')
+    , &.{}) catch {};
+
     // URL path field for documents (e.g., "/001" for zat.dev)
     // used to build full URL: publication.url + document.path
     client.exec("ALTER TABLE documents ADD COLUMN path TEXT", &.{}) catch {};
