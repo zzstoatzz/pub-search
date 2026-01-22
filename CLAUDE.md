@@ -14,7 +14,11 @@
 - **backend** (Zig): HTTP API, FTS5 search, vector similarity
 - **tap**: firehose sync via bluesky-social/indigo tap
 - **site**: static frontend on Cloudflare Pages
-- **db**: Turso (SQLite) - FTS5 + embeddings
+- **db**: Turso (source of truth) + local SQLite read replica (FTS queries)
+
+## platforms
+- leaflet, pckt, offprint: known platforms (detected via basePath)
+- other: site.standard.* documents not from a known platform
 
 ## search ranking
 - hybrid BM25 + recency: `ORDER BY rank + (days_old / 30)`

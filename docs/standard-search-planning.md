@@ -7,7 +7,7 @@ expanding leaflet-search to index all standard.site records.
 - [standard.site](https://standard.site/) - shared lexicons for long-form publishing on ATProto
 - [leaflet.pub](https://leaflet.pub/) - implements `pub.leaflet.*` lexicons
 - [pckt.blog](https://pckt.blog/) - implements `blog.pckt.*` lexicons
-- [offprint.app](https://offprint.app/) - implements `app.offprint.*` lexicons (early beta)
+- [offprint.app](https://offprint.app/) - implements `app.offprint.*` lexicons
 - [ATProto docs](https://atproto.com/docs) - protocol documentation
 
 ## context
@@ -173,11 +173,11 @@ leaning toward option 3 for now.
 - no `textContent` field - content is in nested `pages[].blocks[]`
 - will need to continue parsing blocks OR wait for migration
 
-### offprint.app - LIKELY EARLY BETA
-- no `site.standard.document` records found on offprint.app account
-- no `app.offprint.document` collection visible
-- website shows no example users/content
-- probably in early/private beta - no public records yet
+### offprint.app - NOW INDEXED (2026-01-22)
+- writes `site.standard.document` records with `app.offprint.content` blocks
+- has `textContent` field (pre-flattened)
+- platform detected via basePath (`*.offprint.app`, `*.offprint.test`)
+- now fully supported alongside leaflet and pckt
 
 ### implication for architecture
 
