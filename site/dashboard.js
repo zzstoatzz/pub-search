@@ -74,6 +74,32 @@ function renderPlatforms(platforms) {
   });
 }
 
+function renderTiming(timing) {
+  const el = document.getElementById('timing');
+  if (!timing) return;
+
+  const endpoints = ['search', 'similar', 'tags', 'popular'];
+  endpoints.forEach(name => {
+    const t = timing[name];
+    if (!t) return;
+
+    const row = document.createElement('div');
+    row.className = 'timing-row';
+
+    if (t.count === 0) {
+      row.innerHTML = '<span class="timing-name">' + name + '</span><span class="timing-stats dim">no data</span>';
+    } else {
+      row.innerHTML = '<span class="timing-name">' + name + '</span>' +
+        '<span class="timing-stats">' +
+        '<span class="timing-count">' + t.count + ' req</span>' +
+        '<span class="timing-p50">p50: ' + t.p50_ms.toFixed(0) + 'ms</span>' +
+        '<span class="timing-p95">p95: ' + t.p95_ms.toFixed(0) + 'ms</span>' +
+        '</span>';
+    }
+    el.appendChild(row);
+  });
+}
+
 function escapeHtml(str) {
   return str
     .replace(/&/g, '&amp;')
@@ -97,6 +123,7 @@ async function fetchDashboard() {
     document.getElementById('publications').textContent = data.publications;
 
     renderPlatforms(data.platforms);
+    renderTiming(data.timing);
     renderTimeline(data.timeline);
     renderPubs(data.topPubs);
     renderTags(data.tags);

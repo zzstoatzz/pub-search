@@ -102,6 +102,21 @@ section { margin-bottom: 2rem; }
 .pub-name { color: #888; }
 .pub-count { color: #666; }
 
+.timing-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #1a1a1a;
+}
+.timing-row:last-child { border-bottom: none; }
+.timing-name { color: #888; }
+.timing-stats { display: flex; gap: 1rem; }
+.timing-stats.dim { color: #444; }
+.timing-count { color: #555; }
+.timing-p50 { color: #1B7340; }
+.timing-p95 { color: #666; }
+
 .tags {
   display: flex;
   flex-wrap: wrap;
