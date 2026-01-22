@@ -5,18 +5,18 @@ const Allocator = mem.Allocator;
 const zat = @import("zat");
 
 /// Detected platform from collection name
-/// Note: pckt and other platforms use site.standard.* collections.
+/// Note: pckt, offprint, and other platforms use site.standard.* collections.
 /// Platform detection from collection only distinguishes leaflet (custom lexicon)
-/// from site.standard users. Actual platform (pckt vs others) is detected later
-/// from publication basePath.
+/// from site.standard users. Actual platform (pckt/offprint/etc) is detected later
+/// from publication basePath. Documents that don't match any known platform are "other".
 pub const Platform = enum {
     leaflet,
-    standardsite, // pckt and others using site.standard.* lexicon
+    other, // site.standard.* documents not matching a known platform
     unknown,
 
     pub fn fromCollection(collection: []const u8) Platform {
         if (mem.startsWith(u8, collection, "pub.leaflet.")) return .leaflet;
-        if (mem.startsWith(u8, collection, "site.standard.")) return .standardsite;
+        if (mem.startsWith(u8, collection, "site.standard.")) return .other;
         return .unknown;
     }
 
@@ -239,10 +239,11 @@ test "Platform.fromCollection: leaflet" {
     try std.testing.expectEqual(Platform.leaflet, Platform.fromCollection("pub.leaflet.publication"));
 }
 
-test "Platform.fromCollection: standardsite" {
-    // pckt and others use site.standard.* collections
-    try std.testing.expectEqual(Platform.standardsite, Platform.fromCollection("site.standard.document"));
-    try std.testing.expectEqual(Platform.standardsite, Platform.fromCollection("site.standard.publication"));
+test "Platform.fromCollection: other (site.standard.*)" {
+    // pckt, offprint, and others use site.standard.* collections
+    // detected as "other" initially, then corrected by basePath in schema migrations
+    try std.testing.expectEqual(Platform.other, Platform.fromCollection("site.standard.document"));
+    try std.testing.expectEqual(Platform.other, Platform.fromCollection("site.standard.publication"));
 }
 
 test "Platform.fromCollection: unknown" {
@@ -252,11 +253,11 @@ test "Platform.fromCollection: unknown" {
 
 test "Platform.name" {
     try std.testing.expectEqualStrings("leaflet", Platform.leaflet.name());
-    try std.testing.expectEqualStrings("standardsite", Platform.standardsite.name());
+    try std.testing.expectEqualStrings("other", Platform.other.name());
     try std.testing.expectEqualStrings("unknown", Platform.unknown.name());
 }
 
 test "Platform.displayName" {
     try std.testing.expectEqualStrings("leaflet", Platform.leaflet.displayName());
-    try std.testing.expectEqualStrings("standardsite", Platform.standardsite.displayName());
+    try std.testing.expectEqualStrings("other", Platform.other.displayName());
 }

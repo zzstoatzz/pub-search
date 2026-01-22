@@ -504,7 +504,7 @@
     <div id="results" class="results">
       <div class="empty-state">
         <p>search atproto publishing platforms</p>
-        <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a></p>
+        <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://standard.site" target="_blank">other</a></p>
       </div>
     </div>
 
@@ -658,6 +658,12 @@
         // offprint is in early beta, URL pattern unknown
         docUrl: null
       },
+      other: {
+        home: 'https://standard.site',
+        label: 'other',
+        // "other" = site.standard.* documents not from a known platform
+        docUrl: null
+      },
     };
 
     function buildDocUrl(doc, entityType, platform) {
@@ -705,8 +711,8 @@
       if (config) {
         return { url: config.home, label: config.label };
       }
-      // unknown platform using standard.site lexicon - link to standard.site
-      return { url: 'https://standard.site', label: 'standard.site' };
+      // fallback for documents without a known platform - link to standard.site lexicon
+      return { url: 'https://standard.site', label: 'other' };
     }
 
     function highlightTerms(text, query) {
@@ -788,6 +794,7 @@
         { id: 'leaflet', label: 'leaflet' },
         { id: 'pckt', label: 'pckt' },
         { id: 'offprint', label: 'offprint' },
+        { id: 'other', label: 'other' },
       ];
       const html = platforms.map(p => `
         <span class="platform-option${currentPlatform === p.id ? ' active' : ''}" onclick="setPlatform('${p.id}')">${p.label}</span>
@@ -872,7 +879,7 @@
       resultsDiv.innerHTML = `
         <div class="empty-state">
           <p>search atproto publishing platforms</p>
-          <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a></p>
+          <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://standard.site" target="_blank">other</a></p>
         </div>
       `;
     }

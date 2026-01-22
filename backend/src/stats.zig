@@ -142,8 +142,8 @@ pub fn getPlatformCounts(alloc: Allocator) ![]const u8 {
     } else |_| try jw.write(0);
 
     // sample URIs from each platform (for debugging)
-    try jw.objectField("sample_standardsite");
-    if (c.query("SELECT uri FROM documents WHERE platform = 'standardsite' LIMIT 3", &.{})) |res_val| {
+    try jw.objectField("sample_other");
+    if (c.query("SELECT uri FROM documents WHERE platform = 'other' LIMIT 3", &.{})) |res_val| {
         var res = res_val;
         defer res.deinit();
         try jw.beginArray();

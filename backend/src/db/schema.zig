@@ -145,25 +145,27 @@ fn runMigrations(client: *Client) !void {
     client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform = 'unknown' AND source_collection LIKE 'pub.leaflet.%'", &.{}) catch {};
     client.exec("UPDATE documents SET platform = 'pckt' WHERE platform = 'unknown' AND source_collection LIKE 'blog.pckt.%'", &.{}) catch {};
 
+    // rename 'standardsite' to 'other' (standardsite was a misnomer - it's a lexicon, not a platform)
+    // documents using site.standard.* that don't match a known platform are simply "other"
+    client.exec("UPDATE documents SET platform = 'other' WHERE platform = 'standardsite'", &.{}) catch {};
+
     // detect platform from publication basePath (site.standard.* is a lexicon, not a platform)
-    // pckt uses site.standard.* lexicon but basePath contains pckt.blog
+    // known platforms (pckt, leaflet, offprint) use site.standard.* but have distinct basePaths
     client.exec(
         \\UPDATE documents SET platform = 'pckt'
-        \\WHERE platform IN ('standardsite', 'unknown')
+        \\WHERE platform IN ('other', 'unknown')
         \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%pckt.blog%')
     , &.{}) catch {};
 
-    // leaflet also uses site.standard.* lexicon, detect by basePath
     client.exec(
         \\UPDATE documents SET platform = 'leaflet'
-        \\WHERE platform IN ('standardsite', 'unknown')
+        \\WHERE platform IN ('other', 'unknown')
         \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%')
     , &.{}) catch {};
 
-    // offprint uses site.standard.* lexicon, detect by basePath
     client.exec(
         \\UPDATE documents SET platform = 'offprint'
-        \\WHERE platform IN ('standardsite', 'unknown')
+        \\WHERE platform IN ('other', 'unknown')
         \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%offprint.app%' OR base_path LIKE '%offprint.test%')
     , &.{}) catch {};
 
