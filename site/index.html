@@ -331,6 +331,28 @@
       margin-left: 4px;
     }
 
+    .tag-input {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #111;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      color: #888;
+      font-family: monospace;
+      width: 100px;
+    }
+
+    .tag-input:focus {
+      outline: none;
+      border-color: #1B7340;
+      color: #ccc;
+    }
+
+    .tag-input::placeholder {
+      color: #555;
+      font-style: italic;
+    }
+
     .platform-filter {
       margin-bottom: 1rem;
     }
@@ -829,14 +851,23 @@
     }
 
     function renderTags() {
-      if (allTags.length === 0) {
-        tagsDiv.innerHTML = '';
-        return;
-      }
-      const html = allTags.slice(0, 15).map(t => `
+      const tagsHtml = allTags.slice(0, 15).map(t => `
         <span class="tag${currentTag === t.tag ? ' active' : ''}" onclick="setTag('${escapeHtml(t.tag)}')">${escapeHtml(t.tag)}<span class="count">${t.count}</span></span>
       `).join('');
-      tagsDiv.innerHTML = `<div class="tags-label">filter by tag:</div><div class="tags-list">${html}</div>`;
+      const inputHtml = `<input type="text" class="tag-input" id="tag-input" placeholder="enter tag..." value="${currentTag && !allTags.some(t => t.tag === currentTag) ? escapeHtml(currentTag) : ''}">`;
+      tagsDiv.innerHTML = `<div class="tags-label">filter by tag:</div><div class="tags-list">${tagsHtml}${inputHtml}</div>`;
+
+      // bind enter key handler
+      const tagInput = document.getElementById('tag-input');
+      tagInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const val = tagInput.value.trim();
+          if (val) {
+            setTag(val);
+          }
+        }
+      });
     }
 
     async function loadTags() {
