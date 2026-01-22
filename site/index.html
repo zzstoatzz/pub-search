@@ -673,12 +673,14 @@
 
       // 2. pckt: basePath + path (e.g., https://devlog.pckt.blog/some-slug-abc123)
       if (platform === 'pckt' && doc.basePath && doc.path) {
-        return `https://${doc.basePath}${doc.path}`;
+        const separator = doc.path.startsWith('/') ? '' : '/';
+        return `https://${doc.basePath}${separator}${doc.path}`;
       }
 
       // 3. Other platforms with path: basePath + path
       if (doc.basePath && doc.path) {
-        return `https://${doc.basePath}${doc.path}`;
+        const separator = doc.path.startsWith('/') ? '' : '/';
+        return `https://${doc.basePath}${separator}${doc.path}`;
       }
 
       // 4. Platform-specific fallback URL (e.g., leaflet.pub/p/did/rkey)
