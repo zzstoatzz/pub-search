@@ -100,6 +100,8 @@ section { margin-bottom: 2rem; }
 }
 .pub-row:last-child { border-bottom: none; }
 .pub-name { color: #888; }
+a.pub-name { color: #1B7340; }
+a.pub-name:hover { color: #2a9d5c; }
 .pub-count { color: #666; }
 
 .timing-row {

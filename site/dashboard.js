@@ -47,7 +47,10 @@ function renderPubs(pubs) {
   pubs.forEach(p => {
     const row = document.createElement('div');
     row.className = 'pub-row';
-    row.innerHTML = '<span class="pub-name">' + escapeHtml(p.name) + '</span><span class="pub-count">' + p.count + '</span>';
+    const nameHtml = p.basePath
+      ? '<a href="https://' + escapeHtml(p.basePath) + '" target="_blank" class="pub-name">' + escapeHtml(p.name) + '</a>'
+      : '<span class="pub-name">' + escapeHtml(p.name) + '</span>';
+    row.innerHTML = nameHtml + '<span class="pub-count">' + p.count + '</span>';
     el.appendChild(row);
   });
 }
