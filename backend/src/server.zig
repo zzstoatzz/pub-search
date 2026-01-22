@@ -2,9 +2,11 @@ const std = @import("std");
 const net = std.net;
 const http = std.http;
 const mem = std.mem;
+const json = std.json;
 const activity = @import("activity.zig");
 const search = @import("search.zig");
 const stats = @import("stats.zig");
+const timing = @import("timing.zig");
 const dashboard = @import("dashboard.zig");
 
 const HTTP_BUF_SIZE = 8192;
@@ -72,6 +74,9 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
 }
 
 fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
+    const start_time = std.time.microTimestamp();
+    defer timing.record(.search, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -97,6 +102,9 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn handleTags(request: *http.Server.Request) !void {
+    const start_time = std.time.microTimestamp();
+    defer timing.record(.tags, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -106,6 +114,9 @@ fn handleTags(request: *http.Server.Request) !void {
 }
 
 fn handlePopular(request: *http.Server.Request) !void {
+    const start_time = std.time.microTimestamp();
+    defer timing.record(.popular, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -150,13 +161,56 @@ fn handleStats(request: *http.Server.Request) !void {
     const alloc = arena.allocator();
 
     const db_stats = stats.getStats();
+    const all_timing = timing.getAllStats();
 
-    var response: std.ArrayList(u8) = .{};
-    defer response.deinit(alloc);
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
 
-    try response.print(alloc, "{{\"documents\":{d},\"publications\":{d},\"embeddings\":{d},\"cache_hits\":{d},\"cache_misses\":{d}}}", .{ db_stats.documents, db_stats.publications, db_stats.embeddings, db_stats.cache_hits, db_stats.cache_misses });
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
 
-    try sendJson(request, response.items);
+    // db stats
+    try jw.objectField("documents");
+    try jw.write(db_stats.documents);
+    try jw.objectField("publications");
+    try jw.write(db_stats.publications);
+    try jw.objectField("embeddings");
+    try jw.write(db_stats.embeddings);
+    try jw.objectField("searches");
+    try jw.write(db_stats.searches);
+    try jw.objectField("errors");
+    try jw.write(db_stats.errors);
+    try jw.objectField("cache_hits");
+    try jw.write(db_stats.cache_hits);
+    try jw.objectField("cache_misses");
+    try jw.write(db_stats.cache_misses);
+
+    // timing stats per endpoint
+    try jw.objectField("timing");
+    try jw.beginObject();
+    inline for (@typeInfo(timing.Endpoint).@"enum".fields, 0..) |field, i| {
+        const t = all_timing[i];
+        try jw.objectField(field.name);
+        try jw.beginObject();
+        try jw.objectField("count");
+        try jw.write(t.count);
+        try jw.objectField("avg_ms");
+        try jw.write(t.avg_ms);
+        try jw.objectField("p50_ms");
+        try jw.write(t.p50_ms);
+        try jw.objectField("p95_ms");
+        try jw.write(t.p95_ms);
+        try jw.objectField("p99_ms");
+        try jw.write(t.p99_ms);
+        try jw.objectField("max_ms");
+        try jw.write(t.max_ms);
+        try jw.endObject();
+    }
+    try jw.endObject();
+
+    try jw.endObject();
+
+    try sendJson(request, try output.toOwnedSlice());
 }
 
 fn sendJson(request: *http.Server.Request, body: []const u8) !void {
@@ -225,6 +279,9 @@ fn handleDashboard(request: *http.Server.Request) !void {
 }
 
 fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
+    const start_time = std.time.microTimestamp();
+    defer timing.record(.similar, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
