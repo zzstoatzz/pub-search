@@ -72,7 +72,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     var pub_count: usize = 0;
     {
         var pub_result = turso.query(
-            "SELECT uri, did, rkey, name, description, base_path, platform, created_at FROM publications",
+            "SELECT uri, did, rkey, name, description, base_path, platform FROM publications",
             &.{},
         ) catch |err| {
             std.debug.print("sync: turso publications query failed: {}\n", .{err});
@@ -256,11 +256,11 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
 }
 
 fn insertPublicationLocal(conn: zqlite.Conn, row: anytype) !void {
-    // insert into main table
+    // insert into main table (no created_at - Turso publications table doesn't have it)
     conn.exec(
         \\INSERT OR REPLACE INTO publications
-        \\(uri, did, rkey, name, description, base_path, platform, created_at)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        \\(uri, did, rkey, name, description, base_path, platform)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?)
     , .{
         row.text(0), // uri
         row.text(1), // did
@@ -269,7 +269,6 @@ fn insertPublicationLocal(conn: zqlite.Conn, row: anytype) !void {
         row.text(4), // description
         row.text(5), // base_path
         row.text(6), // platform
-        row.text(7), // created_at
     }) catch |err| {
         return err;
     };

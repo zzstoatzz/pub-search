@@ -93,7 +93,7 @@ fn createSchema(self: *LocalDb) !void {
         return err;
     };
 
-    // publications table
+    // publications table (no created_at - matches Turso schema)
     c.exec(
         \\CREATE TABLE IF NOT EXISTS publications (
         \\  uri TEXT PRIMARY KEY,
@@ -103,8 +103,7 @@ fn createSchema(self: *LocalDb) !void {
         \\  description TEXT,
         \\  base_path TEXT,
         \\  platform TEXT DEFAULT 'leaflet',
-        \\  source_collection TEXT,
-        \\  created_at TEXT
+        \\  source_collection TEXT
         \\)
     , .{}) catch |err| {
         std.debug.print("local db: failed to create publications table: {}\n", .{err});
