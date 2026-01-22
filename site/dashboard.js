@@ -74,6 +74,11 @@ function renderPlatforms(platforms) {
   });
 }
 
+function formatMs(ms) {
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
+  return ms.toFixed(0) + 'ms';
+}
+
 function renderTiming(timing) {
   const el = document.getElementById('timing');
   if (!timing) return;
@@ -87,14 +92,11 @@ function renderTiming(timing) {
     row.className = 'timing-row';
 
     if (t.count === 0) {
-      row.innerHTML = '<span class="timing-name">' + name + '</span><span class="timing-stats dim">no data</span>';
+      row.innerHTML = '<span class="timing-name">' + name + '</span><span class="timing-value dim">--</span>';
     } else {
       row.innerHTML = '<span class="timing-name">' + name + '</span>' +
-        '<span class="timing-stats">' +
-        '<span class="timing-count">' + t.count + ' req</span>' +
-        '<span class="timing-p50">p50: ' + t.p50_ms.toFixed(0) + 'ms</span>' +
-        '<span class="timing-p95">p95: ' + t.p95_ms.toFixed(0) + 'ms</span>' +
-        '</span>';
+        '<span class="timing-value">' + formatMs(t.p50_ms) + ' <span class="dim">p50</span> · ' +
+        formatMs(t.p95_ms) + ' <span class="dim">p95</span></span>';
     }
     el.appendChild(row);
   });
