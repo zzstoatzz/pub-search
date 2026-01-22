@@ -17,6 +17,14 @@ const TagsQuery = zql.Query(
 );
 
 pub fn getTags(alloc: Allocator) ![]const u8 {
+    // try local SQLite first (faster)
+    if (db.getLocalDb()) |local| {
+        if (getTagsLocal(alloc, local)) |result| {
+            return result;
+        } else |_| {}
+    }
+
+    // fall back to Turso
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -31,6 +39,28 @@ pub fn getTags(alloc: Allocator) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn getTagsLocal(alloc: Allocator, local: *db.LocalDb) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var rows = try local.query(
+        \\SELECT tag, COUNT(*) as count
+        \\FROM document_tags
+        \\GROUP BY tag
+        \\ORDER BY count DESC
+        \\LIMIT 100
+    , .{});
+    defer rows.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -159,6 +189,14 @@ pub fn getPlatformCounts(alloc: Allocator) ![]const u8 {
 }
 
 pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
+    // try local SQLite first (faster)
+    if (db.getLocalDb()) |local| {
+        if (getPopularLocal(alloc, local, limit)) |result| {
+            return result;
+        } else |_| {}
+    }
+
+    // fall back to Turso
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -179,6 +217,26 @@ pub fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn getPopularLocal(alloc: Allocator, local: *db.LocalDb, limit: usize) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    _ = limit; // zqlite doesn't support runtime LIMIT, use fixed 10
+    var rows = try local.query(
+        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT 10",
+        .{},
+    );
+    defer rows.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }

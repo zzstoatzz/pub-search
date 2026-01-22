@@ -113,6 +113,31 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         }
     }
 
+    // sync popular searches
+    var popular_count: usize = 0;
+    {
+        conn.exec("DELETE FROM popular_searches", .{}) catch {};
+
+        var popular_result = turso.query(
+            "SELECT query, count FROM popular_searches",
+            &.{},
+        ) catch |err| {
+            std.debug.print("sync: turso popular_searches query failed: {}\n", .{err});
+            conn.exec("COMMIT", .{}) catch {};
+            local.setReady(true);
+            return;
+        };
+        defer popular_result.deinit();
+
+        for (popular_result.rows) |row| {
+            conn.exec(
+                "INSERT OR REPLACE INTO popular_searches (query, count) VALUES (?, ?)",
+                .{ row.text(0), row.text(1) },
+            ) catch {};
+            popular_count += 1;
+        }
+    }
+
     // record sync time
     var ts_buf: [20]u8 = undefined;
     const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
@@ -127,7 +152,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     };
 
     local.setReady(true);
-    std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags\n", .{ doc_count, pub_count, tag_count });
+    std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular\n", .{ doc_count, pub_count, tag_count, popular_count });
 }
 
 /// Incremental sync: fetch documents created since last sync
