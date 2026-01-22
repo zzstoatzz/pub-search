@@ -16,6 +16,10 @@
             .url = "https://tangled.sh/zat.dev/zat/archive/main",
             .hash = "zat-0.1.0-5PuC7heIAQA4j2UVmJT-oivQh5AwZTrFQ-NC4CJi2-_R",
         },
+        .zqlite = .{
+            .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
+            .hash = "zqlite-0.0.0-RWLaY_y_mADh2LdbDrG_2HT2dBAcsAR8Jig_7-dOJd0B",
+        },
     },
     .paths = .{
         "build.zig",

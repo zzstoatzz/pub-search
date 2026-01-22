@@ -15,8 +15,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // init turso
+    // init db (turso + local replica)
     try db.init();
+    db.startSync();
 
     // start activity tracker
     activity.init();

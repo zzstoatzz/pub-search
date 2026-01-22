@@ -47,6 +47,21 @@ const Doc = struct {
         };
     }
 
+    fn fromLocalRow(row: db.LocalDb.Row) Doc {
+        return .{
+            .uri = row.text(0),
+            .did = row.text(1),
+            .title = row.text(2),
+            .snippet = row.text(3),
+            .createdAt = row.text(4),
+            .rkey = row.text(5),
+            .basePath = row.text(6),
+            .hasPublication = row.int(7) != 0,
+            .platform = row.text(8),
+            .path = row.text(9),
+        };
+    }
+
     fn toJson(self: Doc) SearchResultJson {
         return .{
             .type = if (self.hasPublication) "article" else "looseleaf",
@@ -211,6 +226,18 @@ const Pub = struct {
         };
     }
 
+    fn fromLocalRow(row: db.LocalDb.Row) Pub {
+        return .{
+            .uri = row.text(0),
+            .did = row.text(1),
+            .name = row.text(2),
+            .snippet = row.text(3),
+            .rkey = row.text(4),
+            .basePath = row.text(5),
+            .platform = row.text(6),
+        };
+    }
+
     fn toJson(self: Pub) SearchResultJson {
         return .{
             .type = "publication",
@@ -236,6 +263,16 @@ const PubSearch = zql.Query(
 );
 
 pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
+    // try local SQLite first (faster for FTS queries)
+    if (db.getLocalDb()) |local| {
+        if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter)) |result| {
+            return result;
+        } else |err| {
+            std.debug.print("local search failed ({s}), falling back to turso\n", .{@errorName(err)});
+        }
+    }
+
+    // fall back to Turso
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -323,6 +360,129 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     if (run_pubs) {
         for (batch.get(query_idx)) |row| {
             try jw.write(Pub.fromRow(row).toJson());
+        }
+    }
+
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+/// Local SQLite search (FTS queries only, no vector similarity)
+/// Simplified version - just handles basic FTS query case to get started
+fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
+    // only handle basic FTS queries for now (most common case)
+    // fall back to Turso for complex filter combinations
+    if (query.len == 0 or tag_filter != null or since_filter != null) {
+        return error.UnsupportedQuery;
+    }
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+
+    const fts_query = try buildFtsQuery(alloc, query);
+
+    // track seen URIs for deduplication
+    var seen_uris = std.StringHashMap(void).init(alloc);
+    defer seen_uris.deinit();
+
+    // document content search
+    if (platform_filter) |platform| {
+        var rows = try local.query(
+            \\SELECT f.uri, d.did, d.title,
+            \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
+            \\  d.created_at, d.rkey, d.base_path, d.has_publication,
+            \\  d.platform, COALESCE(d.path, '') as path
+            \\FROM documents_fts f
+            \\JOIN documents d ON f.uri = d.uri
+            \\WHERE documents_fts MATCH ? AND d.platform = ?
+            \\ORDER BY rank LIMIT 40
+        , .{ fts_query, platform });
+        defer rows.deinit();
+
+        while (rows.next()) |row| {
+            const doc = Doc.fromLocalRow(row);
+            const uri_dupe = try alloc.dupe(u8, doc.uri);
+            try seen_uris.put(uri_dupe, {});
+            try jw.write(doc.toJson());
+        }
+
+        // base_path search with platform
+        var bp_rows = try local.query(
+            \\SELECT d.uri, d.did, d.title, '' as snippet,
+            \\  d.created_at, d.rkey, p.base_path,
+            \\  1 as has_publication, d.platform, COALESCE(d.path, '') as path
+            \\FROM documents d
+            \\JOIN publications p ON d.publication_uri = p.uri
+            \\JOIN publications_fts pf ON p.uri = pf.uri
+            \\WHERE publications_fts MATCH ? AND d.platform = ?
+            \\ORDER BY rank LIMIT 40
+        , .{ fts_query, platform });
+        defer bp_rows.deinit();
+
+        while (bp_rows.next()) |row| {
+            const doc = Doc.fromLocalRow(row);
+            if (!seen_uris.contains(doc.uri)) {
+                try jw.write(doc.toJson());
+            }
+        }
+    } else {
+        // no platform filter
+        var rows = try local.query(
+            \\SELECT f.uri, d.did, d.title,
+            \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
+            \\  d.created_at, d.rkey, d.base_path, d.has_publication,
+            \\  d.platform, COALESCE(d.path, '') as path
+            \\FROM documents_fts f
+            \\JOIN documents d ON f.uri = d.uri
+            \\WHERE documents_fts MATCH ?
+            \\ORDER BY rank LIMIT 40
+        , .{fts_query});
+        defer rows.deinit();
+
+        while (rows.next()) |row| {
+            const doc = Doc.fromLocalRow(row);
+            const uri_dupe = try alloc.dupe(u8, doc.uri);
+            try seen_uris.put(uri_dupe, {});
+            try jw.write(doc.toJson());
+        }
+
+        // base_path search
+        var bp_rows = try local.query(
+            \\SELECT d.uri, d.did, d.title, '' as snippet,
+            \\  d.created_at, d.rkey, p.base_path,
+            \\  1 as has_publication, d.platform, COALESCE(d.path, '') as path
+            \\FROM documents d
+            \\JOIN publications p ON d.publication_uri = p.uri
+            \\JOIN publications_fts pf ON p.uri = pf.uri
+            \\WHERE publications_fts MATCH ?
+            \\ORDER BY rank LIMIT 40
+        , .{fts_query});
+        defer bp_rows.deinit();
+
+        while (bp_rows.next()) |row| {
+            const doc = Doc.fromLocalRow(row);
+            if (!seen_uris.contains(doc.uri)) {
+                try jw.write(doc.toJson());
+            }
+        }
+
+        // publication search
+        var pub_rows = try local.query(
+            \\SELECT f.uri, p.did, p.name,
+            \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
+            \\  p.rkey, p.base_path, p.platform
+            \\FROM publications_fts f
+            \\JOIN publications p ON f.uri = p.uri
+            \\WHERE publications_fts MATCH ?
+            \\ORDER BY rank LIMIT 10
+        , .{fts_query});
+        defer pub_rows.deinit();
+
+        while (pub_rows.next()) |row| {
+            try jw.write(Pub.fromLocalRow(row).toJson());
         }
     }
 
