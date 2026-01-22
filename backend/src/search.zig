@@ -281,86 +281,150 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     var seen_uris = std.StringHashMap(void).init(alloc);
     defer seen_uris.deinit();
 
-    // search documents by content (title, content) - handle all filter combinations
-    // note: since filter only supported with query (not tag-only searches)
-    var doc_result = if (has_query and has_tag and has_platform)
-        c.query(DocsByFtsAndTagAndPlatform.positional, DocsByFtsAndTagAndPlatform.bind(.{
-            .query = fts_query,
-            .tag = tag_filter.?,
-            .platform = platform_filter.?,
-        })) catch null
-    else if (has_query and has_tag)
-        c.query(DocsByFtsAndTag.positional, DocsByFtsAndTag.bind(.{ .query = fts_query, .tag = tag_filter.? })) catch null
-    else if (has_query and has_platform and has_since)
-        c.query(DocsByFtsAndPlatformAndSince.positional, DocsByFtsAndPlatformAndSince.bind(.{ .query = fts_query, .platform = platform_filter.?, .since = since_filter.? })) catch null
-    else if (has_query and has_platform)
-        c.query(DocsByFtsAndPlatform.positional, DocsByFtsAndPlatform.bind(.{ .query = fts_query, .platform = platform_filter.? })) catch null
-    else if (has_query and has_since)
-        c.query(DocsByFtsAndSince.positional, DocsByFtsAndSince.bind(.{ .query = fts_query, .since = since_filter.? })) catch null
-    else if (has_query)
-        c.query(DocsByFts.positional, DocsByFts.bind(.{ .query = fts_query })) catch null
-    else if (has_tag and has_platform)
-        c.query(DocsByTagAndPlatform.positional, DocsByTagAndPlatform.bind(.{ .tag = tag_filter.?, .platform = platform_filter.? })) catch null
-    else if (has_tag)
-        c.query(DocsByTag.positional, DocsByTag.bind(.{ .tag = tag_filter.? })) catch null
-    else if (has_platform)
-        c.query(DocsByPlatform.positional, DocsByPlatform.bind(.{ .platform = platform_filter.? })) catch null
-    else
-        null; // no filters at all - return empty
+    // build batch of queries to execute in single HTTP request
+    var statements: [3]db.Client.Statement = undefined;
+    var stmt_count: usize = 0;
 
-    if (doc_result) |*res| {
-        defer res.deinit();
-        for (res.rows) |row| {
+    // query 0: documents by content (always present if we have any filter)
+    const doc_sql = getDocQuerySql(has_query, has_tag, has_platform, has_since);
+    const doc_args = try getDocQueryArgs(alloc, fts_query, tag_filter, platform_filter, since_filter, has_query, has_tag, has_platform, has_since);
+    if (doc_sql) |sql| {
+        statements[stmt_count] = .{ .sql = sql, .args = doc_args };
+        stmt_count += 1;
+    }
+
+    // query 1: documents by publication base_path (subdomain search)
+    const run_basepath = has_query and !has_tag;
+    if (run_basepath) {
+        if (has_platform) {
+            statements[stmt_count] = .{ .sql = DocsByPubBasePathAndPlatform.positional, .args = &.{ fts_query, platform_filter.? } };
+        } else {
+            statements[stmt_count] = .{ .sql = DocsByPubBasePath.positional, .args = &.{fts_query} };
+        }
+        stmt_count += 1;
+    }
+
+    // query 2: publications (only when no tag/platform filter)
+    const run_pubs = tag_filter == null and platform_filter == null and has_query;
+    if (run_pubs) {
+        statements[stmt_count] = .{ .sql = PubSearch.positional, .args = &.{fts_query} };
+        stmt_count += 1;
+    }
+
+    if (stmt_count == 0) {
+        try jw.endArray();
+        return try output.toOwnedSlice();
+    }
+
+    // execute all queries in single HTTP request
+    var batch = c.queryBatch(statements[0..stmt_count]) catch {
+        try jw.endArray();
+        return try output.toOwnedSlice();
+    };
+    defer batch.deinit();
+
+    // process query 0: document content results
+    var query_idx: usize = 0;
+    if (doc_sql != null) {
+        for (batch.get(query_idx)) |row| {
             const doc = Doc.fromRow(row);
-            // dupe URI for hash map (outlives result)
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
             try jw.write(doc.toJson());
         }
+        query_idx += 1;
     }
 
-    // also search documents by publication base_path (subdomain search)
-    // e.g., "gyst" finds all docs on gyst.leaflet.pub even if content doesn't contain "gyst"
-    // skip if tag filter is set (tag filter is content-specific)
-    if (has_query and !has_tag) {
-        var basepath_result = if (has_platform)
-            c.query(DocsByPubBasePathAndPlatform.positional, DocsByPubBasePathAndPlatform.bind(.{
-                .query = fts_query,
-                .platform = platform_filter.?,
-            })) catch null
-        else
-            c.query(DocsByPubBasePath.positional, DocsByPubBasePath.bind(.{ .query = fts_query })) catch null;
-
-        if (basepath_result) |*res| {
-            defer res.deinit();
-            for (res.rows) |row| {
-                const doc = Doc.fromRow(row);
-                // deduplicate: skip if already found by content search
-                if (!seen_uris.contains(doc.uri)) {
-                    try jw.write(doc.toJson());
-                }
+    // process query 1: base_path results (deduplicated)
+    if (run_basepath) {
+        for (batch.get(query_idx)) |row| {
+            const doc = Doc.fromRow(row);
+            if (!seen_uris.contains(doc.uri)) {
+                try jw.write(doc.toJson());
             }
         }
+        query_idx += 1;
     }
 
-    // publications are excluded when filtering by tag or platform
-    // (platform filter is for documents only - publications don't have meaningful platform distinction)
-    if (tag_filter == null and platform_filter == null) {
-        var pub_result = c.query(
-            PubSearch.positional,
-            PubSearch.bind(.{ .query = fts_query }),
-        ) catch null;
-
-        if (pub_result) |*res| {
-            defer res.deinit();
-            for (res.rows) |row| {
-                try jw.write(Pub.fromRow(row).toJson());
-            }
+    // process query 2: publication results
+    if (run_pubs) {
+        for (batch.get(query_idx)) |row| {
+            try jw.write(Pub.fromRow(row).toJson());
         }
     }
 
     try jw.endArray();
     return try output.toOwnedSlice();
+}
+
+fn getDocQuerySql(has_query: bool, has_tag: bool, has_platform: bool, has_since: bool) ?[]const u8 {
+    if (has_query and has_tag and has_platform) return DocsByFtsAndTagAndPlatform.positional;
+    if (has_query and has_tag) return DocsByFtsAndTag.positional;
+    if (has_query and has_platform and has_since) return DocsByFtsAndPlatformAndSince.positional;
+    if (has_query and has_platform) return DocsByFtsAndPlatform.positional;
+    if (has_query and has_since) return DocsByFtsAndSince.positional;
+    if (has_query) return DocsByFts.positional;
+    if (has_tag and has_platform) return DocsByTagAndPlatform.positional;
+    if (has_tag) return DocsByTag.positional;
+    if (has_platform) return DocsByPlatform.positional;
+    return null;
+}
+
+fn getDocQueryArgs(alloc: Allocator, fts_query: []const u8, tag: ?[]const u8, platform: ?[]const u8, since: ?[]const u8, has_query: bool, has_tag: bool, has_platform: bool, has_since: bool) ![]const []const u8 {
+    if (has_query and has_tag and has_platform) {
+        const args = try alloc.alloc([]const u8, 3);
+        args[0] = fts_query;
+        args[1] = tag.?;
+        args[2] = platform.?;
+        return args;
+    }
+    if (has_query and has_tag) {
+        const args = try alloc.alloc([]const u8, 2);
+        args[0] = fts_query;
+        args[1] = tag.?;
+        return args;
+    }
+    if (has_query and has_platform and has_since) {
+        const args = try alloc.alloc([]const u8, 3);
+        args[0] = fts_query;
+        args[1] = platform.?;
+        args[2] = since.?;
+        return args;
+    }
+    if (has_query and has_platform) {
+        const args = try alloc.alloc([]const u8, 2);
+        args[0] = fts_query;
+        args[1] = platform.?;
+        return args;
+    }
+    if (has_query and has_since) {
+        const args = try alloc.alloc([]const u8, 2);
+        args[0] = fts_query;
+        args[1] = since.?;
+        return args;
+    }
+    if (has_query) {
+        const args = try alloc.alloc([]const u8, 1);
+        args[0] = fts_query;
+        return args;
+    }
+    if (has_tag and has_platform) {
+        const args = try alloc.alloc([]const u8, 2);
+        args[0] = tag.?;
+        args[1] = platform.?;
+        return args;
+    }
+    if (has_tag) {
+        const args = try alloc.alloc([]const u8, 1);
+        args[0] = tag.?;
+        return args;
+    }
+    if (has_platform) {
+        const args = try alloc.alloc([]const u8, 1);
+        args[0] = platform.?;
+        return args;
+    }
+    return &.{};
 }
 
 /// Find documents similar to a given document using vector similarity
