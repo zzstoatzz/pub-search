@@ -57,23 +57,9 @@ pub fn insertDocument(
         } else |_| {}
     }
 
-    // detect platform from base_path (overrides collection-based detection for site.standard.*)
-    var actual_platform = platform;
-    if (std.mem.eql(u8, platform, "standardsite") or std.mem.eql(u8, platform, "unknown")) {
-        if (std.mem.indexOf(u8, base_path, "offprint.app") != null or
-            std.mem.indexOf(u8, base_path, "offprint.test") != null)
-        {
-            actual_platform = "offprint";
-        } else if (std.mem.indexOf(u8, base_path, "pckt.blog") != null) {
-            actual_platform = "pckt";
-        } else if (std.mem.indexOf(u8, base_path, "leaflet.pub") != null) {
-            actual_platform = "leaflet";
-        }
-    }
-
     try c.exec(
         "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub },
+        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, platform, source_collection, path orelse "", base_path, has_pub },
     );
 
     // update FTS index
