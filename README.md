@@ -31,7 +31,7 @@ GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>  # full-text se
 GET /similar?uri=<at-uri>                                          # find similar documents
 GET /tags                                                          # list all tags with counts
 GET /popular                                                       # popular search queries
-GET /stats                                                         # document/publication counts
+GET /stats                                                         # counts + request latency (p50/p95)
 GET /health                                                        # health check
 ```
 
