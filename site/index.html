@@ -332,25 +332,34 @@
     }
 
     input.tag-input {
+      /* match .tag styling exactly */
       font-size: 11px;
       padding: 3px 8px;
-      background: #111;
+      background: #151515;
       border: 1px solid #252525;
       border-radius: 3px;
-      color: #888;
+      color: #777;
       font-family: monospace;
-      width: 100px;
+      /* prevent flex expansion from global input[type="text"] */
+      flex: none;
+      width: 90px;
+    }
+
+    input.tag-input:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
     }
 
     input.tag-input:focus {
       outline: none;
       border-color: #1B7340;
+      background: rgba(27, 115, 64, 0.1);
       color: #ccc;
     }
 
     input.tag-input::placeholder {
       color: #555;
-      font-style: italic;
     }
 
     .platform-filter {
@@ -424,11 +433,15 @@
       }
 
       /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .suggestion {
+      .tag, .platform-option, .suggestion, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
         padding: 0.5rem 0.75rem;
+      }
+
+      input.tag-input {
+        width: 80px;
       }
 
       button {
@@ -498,7 +511,7 @@
 
     /* ensure touch targets on tablets too */
     @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .suggestion, .related-item {
+      .tag, .platform-option, .suggestion, .related-item, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
