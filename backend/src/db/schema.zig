@@ -200,4 +200,36 @@ fn runMigrations(client: *Client) !void {
 
     // note: publications_fts was rebuilt with base_path column via scripts/rebuild-pub-fts
     // new publications will include base_path via insertPublication in indexer.zig
+
+    // 2026-01-22: clean up stale publication/self records that were deleted from ATProto
+    // these cause incorrect basePath lookups for greengale documents
+    // specifically: did:plc:27ivzcszryxp6mehutodmcxo had publication/self with basePath 'greengale.app'
+    // but that publication was deleted, and the correct one is 'greengale.app/3fz.org'
+    client.exec(
+        \\DELETE FROM publications WHERE rkey = 'self'
+        \\AND base_path = 'greengale.app'
+        \\AND did = 'did:plc:27ivzcszryxp6mehutodmcxo'
+    , &.{}) catch {};
+    client.exec(
+        \\DELETE FROM publications_fts WHERE uri IN (
+        \\  SELECT 'at://' || did || '/site.standard.publication/self'
+        \\  FROM publications WHERE rkey = 'self' AND base_path = 'greengale.app'
+        \\)
+    , &.{}) catch {};
+
+    // re-derive basePath for greengale documents that got wrong basePath
+    // match documents to greengale publications (basePath contains greengale.app)
+    // prefer more specific basePaths (with subdomain)
+    client.exec(
+        \\UPDATE documents SET base_path = (
+        \\  SELECT p.base_path FROM publications p
+        \\  WHERE p.did = documents.did
+        \\  AND p.base_path LIKE 'greengale.app/%'
+        \\  ORDER BY LENGTH(p.base_path) DESC
+        \\  LIMIT 1
+        \\)
+        \\WHERE platform = 'greengale'
+        \\AND (base_path = 'greengale.app' OR base_path LIKE '%pckt.blog%')
+        \\AND did IN (SELECT did FROM publications WHERE base_path LIKE 'greengale.app/%')
+    , &.{}) catch {};
 }

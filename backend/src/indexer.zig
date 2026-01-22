@@ -46,15 +46,38 @@ pub fn insertDocument(
             }
         } else |_| {}
     }
-    // fallback: find any publication by this DID
+    // fallback: find publication by DID, preferring platform-specific matches
     if (base_path.len == 0) {
-        if (c.query("SELECT base_path FROM publications WHERE did = ? LIMIT 1", &.{did})) |res| {
+        // try platform-specific publication first
+        const platform_pattern: []const u8 = if (std.mem.eql(u8, platform, "greengale"))
+            "%greengale.app%"
+        else if (std.mem.eql(u8, platform, "pckt"))
+            "%pckt.blog%"
+        else if (std.mem.eql(u8, platform, "offprint"))
+            "%offprint.app%"
+        else if (std.mem.eql(u8, platform, "leaflet"))
+            "%leaflet.pub%"
+        else
+            "%";
+
+        if (c.query("SELECT base_path FROM publications WHERE did = ? AND base_path LIKE ? ORDER BY LENGTH(base_path) DESC LIMIT 1", &.{ did, platform_pattern })) |res| {
             var result = res;
             defer result.deinit();
             if (result.first()) |row| {
                 base_path = row.text(0);
             }
         } else |_| {}
+
+        // if no platform-specific match, fall back to any publication
+        if (base_path.len == 0) {
+            if (c.query("SELECT base_path FROM publications WHERE did = ? ORDER BY LENGTH(base_path) DESC LIMIT 1", &.{did})) |res| {
+                var result = res;
+                defer result.deinit();
+                if (result.first()) |row| {
+                    base_path = row.text(0);
+                }
+            } else |_| {}
+        }
     }
 
     try c.exec(
