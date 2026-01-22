@@ -164,6 +164,25 @@ fn runMigrations(client: *Client) !void {
     // used to build full URL: publication.url + document.path
     client.exec("ALTER TABLE documents ADD COLUMN path TEXT", &.{}) catch {};
 
+    // denormalized columns for query performance (avoids per-row subqueries)
+    client.exec("ALTER TABLE documents ADD COLUMN base_path TEXT DEFAULT ''", &.{}) catch {};
+    client.exec("ALTER TABLE documents ADD COLUMN has_publication INTEGER DEFAULT 0", &.{}) catch {};
+
+    // backfill base_path from publications (idempotent - only updates empty values)
+    client.exec(
+        \\UPDATE documents SET base_path = COALESCE(
+        \\  (SELECT p.base_path FROM publications p WHERE p.uri = documents.publication_uri),
+        \\  (SELECT p.base_path FROM publications p WHERE p.did = documents.did LIMIT 1),
+        \\  ''
+        \\) WHERE base_path IS NULL OR base_path = ''
+    , &.{}) catch {};
+
+    // backfill has_publication (idempotent)
+    client.exec(
+        "UPDATE documents SET has_publication = CASE WHEN publication_uri != '' THEN 1 ELSE 0 END WHERE has_publication = 0 AND publication_uri != ''",
+        &.{},
+    ) catch {};
+
     // note: publications_fts was rebuilt with base_path column via scripts/rebuild-pub-fts
     // new publications will include base_path via insertPublication in indexer.zig
 }

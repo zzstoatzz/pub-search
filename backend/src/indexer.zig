@@ -31,9 +31,35 @@ pub fn insertDocument(
         }
     } else |_| {}
 
+    // compute denormalized fields
+    const pub_uri = publication_uri orelse "";
+    const has_pub: []const u8 = if (pub_uri.len > 0) "1" else "0";
+
+    // look up base_path from publication (or fallback to DID lookup)
+    var base_path: []const u8 = "";
+    if (pub_uri.len > 0) {
+        if (c.query("SELECT base_path FROM publications WHERE uri = ?", &.{pub_uri})) |res| {
+            var result = res;
+            defer result.deinit();
+            if (result.first()) |row| {
+                base_path = row.text(0);
+            }
+        } else |_| {}
+    }
+    // fallback: find any publication by this DID
+    if (base_path.len == 0) {
+        if (c.query("SELECT base_path FROM publications WHERE did = ? LIMIT 1", &.{did})) |res| {
+            var result = res;
+            defer result.deinit();
+            if (result.first()) |row| {
+                base_path = row.text(0);
+            }
+        } else |_| {}
+    }
+
     try c.exec(
-        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        &.{ uri, did, rkey, title, content, created_at orelse "", publication_uri orelse "", platform, source_collection, path orelse "" },
+        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, platform, source_collection, path orelse "", base_path, has_pub },
     );
 
     // update FTS index
