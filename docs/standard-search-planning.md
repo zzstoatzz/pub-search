@@ -179,6 +179,13 @@ leaning toward option 3 for now.
 - platform detected via basePath (`*.offprint.app`, `*.offprint.test`)
 - now fully supported alongside leaflet and pckt
 
+### greengale.app - NOW INDEXED (2026-01-22)
+- writes `site.standard.document` records
+- has `textContent` field (pre-flattened)
+- platform detected via basePath (`greengale.app/*`)
+- ~29 documents indexed at time of discovery
+- now fully supported alongside leaflet, pckt, and offprint
+
 ### implication for architecture
 
 two paths:

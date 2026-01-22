@@ -504,7 +504,7 @@
     <div id="results" class="results">
       <div class="empty-state">
         <p>search atproto publishing platforms</p>
-        <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://standard.site" target="_blank">other</a></p>
+        <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://greengale.app" target="_blank">greengale</a> · <a href="https://standard.site" target="_blank">other</a></p>
       </div>
     </div>
 
@@ -658,6 +658,12 @@
         // offprint is in early beta, URL pattern unknown
         docUrl: null
       },
+      greengale: {
+        home: 'https://greengale.app',
+        label: 'greengale.app',
+        // greengale uses basePath + path pattern
+        docUrl: null
+      },
       other: {
         home: 'https://standard.site',
         label: 'other',
@@ -794,6 +800,7 @@
         { id: 'leaflet', label: 'leaflet' },
         { id: 'pckt', label: 'pckt' },
         { id: 'offprint', label: 'offprint' },
+        { id: 'greengale', label: 'greengale' },
         { id: 'other', label: 'other' },
       ];
       const html = platforms.map(p => `
@@ -879,7 +886,7 @@
       resultsDiv.innerHTML = `
         <div class="empty-state">
           <p>search atproto publishing platforms</p>
-          <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://standard.site" target="_blank">other</a></p>
+          <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://greengale.app" target="_blank">greengale</a> · <a href="https://standard.site" target="_blank">other</a></p>
         </div>
       `;
     }
