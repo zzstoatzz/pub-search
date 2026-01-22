@@ -81,7 +81,7 @@ function formatMs(ms) {
   if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
   if (ms >= 10) return ms.toFixed(0) + 'ms';
   if (ms >= 1) return ms.toFixed(1) + 'ms';
-  return ms.toFixed(2) + 'ms';
+  return Math.round(ms * 1000) + 'µs';
 }
 
 function renderTiming(timing) {
