@@ -84,6 +84,8 @@ function formatMs(ms) {
   return Math.round(ms * 1000) + 'µs';
 }
 
+const ENDPOINT_COLORS = { search: '#8b5cf6', similar: '#06b6d4', tags: '#10b981', popular: '#f59e0b' };
+
 function renderTiming(timing) {
   const el = document.getElementById('timing');
   if (!timing) return;
@@ -95,11 +97,12 @@ function renderTiming(timing) {
 
     const row = document.createElement('div');
     row.className = 'timing-row';
+    const color = ENDPOINT_COLORS[name];
 
     if (t.count === 0) {
-      row.innerHTML = '<span class="timing-name">' + name + '</span><span class="timing-value dim">--</span>';
+      row.innerHTML = '<span class="timing-name" style="color:' + color + '">' + name + '</span><span class="timing-value dim">--</span>';
     } else {
-      row.innerHTML = '<span class="timing-name">' + name + '</span>' +
+      row.innerHTML = '<span class="timing-name" style="color:' + color + '">' + name + '</span>' +
         '<span class="timing-value">' + formatMs(t.p50_ms) + ' <span class="dim">p50</span> · ' +
         formatMs(t.p95_ms) + ' <span class="dim">p95</span></span>';
     }
@@ -114,8 +117,7 @@ function renderLatencyChart(timing) {
   const container = document.getElementById('latency-history');
   if (!container) return;
 
-  const endpoints = ['search', 'similar'];
-  const colors = { search: '#8b5cf6', similar: '#06b6d4' };
+  const endpoints = ['search', 'similar', 'tags', 'popular'];
 
   // check if any endpoint has history data
   const hasData = endpoints.some(name => timing[name]?.history?.some(h => h.count > 0));
@@ -156,7 +158,7 @@ function renderLatencyChart(timing) {
     const history = timing[name]?.history || [];
     if (history.length === 0) return;
 
-    const color = colors[name];
+    const color = ENDPOINT_COLORS[name];
     const points = history.map((p, i) => ({
       x: padding.left + (i / (history.length - 1)) * chartW,
       y: padding.top + chartH - (p.avg_ms / maxVal) * chartH
@@ -187,7 +189,7 @@ function renderLatencyChart(timing) {
   legend.className = 'latency-legend';
   endpoints.forEach(name => {
     const span = document.createElement('span');
-    span.innerHTML = '<span class="dot" style="background:' + colors[name] + '"></span>' + name;
+    span.innerHTML = '<span class="dot" style="background:' + ENDPOINT_COLORS[name] + '"></span>' + name;
     legend.appendChild(span);
   });
   container.appendChild(legend);
