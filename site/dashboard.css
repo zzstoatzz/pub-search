@@ -109,12 +109,29 @@ a.pub-name:hover { color: #2a9d5c; }
   justify-content: space-between;
   font-size: 12px;
   padding: 0.25rem 0;
-  border-bottom: 1px solid #1a1a1a;
 }
-.timing-row:last-child { border-bottom: none; }
 .timing-name { color: #888; }
 .timing-value { color: #ccc; }
 .timing-value .dim { color: #555; }
+
+.timing-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 24px;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+.timing-chart:last-child { border-bottom: none; margin-bottom: 0; }
+
+.timing-bar {
+  flex: 1;
+  background: #1B7340;
+  min-width: 2px;
+  opacity: 0.6;
+}
+.timing-bar:hover { opacity: 1; }
 
 .tags {
   display: flex;

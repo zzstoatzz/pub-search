@@ -104,6 +104,23 @@ function renderTiming(timing) {
         formatMs(t.p95_ms) + ' <span class="dim">p95</span></span>';
     }
     el.appendChild(row);
+
+    // add 24h mini chart if history available
+    if (t.history && t.history.length > 0) {
+      const chart = document.createElement('div');
+      chart.className = 'timing-chart';
+      const maxCount = Math.max(...t.history.map(h => h.count), 1);
+      t.history.forEach(h => {
+        const bar = document.createElement('div');
+        bar.className = 'timing-bar';
+        const height = h.count > 0 ? Math.max((h.count / maxCount) * 100, 5) : 0;
+        bar.style.height = height + '%';
+        const hourStr = new Date(h.hour * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        bar.title = hourStr + ': ' + h.count + ' req, ' + formatMs(h.avg_ms) + ' avg';
+        chart.appendChild(bar);
+      });
+      el.appendChild(chart);
+    }
   });
 }
 

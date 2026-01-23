@@ -252,6 +252,7 @@ fn formatPlatformsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
 
 fn formatTimingJson(alloc: Allocator) ![]const u8 {
     const all_timing = timing.getAllStats();
+    const all_series = timing.getAllTimeSeries();
 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
@@ -260,6 +261,7 @@ fn formatTimingJson(alloc: Allocator) ![]const u8 {
     try jw.beginObject();
     inline for (@typeInfo(timing.Endpoint).@"enum".fields, 0..) |field, i| {
         const t = all_timing[i];
+        const series = all_series[i];
         try jw.objectField(field.name);
         try jw.beginObject();
         try jw.objectField("count");
@@ -274,6 +276,22 @@ fn formatTimingJson(alloc: Allocator) ![]const u8 {
         try jw.write(t.p99_ms);
         try jw.objectField("max_ms");
         try jw.write(t.max_ms);
+        // add 24h time series
+        try jw.objectField("history");
+        try jw.beginArray();
+        for (series) |point| {
+            try jw.beginObject();
+            try jw.objectField("hour");
+            try jw.write(point.hour);
+            try jw.objectField("count");
+            try jw.write(point.count);
+            try jw.objectField("avg_ms");
+            try jw.write(point.avg_ms);
+            try jw.objectField("max_ms");
+            try jw.write(point.max_ms);
+            try jw.endObject();
+        }
+        try jw.endArray();
         try jw.endObject();
     }
     try jw.endObject();
