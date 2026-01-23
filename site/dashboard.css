@@ -109,29 +109,39 @@ a.pub-name:hover { color: #2a9d5c; }
   justify-content: space-between;
   font-size: 12px;
   padding: 0.25rem 0;
+  border-bottom: 1px solid #1a1a1a;
 }
+.timing-row:last-child { border-bottom: none; }
 .timing-name { color: #888; }
 .timing-value { color: #ccc; }
 .timing-value .dim { color: #555; }
 
-.timing-chart {
+.latency-chart {
+  position: relative;
+  height: 80px;
+  margin-top: 1rem;
+}
+.latency-chart canvas {
+  width: 100%;
+  height: 100%;
+}
+.latency-legend {
   display: flex;
-  align-items: flex-end;
-  gap: 1px;
-  height: 24px;
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid #1a1a1a;
+  gap: 1rem;
+  font-size: 10px;
+  margin-top: 0.5rem;
 }
-.timing-chart:last-child { border-bottom: none; margin-bottom: 0; }
-
-.timing-bar {
-  flex: 1;
-  background: #1B7340;
-  min-width: 2px;
-  opacity: 0.6;
+.latency-legend span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #666;
 }
-.timing-bar:hover { opacity: 1; }
+.latency-legend .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
 
 .tags {
   display: flex;

@@ -104,24 +104,93 @@ function renderTiming(timing) {
         formatMs(t.p95_ms) + ' <span class="dim">p95</span></span>';
     }
     el.appendChild(row);
-
-    // add 24h mini chart if history available
-    if (t.history && t.history.length > 0) {
-      const chart = document.createElement('div');
-      chart.className = 'timing-chart';
-      const maxCount = Math.max(...t.history.map(h => h.count), 1);
-      t.history.forEach(h => {
-        const bar = document.createElement('div');
-        bar.className = 'timing-bar';
-        const height = h.count > 0 ? Math.max((h.count / maxCount) * 100, 5) : 0;
-        bar.style.height = height + '%';
-        const hourStr = new Date(h.hour * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-        bar.title = hourStr + ': ' + h.count + ' req, ' + formatMs(h.avg_ms) + ' avg';
-        chart.appendChild(bar);
-      });
-      el.appendChild(chart);
-    }
   });
+
+  // render line chart for history
+  renderLatencyChart(timing);
+}
+
+function renderLatencyChart(timing) {
+  const container = document.getElementById('latency-history');
+  if (!container) return;
+
+  const endpoints = ['search', 'similar'];
+  const colors = { search: '#8b5cf6', similar: '#06b6d4' };
+
+  // check if any endpoint has history data
+  const hasData = endpoints.some(name => timing[name]?.history?.some(h => h.count > 0));
+  if (!hasData) {
+    container.innerHTML = '<div style="color:#444;font-size:11px;text-align:center;padding:2rem">no data yet</div>';
+    return;
+  }
+
+  const canvas = document.createElement('canvas');
+  const chartDiv = document.createElement('div');
+  chartDiv.className = 'latency-chart';
+  chartDiv.appendChild(canvas);
+  container.appendChild(chartDiv);
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = chartDiv.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const h = rect.height;
+  const padding = { top: 10, right: 10, bottom: 20, left: 10 };
+  const chartW = w - padding.left - padding.right;
+  const chartH = h - padding.top - padding.bottom;
+
+  // find max value across all endpoints
+  let maxVal = 0;
+  endpoints.forEach(name => {
+    const history = timing[name]?.history || [];
+    history.forEach(p => { if (p.avg_ms > maxVal) maxVal = p.avg_ms; });
+  });
+  if (maxVal === 0) maxVal = 100;
+
+  // draw each endpoint as an area chart
+  endpoints.forEach(name => {
+    const history = timing[name]?.history || [];
+    if (history.length === 0) return;
+
+    const color = colors[name];
+    const points = history.map((p, i) => ({
+      x: padding.left + (i / (history.length - 1)) * chartW,
+      y: padding.top + chartH - (p.avg_ms / maxVal) * chartH
+    }));
+
+    // draw filled area
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, padding.top + chartH);
+    points.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
+    ctx.closePath();
+    ctx.fillStyle = color + '20';
+    ctx.fill();
+
+    // draw line
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+
+  // legend
+  const legend = document.createElement('div');
+  legend.className = 'latency-legend';
+  endpoints.forEach(name => {
+    const span = document.createElement('span');
+    span.innerHTML = '<span class="dot" style="background:' + colors[name] + '"></span>' + name;
+    legend.appendChild(span);
+  });
+  container.appendChild(legend);
 }
 
 function escapeHtml(str) {
