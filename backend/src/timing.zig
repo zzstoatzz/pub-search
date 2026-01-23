@@ -97,11 +97,7 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
     mutex.lock();
     defer mutex.unlock();
 
-    if (!initialized) {
-        initialized = true;
-        loadLocked();
-        loadHourlyLocked();
-    }
+    ensureInitialized();
 
     const ep_idx = @intFromEnum(endpoint);
     buffers[ep_idx].record(elapsed_us);
@@ -181,10 +177,20 @@ fn persistHourlyLocked() void {
     }
 }
 
+fn ensureInitialized() void {
+    if (!initialized) {
+        initialized = true;
+        loadLocked();
+        loadHourlyLocked();
+    }
+}
+
 /// get stats for a specific endpoint
 pub fn getStats(endpoint: Endpoint) EndpointStats {
     mutex.lock();
     defer mutex.unlock();
+
+    ensureInitialized();
 
     const buf = &buffers[@intFromEnum(endpoint)];
     if (buf.count == 0) return .{};
@@ -221,6 +227,8 @@ pub fn getAllStats() [ENDPOINT_COUNT]EndpointStats {
 pub fn getTimeSeries(endpoint: Endpoint) [HOURS_TO_KEEP]TimeSeriesPoint {
     mutex.lock();
     defer mutex.unlock();
+
+    ensureInitialized();
 
     const current_hour = getCurrentHour();
     const ep_buckets = hourly[@intFromEnum(endpoint)];
