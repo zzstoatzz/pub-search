@@ -14,6 +14,8 @@ pub const Endpoint = enum {
 
 const SAMPLE_COUNT = 1000;
 const ENDPOINT_COUNT = @typeInfo(Endpoint).@"enum".fields.len;
+const PERSIST_PATH = "/data/timing.bin";
+const PERSIST_INTERVAL = 100; // save every N records
 
 /// per-endpoint latency buffer
 const LatencyBuffer = struct {
@@ -42,6 +44,8 @@ pub const EndpointStats = struct {
 
 var buffers: [ENDPOINT_COUNT]LatencyBuffer = [_]LatencyBuffer{.{}} ** ENDPOINT_COUNT;
 var mutex: std.Thread.Mutex = .{};
+var records_since_persist: u32 = 0;
+var initialized: bool = false;
 
 /// record a request latency (call after request completes)
 pub fn record(endpoint: Endpoint, start_time: i64) void {
@@ -50,7 +54,59 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
 
     mutex.lock();
     defer mutex.unlock();
+
+    if (!initialized) {
+        initialized = true;
+        loadLocked();
+    }
+
     buffers[@intFromEnum(endpoint)].record(elapsed_us);
+
+    // persist periodically
+    records_since_persist += 1;
+    if (records_since_persist >= PERSIST_INTERVAL) {
+        records_since_persist = 0;
+        persistLocked();
+    }
+}
+
+fn loadLocked() void {
+    const file = std.fs.openFileAbsolute(PERSIST_PATH, .{}) catch return;
+    defer file.close();
+
+    // read entire file at once (small file, ~16KB per endpoint)
+    var file_buf: [ENDPOINT_COUNT * (@sizeOf([SAMPLE_COUNT]u32) + @sizeOf(usize) * 2 + @sizeOf(u64))]u8 = undefined;
+    const bytes_read = file.readAll(&file_buf) catch return;
+    if (bytes_read != file_buf.len) return; // incomplete file
+
+    var offset: usize = 0;
+    for (&buffers) |*buf| {
+        const samples_size = @sizeOf([SAMPLE_COUNT]u32);
+        buf.samples = std.mem.bytesToValue([SAMPLE_COUNT]u32, file_buf[offset..][0..samples_size]);
+        offset += samples_size;
+
+        buf.count = std.mem.readInt(usize, file_buf[offset..][0..@sizeOf(usize)], .little);
+        offset += @sizeOf(usize);
+
+        buf.head = std.mem.readInt(usize, file_buf[offset..][0..@sizeOf(usize)], .little);
+        offset += @sizeOf(usize);
+
+        buf.total_count = std.mem.readInt(u64, file_buf[offset..][0..@sizeOf(u64)], .little);
+        offset += @sizeOf(u64);
+    }
+}
+
+fn persistLocked() void {
+    const file = std.fs.createFileAbsolute(PERSIST_PATH, .{}) catch return;
+    defer file.close();
+
+    // write all buffers
+    for (buffers) |buf| {
+        file.writeAll(std.mem.asBytes(&buf.samples)) catch return;
+        file.writeAll(std.mem.asBytes(&buf.count)) catch return;
+        file.writeAll(std.mem.asBytes(&buf.head)) catch return;
+        file.writeAll(std.mem.asBytes(&buf.total_count)) catch return;
+    }
 }
 
 /// get stats for a specific endpoint
