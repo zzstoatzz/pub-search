@@ -184,13 +184,7 @@ function renderLatencyChart(timing) {
     ctx.stroke();
   });
 
-  // y-axis label (inside chart div for positioning)
-  const yLabel = document.createElement('div');
-  yLabel.className = 'latency-y-label';
-  yLabel.textContent = formatMs(maxVal);
-  chartDiv.appendChild(yLabel);
-
-  // legend
+  // legend with max value
   const legend = document.createElement('div');
   legend.className = 'latency-legend';
   endpoints.forEach(name => {
@@ -198,6 +192,10 @@ function renderLatencyChart(timing) {
     span.innerHTML = '<span class="dot" style="background:' + ENDPOINT_COLORS[name] + '"></span>' + name;
     legend.appendChild(span);
   });
+  const maxLabel = document.createElement('span');
+  maxLabel.className = 'latency-max';
+  maxLabel.textContent = formatMs(maxVal) + ' max';
+  legend.appendChild(maxLabel);
   container.appendChild(legend);
 }
 
