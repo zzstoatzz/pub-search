@@ -1,0 +1,23 @@
+name: Backfill Embeddings
+
+on:
+  schedule:
+    # run daily at 6am UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run backfill
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: ./scripts/backfill-embeddings --batch-size 50

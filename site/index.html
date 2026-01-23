@@ -758,7 +758,22 @@
 
     function highlightTerms(text, query) {
       if (!text || !query) return escapeHtml(text);
-      const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+
+      // extract terms: quoted phrases as single terms, or split by whitespace
+      const terms = [];
+      const phraseRegex = /"([^"]+)"/g;
+      let match;
+      let remaining = query.toLowerCase();
+
+      // extract quoted phrases first
+      while ((match = phraseRegex.exec(query.toLowerCase())) !== null) {
+        terms.push(match[1]); // the phrase without quotes
+        remaining = remaining.replace(match[0], ' ');
+      }
+
+      // add remaining non-quoted terms
+      remaining.split(/\s+/).filter(t => t.length > 0).forEach(t => terms.push(t));
+
       if (terms.length === 0) return escapeHtml(text);
 
       // build regex that matches any term (case insensitive)
