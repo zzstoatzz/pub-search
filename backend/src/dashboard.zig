@@ -108,15 +108,26 @@ pub fn fetch(alloc: Allocator) !Data {
 }
 
 fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
-    // stats query
-    var stats_rows = try local.query(STATS_SQL, .{});
-    defer stats_rows.deinit();
-    const stats_row = stats_rows.next() orelse return error.NoStats;
+    // get stats from Turso (searches/started_at don't sync to local replica)
+    const client = db.getClient() orelse return error.NotInitialized;
+    var stats_res = client.query(
+        \\SELECT total_searches, service_started_at FROM stats WHERE id = 1
+    , &.{}) catch return error.QueryFailed;
+    defer stats_res.deinit();
+    const turso_stats = stats_res.first();
+    const searches = if (turso_stats) |r| r.int(0) else 0;
+    const started_at = if (turso_stats) |r| r.int(1) else 0;
 
-    const started_at = stats_row.int(4);
-    const searches = stats_row.int(2);
-    const publications = stats_row.int(1);
-    const documents = stats_row.int(0);
+    // get document/publication counts from local (fast)
+    var counts_rows = try local.query(
+        \\SELECT
+        \\  (SELECT COUNT(*) FROM documents) as docs,
+        \\  (SELECT COUNT(*) FROM publications) as pubs
+    , .{});
+    defer counts_rows.deinit();
+    const counts_row = counts_rows.next() orelse return error.NoStats;
+    const documents = counts_row.int(0);
+    const publications = counts_row.int(1);
 
     // platforms query
     var platforms_rows = try local.query(PLATFORMS_SQL, .{});

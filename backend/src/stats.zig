@@ -116,29 +116,35 @@ pub fn getStats() Stats {
 }
 
 fn getStatsLocal(local: *db.LocalDb) !Stats {
+    // get stats table from Turso (doesn't sync to local replica)
+    const client = db.getClient() orelse return error.NotInitialized;
+    var stats_res = client.query(
+        \\SELECT total_searches, total_errors, service_started_at,
+        \\       COALESCE(cache_hits, 0), COALESCE(cache_misses, 0)
+        \\FROM stats WHERE id = 1
+    , &.{}) catch return error.QueryFailed;
+    defer stats_res.deinit();
+    const stats_row = stats_res.first() orelse return error.NoStats;
+
+    // get document counts from local (fast)
     var rows = try local.query(
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
-        \\  (SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL) as embeddings,
-        \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
-        \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
-        \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at,
-        \\  (SELECT COALESCE(cache_hits, 0) FROM stats WHERE id = 1) as cache_hits,
-        \\  (SELECT COALESCE(cache_misses, 0) FROM stats WHERE id = 1) as cache_misses
+        \\  (SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL) as embeddings
     , .{});
     defer rows.deinit();
-
     const row = rows.next() orelse return error.NoRows;
+
     return .{
         .documents = row.int(0),
         .publications = row.int(1),
         .embeddings = row.int(2),
-        .searches = row.int(3),
-        .errors = row.int(4),
-        .started_at = row.int(5),
-        .cache_hits = row.int(6),
-        .cache_misses = row.int(7),
+        .searches = stats_row.int(0),
+        .errors = stats_row.int(1),
+        .started_at = stats_row.int(2),
+        .cache_hits = stats_row.int(3),
+        .cache_misses = stats_row.int(4),
     };
 }
 
