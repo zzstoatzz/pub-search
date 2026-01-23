@@ -151,6 +151,11 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         return err;
     };
 
+    // checkpoint WAL to prevent unbounded growth
+    conn.exec("PRAGMA wal_checkpoint(TRUNCATE)", .{}) catch |err| {
+        std.debug.print("sync: wal checkpoint failed: {}\n", .{err});
+    };
+
     local.setReady(true);
     std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular\n", .{ doc_count, pub_count, tag_count, popular_count });
 }
@@ -241,6 +246,11 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             .{ts_str},
         ) catch {};
     }
+
+    // periodic WAL checkpoint to prevent unbounded growth
+    local.lock();
+    conn.exec("PRAGMA wal_checkpoint(PASSIVE)", .{}) catch {};
+    local.unlock();
 
     if (new_docs > 0) {
         std.debug.print("sync: incremental sync added {d} new documents\n", .{new_docs});

@@ -11,15 +11,53 @@ const LocalDb = @This();
 conn: ?zqlite.Conn = null,
 allocator: Allocator,
 is_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+needs_resync: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 mutex: std.Thread.Mutex = .{},
+path: []const u8 = "",
+consecutive_errors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
 pub fn init(allocator: Allocator) LocalDb {
     return .{ .allocator = allocator };
 }
 
+/// Check database integrity and return false if corrupt
+fn checkIntegrity(self: *LocalDb) bool {
+    const c = self.conn orelse return false;
+    const row = c.row("PRAGMA integrity_check", .{}) catch return false;
+    if (row) |r| {
+        defer r.deinit();
+        const result = r.text(0);
+        if (std.mem.eql(u8, result, "ok")) {
+            return true;
+        }
+        std.debug.print("local db: integrity check failed: {s}\n", .{result});
+        return false;
+    }
+    return false;
+}
+
+/// Delete the database file and WAL/SHM files
+fn deleteDbFiles(path: []const u8) void {
+    std.fs.cwd().deleteFile(path) catch {};
+    // also delete WAL and SHM files
+    var wal_buf: [260]u8 = undefined;
+    var shm_buf: [260]u8 = undefined;
+    if (path.len < 252) {
+        const wal_path = std.fmt.bufPrint(&wal_buf, "{s}-wal", .{path}) catch return;
+        const shm_path = std.fmt.bufPrint(&shm_buf, "{s}-shm", .{path}) catch return;
+        std.fs.cwd().deleteFile(wal_path) catch {};
+        std.fs.cwd().deleteFile(shm_path) catch {};
+    }
+}
+
 pub fn open(self: *LocalDb) !void {
     const path_env = posix.getenv("LOCAL_DB_PATH") orelse "/data/local.db";
+    self.path = path_env;
 
+    try self.openDb(path_env, false);
+}
+
+fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
     // convert to null-terminated for zqlite
     var path_buf: [256]u8 = undefined;
     if (path_env.len >= path_buf.len) return error.PathTooLong;
@@ -38,6 +76,19 @@ pub fn open(self: *LocalDb) !void {
     // enable WAL for better concurrency
     _ = self.conn.?.exec("PRAGMA journal_mode=WAL", .{}) catch {};
     _ = self.conn.?.exec("PRAGMA busy_timeout=5000", .{}) catch {};
+
+    // check integrity - if corrupt, delete and recreate
+    if (!self.checkIntegrity()) {
+        if (is_retry) {
+            std.debug.print("local db: still corrupt after recreation, giving up\n", .{});
+            return error.DatabaseCorrupt;
+        }
+        std.debug.print("local db: corrupt, deleting and recreating\n", .{});
+        if (self.conn) |c| c.close();
+        self.conn = null;
+        deleteDbFiles(path_env);
+        return self.openDb(path_env, true);
+    }
 
     try self.createSchema();
     std.debug.print("local db: initialized\n", .{});
