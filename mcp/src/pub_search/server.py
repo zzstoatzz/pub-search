@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 
@@ -21,38 +21,32 @@ mcp = FastMCP("pub-search")
 def usage_guide() -> str:
     """instructions for using pub-search MCP tools."""
     return """\
-# pub-search MCP usage guide
+# pub-search MCP
 
-search documents across ATProto publishing platforms including Leaflet, pckt, and others.
+search ATProto publishing platforms: leaflet, pckt, offprint, greengale.
 
-## core tools
+## tools
 
-- `search(query, tag)` - search documents and publications by text or tag
-- `get_document(uri)` - get the full content of a document by its AT-URI
-- `find_similar(uri)` - find documents similar to a given document
-- `get_tags()` - list all available tags with document counts
-- `get_stats()` - get index statistics (document/publication counts)
-- `get_popular()` - see popular search queries
+- `search(query, tag, platform, since)` - full-text search with filters
+- `get_document(uri)` - fetch full content by AT-URI
+- `find_similar(uri)` - semantic similarity search
+- `get_tags()` - available tags
+- `get_stats()` - index statistics
+- `get_popular()` - popular queries
 
-## workflow for research
+## workflow
 
-1. use `search("your topic")` to find relevant documents
-2. use `get_document(uri)` to retrieve full content of interesting results
-3. use `find_similar(uri)` to discover related content
+1. `search("topic")` or `search("topic", platform="leaflet")`
+2. `get_document(uri)` for full text
+3. `find_similar(uri)` for related content
 
 ## result types
 
-search returns three types of results:
-- **publication**: a collection of articles (like a blog or magazine)
-- **article**: a document that belongs to a publication
-- **looseleaf**: a standalone document not part of a publication
+- **article**: document in a publication
+- **looseleaf**: standalone document
+- **publication**: the publication itself
 
-## AT-URIs
-
-documents are identified by AT-URIs like:
-  `at://did:plc:abc123/pub.leaflet.document/xyz789`
-
-browse the web UI at pub-search.waow.tech
+results include a `url` field for web access.
 """
 
 
@@ -62,24 +56,11 @@ def search_tips() -> str:
     return """\
 # search tips
 
-## text search
-- searches both document titles and content
-- uses FTS5 full-text search with prefix matching
-- the last word gets prefix matching: "cat dog" matches "cat dogs"
-
-## tag filtering
-- combine text search with tag filter: `search("python", tag="programming")`
-- use `get_tags()` to discover available tags
-- tags are only applied to documents, not publications
-
-## finding related content
-- after finding an interesting document, use `find_similar(uri)`
-- similarity is based on semantic embeddings (voyage-3-lite)
-- great for exploring related topics
-
-## browsing by popularity
-- use `get_popular()` to see what others are searching for
-- can inspire new research directions
+- prefix matching on last word: "cat dog" matches "cat dogs"
+- combine filters: `search("python", tag="tutorial", platform="leaflet")`
+- use `since="2025-01-01"` for recent content
+- `find_similar(uri)` for semantic similarity (voyage-3-lite embeddings)
+- `get_tags()` to discover available tags
 """
 
 
@@ -88,24 +69,28 @@ def search_tips() -> str:
 # -----------------------------------------------------------------------------
 
 
+Platform = Literal["leaflet", "pckt", "offprint", "greengale", "other"]
+
+
 @mcp.tool
 async def search(
     query: str = "",
     tag: str | None = None,
+    platform: Platform | None = None,
+    since: str | None = None,
     limit: int = 5,
 ) -> list[SearchResult]:
     """search documents and publications.
 
-    searches the full text of documents (titles and content) and publications.
-    results include a snippet showing where the match was found.
-
     args:
-        query: search query (searches titles and content)
-        tag: optional tag to filter by (only applies to documents)
-        limit: max results to return (default 5, max 40)
+        query: search query (titles and content)
+        tag: filter by tag
+        platform: filter by platform (leaflet, pckt, offprint, greengale, other)
+        since: ISO date - only documents created after this date
+        limit: max results (default 5, max 40)
 
     returns:
-        list of search results with uri, title, snippet, and metadata
+        list of results with uri, title, snippet, platform, and web url
     """
     if not query and not tag:
         return []
@@ -115,13 +100,16 @@ async def search(
         params["q"] = query
     if tag:
         params["tag"] = tag
+    if platform:
+        params["platform"] = platform
+    if since:
+        params["since"] = since
 
     async with get_http_client() as client:
         response = await client.get("/search", params=params)
         response.raise_for_status()
         results = response.json()
 
-    # apply client-side limit since API returns up to 40
     return [SearchResult(**r) for r in results[:limit]]
 
 

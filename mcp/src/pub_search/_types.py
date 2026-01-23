@@ -16,6 +16,7 @@ class SearchResult(BaseModel):
     createdAt: str = ""
     rkey: str
     basePath: str = ""
+    platform: Literal["leaflet", "pckt", "offprint", "greengale", "other"] = "leaflet"
 
     @computed_field
     @property

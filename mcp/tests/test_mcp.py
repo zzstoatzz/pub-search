@@ -23,11 +23,14 @@ class TestTypes:
             snippet="this is a test...",
             createdAt="2025-01-01T00:00:00Z",
             rkey="123",
-            basePath="/blog",
+            basePath="gyst.leaflet.pub",
+            platform="leaflet",
         )
         assert r.type == "article"
         assert r.uri == "at://did:plc:abc/pub.leaflet.document/123"
         assert r.title == "test article"
+        assert r.platform == "leaflet"
+        assert r.url == "https://gyst.leaflet.pub/123"
 
     def test_search_result_looseleaf(self):
         """SearchResult supports looseleaf type."""
