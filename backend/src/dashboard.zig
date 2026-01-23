@@ -67,6 +67,14 @@ const TOP_PUBS_SQL =
 ;
 
 pub fn fetch(alloc: Allocator) !Data {
+    // try local SQLite first (fast)
+    if (db.getLocalDb()) |local| {
+        if (fetchLocal(alloc, local)) |result| {
+            return result;
+        } else |_| {}
+    }
+
+    // fall back to Turso (slow)
     const client = db.getClient() orelse return error.NotInitialized;
 
     // batch all 5 queries into one HTTP request
@@ -97,6 +105,98 @@ pub fn fetch(alloc: Allocator) !Data {
         .platforms_json = try formatPlatformsJson(alloc, batch.get(1)),
         .timing_json = try formatTimingJson(alloc),
     };
+}
+
+fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
+    // stats query
+    var stats_rows = try local.query(STATS_SQL, .{});
+    defer stats_rows.deinit();
+    const stats_row = stats_rows.next() orelse return error.NoStats;
+
+    const started_at = stats_row.int(4);
+    const searches = stats_row.int(2);
+    const publications = stats_row.int(1);
+    const documents = stats_row.int(0);
+
+    // platforms query
+    var platforms_rows = try local.query(PLATFORMS_SQL, .{});
+    defer platforms_rows.deinit();
+    const platforms_json = try formatPlatformsJsonLocal(alloc, &platforms_rows);
+
+    // tags query
+    var tags_rows = try local.query(TAGS_SQL, .{});
+    defer tags_rows.deinit();
+    const tags_json = try formatTagsJsonLocal(alloc, &tags_rows);
+
+    // timeline query
+    var timeline_rows = try local.query(TIMELINE_SQL, .{});
+    defer timeline_rows.deinit();
+    const timeline_json = try formatTimelineJsonLocal(alloc, &timeline_rows);
+
+    // top pubs query
+    var pubs_rows = try local.query(TOP_PUBS_SQL, .{});
+    defer pubs_rows.deinit();
+    const top_pubs_json = try formatPubsJsonLocal(alloc, &pubs_rows);
+
+    return .{
+        .started_at = started_at,
+        .searches = searches,
+        .publications = publications,
+        .documents = documents,
+        .tags_json = tags_json,
+        .timeline_json = timeline_json,
+        .top_pubs_json = top_pubs_json,
+        .platforms_json = platforms_json,
+        .timing_json = try formatTimingJson(alloc),
+    };
+}
+
+fn formatTagsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn formatTimelineJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn formatPubsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(PubJson{ .name = row.text(0), .basePath = row.text(1), .count = row.int(2) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn formatPlatformsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(PlatformJson{ .platform = row.text(0), .count = row.int(1) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }
 
 fn formatTagsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
