@@ -1,0 +1,198 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "rich"]
+# ///
+"""
+benchmark search API permutations to find performance issues.
+
+Usage:
+    ./scripts/bench-search              # run with defaults
+    ./scripts/bench-search --runs 5     # more runs per permutation
+    ./scripts/bench-search --local      # test local server
+"""
+
+import asyncio
+import statistics
+import sys
+import time
+from dataclasses import dataclass
+
+import httpx
+from rich.console import Console
+
+BASE_URL = "https://leaflet-search-backend.fly.dev"
+
+QUERIES = ["python", "atproto", "rust", "blog", ""]
+TAGS = ["atproto", "bluesky", "rust", "Webworld", ""]
+PLATFORMS = ["leaflet", "pckt", ""]
+LIMITS = [10, 40, ""]
+
+
+@dataclass
+class Result:
+    name: str
+    params: dict
+    times: list[float]
+    count: int
+    status: int
+
+    @property
+    def avg(self) -> float:
+        return statistics.mean(self.times) * 1000
+
+    @property
+    def min(self) -> float:
+        return min(self.times) * 1000
+
+    @property
+    def max(self) -> float:
+        return max(self.times) * 1000
+
+    @property
+    def p50(self) -> float:
+        return statistics.median(self.times) * 1000
+
+    @property
+    def stdev(self) -> float:
+        return statistics.stdev(self.times) * 1000 if len(self.times) > 1 else 0
+
+
+async def bench_search(
+    client: httpx.AsyncClient, params: dict, runs: int
+) -> Result:
+    """benchmark a single search permutation."""
+    times = []
+    count = 0
+    status = 0
+
+    # filter empty params
+    clean_params = {k: v for k, v in params.items() if v}
+
+    name = " + ".join(f"{k}={v}" for k, v in clean_params.items()) or "(empty)"
+
+    for _ in range(runs):
+        start = time.perf_counter()
+        try:
+            resp = await client.get("/search", params=clean_params)
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+            status = resp.status_code
+            if resp.status_code == 200:
+                count = len(resp.json())
+        except Exception as e:
+            times.append(30.0)  # timeout
+            status = 0
+        # small delay between runs to avoid overwhelming server
+        await asyncio.sleep(0.1)
+
+    return Result(name=name, params=clean_params, times=times, count=count, status=status)
+
+
+async def run_benchmarks(runs: int, console: Console) -> list[Result]:
+    """run all search permutations."""
+    results = []
+
+    # build permutations - focus on meaningful combinations
+    permutations = []
+
+    # query only
+    for q in QUERIES:
+        if q:
+            permutations.append({"q": q})
+
+    # tag only
+    for tag in TAGS:
+        if tag:
+            permutations.append({"tag": tag})
+
+    # query + tag
+    for q in ["python", "blog"]:
+        for tag in ["atproto", "rust"]:
+            permutations.append({"q": q, "tag": tag})
+
+    # platform filter
+    for platform in PLATFORMS:
+        if platform:
+            permutations.append({"q": "blog", "platform": platform})
+
+    # limit variations
+    for limit in LIMITS:
+        if limit:
+            permutations.append({"q": "python", "limit": limit})
+
+    # tag + platform
+    for tag in ["atproto", "bluesky"]:
+        permutations.append({"tag": tag, "platform": "leaflet"})
+
+    # empty (should return recent)
+    permutations.append({})
+
+    console.print(f"[dim]running {len(permutations)} permutations × {runs} runs each...[/dim]\n")
+
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30) as client:
+        # warmup
+        await client.get("/health")
+
+        for i, params in enumerate(permutations):
+            result = await bench_search(client, params, runs)
+            results.append(result)
+            # progress dot
+            console.print(".", end="", style="dim")
+            if (i + 1) % 20 == 0:
+                console.print()
+
+    console.print("\n")
+    return results
+
+
+def print_results(results: list[Result], console: Console):
+    """print results as plain text."""
+    # sort by p50 descending to show slowest first
+    results.sort(key=lambda r: r.p50, reverse=True)
+
+    console.print("results (sorted by p50, slowest first):\n")
+    console.print(f"{'permutation':<40} {'p50':>8} {'avg':>8} {'min':>8} {'max':>8} {'count':>6}")
+    console.print("-" * 80)
+
+    for r in results:
+        p50_str = f"{r.p50:.0f}ms"
+        if r.p50 > 1000:
+            p50_str = f"[red bold]{p50_str}[/red bold]"
+        elif r.p50 > 500:
+            p50_str = f"[yellow]{p50_str}[/yellow]"
+        elif r.p50 < 200:
+            p50_str = f"[green]{p50_str}[/green]"
+
+        console.print(f"{r.name:<40} {p50_str:>8} {r.avg:>7.0f}ms {r.min:>7.0f}ms {r.max:>7.0f}ms {r.count:>6}")
+
+    # summary
+    console.print()
+    slow = [r for r in results if r.p50 > 500]
+    if slow:
+        console.print(f"[yellow]⚠ {len(slow)} slow (p50 > 500ms)[/yellow]")
+    else:
+        console.print("[green]✓ all under 500ms p50[/green]")
+
+
+async def main():
+    global BASE_URL
+
+    runs = 3
+    if "--runs" in sys.argv:
+        idx = sys.argv.index("--runs")
+        if idx + 1 < len(sys.argv):
+            runs = int(sys.argv[idx + 1])
+
+    if "--local" in sys.argv:
+        BASE_URL = "http://localhost:3000"
+
+    console = Console()
+    console.print(f"[bold]benchmarking {BASE_URL}[/bold]\n")
+
+    results = await run_benchmarks(runs, console)
+    print_results(results, console)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

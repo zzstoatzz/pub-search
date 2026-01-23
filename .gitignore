@@ -5,3 +5,4 @@ dist/
 *.db
 .zig-cache/
 zig-out/
+.loq_cache
