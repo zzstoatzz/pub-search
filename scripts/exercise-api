@@ -1,0 +1,117 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""
+Exercise all leaflet-search API endpoints to generate traffic for stats.
+
+Usage:
+    ./scripts/exercise-api              # run with defaults
+    ./scripts/exercise-api --count 20   # more requests per endpoint
+"""
+
+import asyncio
+import random
+import sys
+
+import httpx
+
+BASE_URL = "https://leaflet-search-backend.fly.dev"
+
+SEARCH_QUERIES = [
+    "python", "rust", "zig", "javascript", "typescript",
+    "prefect", "workflow", "automation", "data", "api",
+    "database", "sqlite", "machine learning", "llm", "claude",
+    "bluesky", "atproto", "leaflet", "publishing", "markdown",
+    "web", "server", "deploy", "docker", "async",
+]
+
+
+async def exercise_search(client: httpx.AsyncClient, count: int):
+    """Hit search endpoint with various queries."""
+    print(f"search: {count} requests...")
+    for i in range(count):
+        q = random.choice(SEARCH_QUERIES)
+        resp = await client.get(f"/search", params={"q": q})
+        if resp.status_code != 200:
+            print(f"  search failed: {resp.status_code}")
+    print(f"  done")
+
+
+async def exercise_similar(client: httpx.AsyncClient, count: int):
+    """Hit similar endpoint with document URIs."""
+    print(f"similar: {count} requests...")
+    # first get some URIs from search
+    resp = await client.get("/search", params={"q": "python"})
+    if resp.status_code != 200:
+        print("  failed to get URIs")
+        return
+    docs = resp.json()
+    if not docs:
+        print("  no docs found")
+        return
+
+    uris = [d["uri"] for d in docs[:5]]
+    for i in range(count):
+        uri = random.choice(uris)
+        resp = await client.get("/similar", params={"uri": uri})
+        if resp.status_code != 200:
+            print(f"  similar failed: {resp.status_code}")
+    print(f"  done")
+
+
+async def exercise_tags(client: httpx.AsyncClient, count: int):
+    """Hit tags endpoint."""
+    print(f"tags: {count} requests...")
+    for i in range(count):
+        resp = await client.get("/tags")
+        if resp.status_code != 200:
+            print(f"  tags failed: {resp.status_code}")
+    print(f"  done")
+
+
+async def exercise_popular(client: httpx.AsyncClient, count: int):
+    """Hit popular endpoint."""
+    print(f"popular: {count} requests...")
+    for i in range(count):
+        resp = await client.get("/popular")
+        if resp.status_code != 200:
+            print(f"  popular failed: {resp.status_code}")
+    print(f"  done")
+
+
+async def main():
+    count = 12
+    if "--count" in sys.argv:
+        idx = sys.argv.index("--count")
+        if idx + 1 < len(sys.argv):
+            count = int(sys.argv[idx + 1])
+
+    print(f"exercising {BASE_URL} ({count} requests per endpoint)\n")
+
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30) as client:
+        await asyncio.gather(
+            exercise_search(client, count),
+            exercise_similar(client, count),
+            exercise_tags(client, count),
+            exercise_popular(client, count),
+        )
+
+    print("\nfetching stats...")
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30) as client:
+        resp = await client.get("/api/dashboard")
+        data = resp.json()
+        timing = data.get("timing", {})
+        print("\nendpoint       count    p50      p95")
+        print("-" * 40)
+        for name in ["search", "similar", "tags", "popular"]:
+            t = timing.get(name, {})
+            c = t.get("count", 0)
+            p50 = t.get("p50_ms", 0)
+            p95 = t.get("p95_ms", 0)
+            print(f"{name:<12}   {c:<6}   {p50:>6.0f}ms  {p95:>6.0f}ms")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
