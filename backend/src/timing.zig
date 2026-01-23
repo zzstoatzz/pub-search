@@ -16,7 +16,6 @@ const SAMPLE_COUNT = 1000;
 const ENDPOINT_COUNT = @typeInfo(Endpoint).@"enum".fields.len;
 const PERSIST_PATH = "/data/timing.bin";
 const PERSIST_PATH_HOURLY = "/data/timing_hourly.bin";
-const PERSIST_INTERVAL = 100; // save every N records
 const HOURS_TO_KEEP = 24;
 
 /// per-endpoint latency buffer
@@ -76,7 +75,6 @@ pub const EndpointStats = struct {
 var buffers: [ENDPOINT_COUNT]LatencyBuffer = [_]LatencyBuffer{.{}} ** ENDPOINT_COUNT;
 var hourly: [ENDPOINT_COUNT][HOURS_TO_KEEP]HourlyBucket = [_][HOURS_TO_KEEP]HourlyBucket{[_]HourlyBucket{.{}} ** HOURS_TO_KEEP} ** ENDPOINT_COUNT;
 var mutex: std.Thread.Mutex = .{};
-var records_since_persist: u32 = 0;
 var initialized: bool = false;
 
 fn getCurrentHour() i64 {
@@ -109,13 +107,9 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
     buffers[ep_idx].record(elapsed_us);
     hourly[ep_idx][hour_idx].record(current_hour, elapsed_us);
 
-    // persist periodically
-    records_since_persist += 1;
-    if (records_since_persist >= PERSIST_INTERVAL) {
-        records_since_persist = 0;
-        persistLocked();
-        persistHourlyLocked();
-    }
+    // persist immediately
+    persistLocked();
+    persistHourlyLocked();
 }
 
 fn loadLocked() void {
