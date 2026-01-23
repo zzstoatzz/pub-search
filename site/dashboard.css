@@ -128,9 +128,11 @@ a.pub-name:hover { color: #2a9d5c; }
 .latency-y-label {
   position: absolute;
   top: 0;
-  left: 0;
+  left: 4px;
   font-size: 9px;
   color: #555;
+  z-index: 1;
+  pointer-events: none;
 }
 .latency-legend {
   display: flex;
