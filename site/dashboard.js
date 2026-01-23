@@ -184,6 +184,12 @@ function renderLatencyChart(timing) {
     ctx.stroke();
   });
 
+  // y-axis label (inside chart div for positioning)
+  const yLabel = document.createElement('div');
+  yLabel.className = 'latency-y-label';
+  yLabel.textContent = formatMs(maxVal);
+  chartDiv.appendChild(yLabel);
+
   // legend
   const legend = document.createElement('div');
   legend.className = 'latency-legend';
