@@ -4,11 +4,13 @@
 # dependencies = ["httpx"]
 # ///
 """
-Exercise all leaflet-search API endpoints to generate traffic for stats.
+Exercise all leaflet-search API endpoints to generate traffic.
 
 Usage:
     ./scripts/exercise-api              # run with defaults
     ./scripts/exercise-api --count 20   # more requests per endpoint
+
+Check logfire for latency/error data after running.
 """
 
 import asyncio
@@ -98,19 +100,7 @@ async def main():
             exercise_popular(client, count),
         )
 
-    print("\nfetching stats...")
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30) as client:
-        resp = await client.get("/api/dashboard")
-        data = resp.json()
-        timing = data.get("timing", {})
-        print("\nendpoint       count    p50      p95")
-        print("-" * 40)
-        for name in ["search", "similar", "tags", "popular"]:
-            t = timing.get(name, {})
-            c = t.get("count", 0)
-            p50 = t.get("p50_ms", 0)
-            p95 = t.get("p95_ms", 0)
-            print(f"{name:<12}   {c:<6}   {p50:>6.0f}ms  {p95:>6.0f}ms")
+    print("\ndone - check logfire for results")
 
 
 if __name__ == "__main__":
