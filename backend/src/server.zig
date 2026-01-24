@@ -82,14 +82,14 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    // parse query params first so we can include them in the span
     const query = parseQueryParam(alloc, target, "q") catch "";
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
     const platform_filter = parseQueryParam(alloc, target, "platform") catch null;
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
 
+    // span attributes are now copied internally, safe to use arena strings
     const span = logfire.span("http.search", .{
-        .query = if (query.len > 0) query else null,
+        .query = query,
         .tag = tag_filter,
         .platform = platform_filter,
     });
@@ -303,15 +303,12 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
     const alloc = arena.allocator();
 
     const uri = parseQueryParam(alloc, target, "uri") catch {
-        const span = logfire.span("http.similar", .{});
-        defer span.end();
         try sendJson(request, "{\"error\":\"missing uri parameter\"}");
         return;
     };
 
-    const span = logfire.span("http.similar", .{
-        .uri = uri,
-    });
+    // span attributes are copied internally, safe to use arena strings
+    const span = logfire.span("http.similar", .{ .uri = uri });
     defer span.end();
 
     const results = search.findSimilar(alloc, uri, 5) catch {
