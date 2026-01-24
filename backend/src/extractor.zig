@@ -32,7 +32,7 @@ pub const Platform = enum {
 };
 
 /// Extracted document data ready for indexing.
-/// All string fields are owned by this struct and must be freed via deinit().
+/// Only `content` and `tags` are allocated - other fields borrow from parsed JSON.
 pub const ExtractedDocument = struct {
     allocator: Allocator,
     title: []const u8,
@@ -47,6 +47,14 @@ pub const ExtractedDocument = struct {
     pub fn deinit(self: *ExtractedDocument) void {
         self.allocator.free(self.content);
         self.allocator.free(self.tags);
+    }
+
+    /// Transfer ownership of content to caller. Caller must free returned slice.
+    /// After calling, deinit() will only free tags.
+    pub fn takeContent(self: *ExtractedDocument) []u8 {
+        const content = self.content;
+        self.content = &.{};
+        return content;
     }
 
     /// Platform name as string (for DB storage)

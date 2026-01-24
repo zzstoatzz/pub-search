@@ -90,7 +90,6 @@ const Handler = struct {
             std.debug.print("tap: ACK format error: {}\n", .{err});
             return;
         };
-        std.debug.print("tap: sending ACK for id={d}\n", .{msg_id});
         self.client.write(@constCast(ack_json)) catch |err| {
             std.debug.print("tap: failed to send ACK: {}\n", .{err});
         };
@@ -297,12 +296,9 @@ fn fetchLeafletContent(allocator: Allocator, did: []const u8, rkey: []const u8) 
 
     // use extractor to get content from pub.leaflet.document
     var leaflet_doc = try extractor.extractDocument(allocator, record_obj, LEAFLET_DOCUMENT);
-    defer {
-        // don't free content - we're returning it
-        leaflet_doc.allocator.free(leaflet_doc.tags);
-    }
+    defer leaflet_doc.deinit();
 
-    return leaflet_doc.content;
+    return leaflet_doc.takeContent();
 }
 
 fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
