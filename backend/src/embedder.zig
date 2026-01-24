@@ -51,7 +51,6 @@ fn worker(allocator: Allocator, api_key: []const u8) void {
 
         if (processed > 0) {
             consecutive_errors = 0;
-            logfire.debug("embedder: processed {d} documents", .{processed});
             logfire.counter("embedder.documents_processed", @intCast(processed));
             // immediately check for more
             continue;
@@ -128,7 +127,36 @@ fn buildEmbeddingText(allocator: Allocator, title: []const u8, content: []const 
     @memcpy(text[0..title.len], title);
     text[title.len] = ' ';
     @memcpy(text[title.len + 1 ..], truncated_content);
+
+    // sanitize to valid UTF-8 (replace invalid bytes with space)
+    // this ensures json.Stringify treats it as a string, not byte array
+    sanitizeUtf8(text);
+
     return text;
+}
+
+fn sanitizeUtf8(text: []u8) void {
+    var i: usize = 0;
+    while (i < text.len) {
+        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
+            text[i] = ' '; // replace invalid start byte
+            i += 1;
+            continue;
+        };
+        if (i + len > text.len) {
+            // truncated sequence at end
+            text[i] = ' ';
+            i += 1;
+            continue;
+        }
+        // validate the full sequence
+        _ = std.unicode.utf8Decode(text[i..][0..len]) catch {
+            text[i] = ' '; // replace invalid sequence start
+            i += 1;
+            continue;
+        };
+        i += len;
+    }
 }
 
 fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToEmbed) ![][]f32 {

@@ -67,8 +67,8 @@ const Handler = struct {
 
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
         self.msg_count += 1;
-        if (self.msg_count % 100 == 1) {
-            logfire.debug("tap: received {d} messages", .{self.msg_count});
+        if (self.msg_count % 1000 == 0) {
+            logfire.info("tap: processed {d} messages", .{self.msg_count});
         }
 
         // extract message ID for ACK
@@ -96,9 +96,7 @@ const Handler = struct {
         };
     }
 
-    pub fn close(_: *Handler) void {
-        logfire.debug("tap connection closed", .{});
-    }
+    pub fn close(_: *Handler) void {}
 };
 
 fn extractMessageId(allocator: Allocator, payload: []const u8) ?i64 {
@@ -215,10 +213,8 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     } else if (rec.isDelete()) {
         if (isDocumentCollection(rec.collection)) {
             indexer.deleteDocument(uri);
-            logfire.debug("deleted document: {s}", .{uri});
         } else if (isPublicationCollection(rec.collection)) {
             indexer.deletePublication(uri);
-            logfire.debug("deleted publication: {s}", .{uri});
         }
     }
 }
@@ -245,7 +241,6 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.source_collection,
         doc.path,
     );
-    logfire.debug("indexed document: {s} [{s}] ({d} chars, {d} tags)", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
     logfire.counter("tap.documents_indexed", 1);
 }
 
@@ -262,7 +257,6 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
         stripUrlScheme(zat.json.getString(record_val, "url"));
 
     try indexer.insertPublication(uri, did, rkey, name, description, base_path);
-    logfire.debug("indexed publication: {s} (base_path: {s})", .{ uri, base_path orelse "none" });
     logfire.counter("tap.publications_indexed", 1);
 }
 
