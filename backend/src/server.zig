@@ -3,6 +3,7 @@ const net = std.net;
 const http = std.http;
 const mem = std.mem;
 const json = std.json;
+const logfire = @import("logfire");
 const activity = @import("activity.zig");
 const search = @import("search.zig");
 const stats = @import("stats.zig");
@@ -26,12 +27,12 @@ pub fn handleConnection(conn: net.Server.Connection) void {
     while (true) {
         var request = server.receiveHead() catch |err| {
             if (err != error.HttpConnectionClosing and err != error.EndOfStream) {
-                std.debug.print("http receive error: {}\n", .{err});
+                logfire.debug("http receive error: {}", .{err});
             }
             return;
         };
         handleRequest(&server, &request) catch |err| {
-            std.debug.print("request error: {}\n", .{err});
+            logfire.err("request error: {}", .{err});
             return;
         };
         if (!request.head.keep_alive) return;
@@ -77,6 +78,9 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
     defer timing.record(.search, start_time);
 
+    const span = logfire.span("http.search", .{});
+    defer span.end();
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -94,16 +98,21 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
 
     // perform FTS search - arena handles cleanup
     const results = search.search(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
+        logfire.err("search failed: {}", .{err});
         stats.recordError();
         return err;
     };
     stats.recordSearch(query);
+    logfire.counter("search.requests", 1);
     try sendJson(request, results);
 }
 
 fn handleTags(request: *http.Server.Request) !void {
     const start_time = std.time.microTimestamp();
     defer timing.record(.tags, start_time);
+
+    const span = logfire.span("http.tags", .{});
+    defer span.end();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -116,6 +125,9 @@ fn handleTags(request: *http.Server.Request) !void {
 fn handlePopular(request: *http.Server.Request) !void {
     const start_time = std.time.microTimestamp();
     defer timing.record(.popular, start_time);
+
+    const span = logfire.span("http.popular", .{});
+    defer span.end();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -281,6 +293,9 @@ fn handleDashboard(request: *http.Server.Request) !void {
 fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
     defer timing.record(.similar, start_time);
+
+    const span = logfire.span("http.similar", .{});
+    defer span.end();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();

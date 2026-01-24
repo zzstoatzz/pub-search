@@ -5,6 +5,7 @@ const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const zat = @import("zat");
+const logfire = @import("logfire");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
 
@@ -48,10 +49,10 @@ pub fn consumer(allocator: Allocator) void {
         if (connected) |_| {
             // connection succeeded then closed - reset backoff
             backoff = 1;
-            std.debug.print("tap connection closed, reconnecting immediately...\n", .{});
+            logfire.info("tap connection closed, reconnecting immediately", .{});
         } else |err| {
             // connection failed - backoff
-            std.debug.print("tap error: {}, reconnecting in {}s...\n", .{ err, backoff });
+            logfire.warn("tap error: {}, reconnecting in {d}s", .{ err, backoff });
             posix.nanosleep(backoff, 0);
             backoff = @min(backoff * 2, max_backoff);
         }
@@ -67,7 +68,7 @@ const Handler = struct {
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
         self.msg_count += 1;
         if (self.msg_count % 100 == 1) {
-            std.debug.print("tap: received {} messages\n", .{self.msg_count});
+            logfire.debug("tap: received {d} messages", .{self.msg_count});
         }
 
         // extract message ID for ACK
@@ -75,7 +76,7 @@ const Handler = struct {
 
         // process the message
         processMessage(self.allocator, data) catch |err| {
-            std.debug.print("message processing error: {}\n", .{err});
+            logfire.err("message processing error: {}", .{err});
             // still ACK even on error to avoid infinite retries
         };
 
@@ -87,16 +88,16 @@ const Handler = struct {
 
     fn sendAck(self: *Handler, msg_id: i64) void {
         const ack_json = std.fmt.bufPrint(&self.ack_buf, "{{\"type\":\"ack\",\"id\":{d}}}", .{msg_id}) catch |err| {
-            std.debug.print("tap: ACK format error: {}\n", .{err});
+            logfire.err("tap: ACK format error: {}", .{err});
             return;
         };
         self.client.write(@constCast(ack_json)) catch |err| {
-            std.debug.print("tap: failed to send ACK: {}\n", .{err});
+            logfire.err("tap: failed to send ACK: {}", .{err});
         };
     }
 
     pub fn close(_: *Handler) void {
-        std.debug.print("tap connection closed\n", .{});
+        logfire.debug("tap connection closed", .{});
     }
 };
 
@@ -112,7 +113,7 @@ fn connect(allocator: Allocator) !void {
     const tls = useTls();
     const path = "/channel";
 
-    std.debug.print("connecting to {s}://{s}:{d}{s}\n", .{ if (tls) "wss" else "ws", host, port, path });
+    logfire.info("connecting to {s}://{s}:{d}{s}", .{ if (tls) "wss" else "ws", host, port, path });
 
     var client = websocket.Client.init(allocator, .{
         .host = host,
@@ -120,7 +121,7 @@ fn connect(allocator: Allocator) !void {
         .tls = tls,
         .max_size = 1024 * 1024, // 1MB
     }) catch |err| {
-        std.debug.print("websocket client init failed: {}\n", .{err});
+        logfire.err("websocket client init failed: {}", .{err});
         return err;
     };
     defer client.deinit();
@@ -129,15 +130,15 @@ fn connect(allocator: Allocator) !void {
     const host_header = std.fmt.bufPrint(&host_header_buf, "Host: {s}\r\n", .{host}) catch host;
 
     client.handshake(path, .{ .headers = host_header }) catch |err| {
-        std.debug.print("websocket handshake failed: {}\n", .{err});
+        logfire.err("websocket handshake failed: {}", .{err});
         return err;
     };
 
-    std.debug.print("tap connected!\n", .{});
+    logfire.info("tap connected", .{});
 
     var handler = Handler{ .allocator = allocator, .client = &client };
     client.readLoop(&handler) catch |err| {
-        std.debug.print("websocket read loop error: {}\n", .{err});
+        logfire.err("websocket read loop error: {}", .{err});
         return err;
     };
 }
@@ -169,14 +170,14 @@ const LeafletPublication = struct {
 
 fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch {
-        std.debug.print("tap: JSON parse failed, first 100 bytes: {s}\n", .{payload[0..@min(payload.len, 100)]});
+        logfire.err("tap: JSON parse failed, first 100 bytes: {s}", .{payload[0..@min(payload.len, 100)]});
         return;
     };
     defer parsed.deinit();
 
     // check message type
     const msg_type = zat.json.getString(parsed.value, "type") orelse {
-        std.debug.print("tap: no type field in message\n", .{});
+        logfire.warn("tap: no type field in message", .{});
         return;
     };
 
@@ -184,7 +185,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 
     // extract record envelope (extractAt ignores extra fields like live, rev, cid)
     const rec = zat.json.extractAt(TapRecord, allocator, parsed.value, .{"record"}) catch |err| {
-        std.debug.print("tap: failed to extract record: {}\n", .{err});
+        logfire.warn("tap: failed to extract record: {}", .{err});
         return;
     };
 
@@ -195,25 +196,29 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     var uri_buf: [256]u8 = undefined;
     const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse return;
 
+    // span for the actual indexing work
+    const span = logfire.span("tap.index_record", .{});
+    defer span.end();
+
     if (rec.isCreate() or rec.isUpdate()) {
         const inner_record = zat.json.getObject(parsed.value, "record.record") orelse return;
 
         if (isDocumentCollection(rec.collection)) {
             processDocument(allocator, uri, did.raw, rec.rkey, inner_record, rec.collection) catch |err| {
-                std.debug.print("document processing error: {}\n", .{err});
+                logfire.err("document processing error: {}", .{err});
             };
         } else if (isPublicationCollection(rec.collection)) {
             processPublication(allocator, uri, did.raw, rec.rkey, inner_record) catch |err| {
-                std.debug.print("publication processing error: {}\n", .{err});
+                logfire.err("publication processing error: {}", .{err});
             };
         }
     } else if (rec.isDelete()) {
         if (isDocumentCollection(rec.collection)) {
             indexer.deleteDocument(uri);
-            std.debug.print("deleted document: {s}\n", .{uri});
+            logfire.debug("deleted document: {s}", .{uri});
         } else if (isPublicationCollection(rec.collection)) {
             indexer.deletePublication(uri);
-            std.debug.print("deleted publication: {s}\n", .{uri});
+            logfire.debug("deleted publication: {s}", .{uri});
         }
     }
 }
@@ -221,7 +226,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8) !void {
     var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
         if (err != error.NoContent and err != error.MissingTitle) {
-            std.debug.print("extraction error for {s}: {}\n", .{ uri, err });
+            logfire.warn("extraction error for {s}: {}", .{ uri, err });
         }
         return;
     };
@@ -240,7 +245,8 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.source_collection,
         doc.path,
     );
-    std.debug.print("indexed document: {s} [{s}] ({} chars, {} tags)\n", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
+    logfire.debug("indexed document: {s} [{s}] ({d} chars, {d} tags)", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
+    logfire.counter("tap.documents_indexed", 1);
 }
 
 fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
@@ -256,7 +262,8 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
         stripUrlScheme(zat.json.getString(record_val, "url"));
 
     try indexer.insertPublication(uri, did, rkey, name, description, base_path);
-    std.debug.print("indexed publication: {s} (base_path: {s})\n", .{ uri, base_path orelse "none" });
+    logfire.debug("indexed publication: {s} (base_path: {s})", .{ uri, base_path orelse "none" });
+    logfire.counter("tap.publications_indexed", 1);
 }
 
 fn stripUrlScheme(url: ?[]const u8) ?[]const u8 {

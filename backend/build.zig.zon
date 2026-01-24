@@ -20,6 +20,10 @@
             .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
             .hash = "zqlite-0.0.0-RWLaY_y_mADh2LdbDrG_2HT2dBAcsAR8Jig_7-dOJd0B",
         },
+        .logfire = .{
+            .url = "https://tangled.sh/zzstoatzz.io/logfire-zig/archive/main",
+            .hash = "logfire_zig-0.1.0-x2yDLpwEAQC7sbmc8_4g5nhfzb75kzVZ1r3jTM_AgO5l",
+        },
     },
     .paths = .{
         "build.zig",

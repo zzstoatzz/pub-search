@@ -2,6 +2,7 @@ const std = @import("std");
 const net = std.net;
 const posix = std.posix;
 const Thread = std.Thread;
+const logfire = @import("logfire");
 const db = @import("db/mod.zig");
 const activity = @import("activity.zig");
 const server = @import("server.zig");
@@ -16,6 +17,15 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // configure logfire (reads LOGFIRE_WRITE_TOKEN from env)
+    _ = logfire.configure(.{
+        .service_name = "leaflet-search",
+        .service_version = "0.1.0",
+        .environment = posix.getenv("FLY_APP_NAME") orelse "development",
+    }) catch |err| {
+        std.debug.print("logfire init failed: {}, continuing without observability\n", .{err});
+    };
+
     // start http server FIRST so Fly proxy doesn't timeout
     const port: u16 = blk: {
         const port_str = posix.getenv("PORT") orelse "3000";
@@ -27,7 +37,7 @@ pub fn main() !void {
     defer listener.deinit();
 
     const app_name = posix.getenv("APP_NAME") orelse "leaflet-search";
-    std.debug.print("{s} listening on http://0.0.0.0:{d} (max {} workers)\n", .{ app_name, port, MAX_HTTP_WORKERS });
+    logfire.info("{s} listening on port {d} (max {d} workers)", .{ app_name, port, MAX_HTTP_WORKERS });
 
     // init turso client synchronously (fast, needed for search fallback)
     try db.initTurso();
@@ -46,16 +56,16 @@ pub fn main() !void {
 
     while (true) {
         const conn = listener.accept() catch |err| {
-            std.debug.print("accept error: {}\n", .{err});
+            logfire.err("accept error: {}", .{err});
             continue;
         };
 
         setSocketTimeout(conn.stream.handle, SOCKET_TIMEOUT_SECS) catch |err| {
-            std.debug.print("failed to set socket timeout: {}\n", .{err});
+            logfire.warn("failed to set socket timeout: {}", .{err});
         };
 
         pool.spawn(server.handleConnection, .{conn}) catch |err| {
-            std.debug.print("pool spawn error: {}\n", .{err});
+            logfire.err("pool spawn error: {}", .{err});
             conn.stream.close();
         };
     }

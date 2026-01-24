@@ -25,6 +25,11 @@ pub fn build(b: *std.Build) void {
         .sqlite3 = &[_][]const u8{ "-std=c99", "-DSQLITE_ENABLE_FTS5" },
     });
 
+    const logfire = b.dependency("logfire", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "leaflet-search",
         .root_module = b.createModule(.{
@@ -36,6 +41,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zql", .module = zql.module("zql") },
                 .{ .name = "zat", .module = zat.module("zat") },
                 .{ .name = "zqlite", .module = zqlite.module("zqlite") },
+                .{ .name = "logfire", .module = logfire.module("logfire") },
             },
         }),
     });

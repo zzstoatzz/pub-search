@@ -9,6 +9,7 @@ const json = std.json;
 const mem = std.mem;
 const posix = std.posix;
 const Allocator = mem.Allocator;
+const logfire = @import("logfire");
 const db = @import("db/mod.zig");
 
 // voyage-3-lite limits
@@ -21,16 +22,16 @@ const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
 /// Start the embedder background worker
 pub fn start(allocator: Allocator) void {
     const api_key = posix.getenv("VOYAGE_API_KEY") orelse {
-        std.debug.print("embedder: VOYAGE_API_KEY not set, embeddings disabled\n", .{});
+        logfire.info("embedder: VOYAGE_API_KEY not set, embeddings disabled", .{});
         return;
     };
 
     const thread = std.Thread.spawn(.{}, worker, .{ allocator, api_key }) catch |err| {
-        std.debug.print("embedder: failed to start thread: {}\n", .{err});
+        logfire.err("embedder: failed to start thread: {}", .{err});
         return;
     };
     thread.detach();
-    std.debug.print("embedder: background worker started\n", .{});
+    logfire.info("embedder: background worker started", .{});
 }
 
 fn worker(allocator: Allocator, api_key: []const u8) void {
@@ -43,14 +44,15 @@ fn worker(allocator: Allocator, api_key: []const u8) void {
         const processed = processNextBatch(allocator, api_key) catch |err| {
             consecutive_errors += 1;
             const backoff: u64 = @min(ERROR_BACKOFF_SECS * consecutive_errors, 3600);
-            std.debug.print("embedder: error {}, backing off {}s\n", .{ err, backoff });
+            logfire.warn("embedder: error {}, backing off {d}s", .{ err, backoff });
             std.Thread.sleep(backoff * std.time.ns_per_s);
             continue;
         };
 
         if (processed > 0) {
             consecutive_errors = 0;
-            std.debug.print("embedder: processed {} documents\n", .{processed});
+            logfire.debug("embedder: processed {d} documents", .{processed});
+            logfire.counter("embedder.documents_processed", @intCast(processed));
             // immediately check for more
             continue;
         }
@@ -67,6 +69,9 @@ const DocToEmbed = struct {
 };
 
 fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
+    const span = logfire.span("embedder.process_batch", .{});
+    defer span.end();
+
     const client = db.getClient() orelse return error.NoClient;
 
     // query for documents needing embeddings
@@ -107,7 +112,7 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     // update Turso with embeddings
     for (docs.items, embeddings) |doc, embedding| {
         updateDocumentEmbedding(client, doc.uri, embedding) catch |err| {
-            std.debug.print("embedder: failed to update {s}: {}\n", .{ doc.uri, err });
+            logfire.err("embedder: failed to update {s}: {}", .{ doc.uri, err });
         };
     }
 
@@ -127,6 +132,11 @@ fn buildEmbeddingText(allocator: Allocator, title: []const u8, content: []const 
 }
 
 fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToEmbed) ![][]f32 {
+    const span = logfire.span("embedder.voyage_api", .{
+        .batch_size = @as(i64, @intCast(docs.len)),
+    });
+    defer span.end();
+
     var http_client: http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
@@ -153,14 +163,14 @@ fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToE
         .payload = body,
         .response_writer = &response_body.writer,
     }) catch |err| {
-        std.debug.print("embedder: voyage request failed: {}\n", .{err});
+        logfire.err("embedder: voyage request failed: {}", .{err});
         return error.VoyageRequestFailed;
     };
 
     if (res.status != .ok) {
         const resp_text = response_body.toOwnedSlice() catch "";
         defer if (resp_text.len > 0) allocator.free(resp_text);
-        std.debug.print("embedder: voyage error {}: {s}\n", .{ res.status, resp_text[0..@min(resp_text.len, 200)] });
+        logfire.err("embedder: voyage error {}: {s}", .{ res.status, resp_text[0..@min(resp_text.len, 200)] });
         return error.VoyageApiError;
     }
 
@@ -197,7 +207,7 @@ fn buildVoyageRequest(allocator: Allocator, docs: []const DocToEmbed) ![]const u
 
 fn parseVoyageResponse(allocator: Allocator, response: []const u8, expected_count: usize) ![][]f32 {
     const parsed = json.parseFromSlice(json.Value, allocator, response, .{}) catch {
-        std.debug.print("embedder: failed to parse voyage response\n", .{});
+        logfire.err("embedder: failed to parse voyage response", .{});
         return error.ParseError;
     };
     defer parsed.deinit();
@@ -206,7 +216,7 @@ fn parseVoyageResponse(allocator: Allocator, response: []const u8, expected_coun
     if (data != .array) return error.InvalidData;
 
     if (data.array.items.len != expected_count) {
-        std.debug.print("embedder: expected {} embeddings, got {}\n", .{ expected_count, data.array.items.len });
+        logfire.err("embedder: expected {d} embeddings, got {d}", .{ expected_count, data.array.items.len });
         return error.CountMismatch;
     }
 
