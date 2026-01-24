@@ -22,7 +22,7 @@
         },
         .logfire = .{
             .url = "https://tangled.sh/zzstoatzz.io/logfire-zig/archive/main",
-            .hash = "logfire_zig-0.1.0-x2yDLsYmAQA--hAzPca_ndgyPVQITpZIDWw5FMQRMPWV",
+            .hash = "logfire_zig-0.1.0-x2yDLj46AQB1ZIEM24ZHd1rzQo2iAZ0An6ed-Hso8xXB",
         },
     },
     .paths = .{
