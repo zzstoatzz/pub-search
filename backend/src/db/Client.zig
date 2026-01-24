@@ -150,12 +150,15 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
         .payload = body,
         .response_writer = &response_body.writer,
     }) catch |err| {
-        logfire.err("turso request failed: {}", .{err});
+        logfire.err("db.query http failed: {s} | sql: {s}", .{ @errorName(err), truncateSql(sql) });
         return error.HttpError;
     };
 
     if (res.status != .ok) {
-        logfire.err("turso error: {}", .{res.status});
+        const resp_text = response_body.toOwnedSlice() catch "";
+        defer if (resp_text.len > 0) self.allocator.free(resp_text);
+        const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
+        logfire.err("db.query turso error: {} | sql: {s} | response: {s}", .{ res.status, truncateSql(sql), resp_preview });
         return error.TursoError;
     }
 
@@ -197,12 +200,15 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
         .payload = body,
         .response_writer = &response_body.writer,
     }) catch |err| {
-        logfire.err("turso batch request failed: {}", .{err});
+        logfire.err("db.batch http failed: {s} | first_sql: {s}", .{ @errorName(err), first_sql });
         return error.HttpError;
     };
 
     if (res.status != .ok) {
-        logfire.err("turso batch error: {}", .{res.status});
+        const resp_text = response_body.toOwnedSlice() catch "";
+        defer if (resp_text.len > 0) self.allocator.free(resp_text);
+        const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
+        logfire.err("db.batch turso error: {} | first_sql: {s} | response: {s}", .{ res.status, first_sql, resp_preview });
         return error.TursoError;
     }
 

@@ -267,7 +267,7 @@ pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
 
     const c = self.conn orelse return error.NotOpen;
     const rows = c.rows(sql, args) catch |e| {
-        logfire.err("local db query error: {}", .{e});
+        logfire.err("db.local.query failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
     };
     return .{ .inner = rows };
@@ -285,7 +285,7 @@ pub fn queryOne(self: *LocalDb, comptime sql: []const u8, args: anytype) !?Row {
 
     const c = self.conn orelse return error.NotOpen;
     const row = c.row(sql, args) catch |e| {
-        logfire.err("local db queryOne error: {}", .{e});
+        logfire.err("db.local.queryOne failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
     };
     if (row) |r| {
@@ -301,7 +301,7 @@ pub fn exec(self: *LocalDb, comptime sql: []const u8, args: anytype) !void {
 
     const c = self.conn orelse return error.NotOpen;
     c.exec(sql, args) catch |e| {
-        std.debug.print("local db exec error: {}\n", .{e});
+        logfire.err("db.local.exec failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
     };
 }
