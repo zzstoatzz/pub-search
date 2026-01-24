@@ -36,13 +36,21 @@ pub fn insertDocument(
     const has_pub: []const u8 = if (pub_uri.len > 0) "1" else "0";
 
     // look up base_path from publication (or fallback to DID lookup)
+    // use a stack buffer because row.text() returns a slice into result memory
+    // which gets freed by result.deinit()
+    var base_path_buf: [256]u8 = undefined;
     var base_path: []const u8 = "";
+
     if (pub_uri.len > 0) {
         if (c.query("SELECT base_path FROM publications WHERE uri = ?", &.{pub_uri})) |res| {
             var result = res;
             defer result.deinit();
             if (result.first()) |row| {
-                base_path = row.text(0);
+                const val = row.text(0);
+                if (val.len > 0 and val.len <= base_path_buf.len) {
+                    @memcpy(base_path_buf[0..val.len], val);
+                    base_path = base_path_buf[0..val.len];
+                }
             }
         } else |_| {}
     }
@@ -64,7 +72,11 @@ pub fn insertDocument(
             var result = res;
             defer result.deinit();
             if (result.first()) |row| {
-                base_path = row.text(0);
+                const val = row.text(0);
+                if (val.len > 0 and val.len <= base_path_buf.len) {
+                    @memcpy(base_path_buf[0..val.len], val);
+                    base_path = base_path_buf[0..val.len];
+                }
             }
         } else |_| {}
 
@@ -74,15 +86,34 @@ pub fn insertDocument(
                 var result = res;
                 defer result.deinit();
                 if (result.first()) |row| {
-                    base_path = row.text(0);
+                    const val = row.text(0);
+                    if (val.len > 0 and val.len <= base_path_buf.len) {
+                        @memcpy(base_path_buf[0..val.len], val);
+                        base_path = base_path_buf[0..val.len];
+                    }
                 }
             } else |_| {}
         }
     }
 
+    // detect platform from basePath if platform is unknown/other
+    // this handles site.standard.* documents where collection doesn't indicate platform
+    var actual_platform = platform;
+    if (std.mem.eql(u8, platform, "unknown") or std.mem.eql(u8, platform, "other")) {
+        if (std.mem.indexOf(u8, base_path, "leaflet.pub") != null) {
+            actual_platform = "leaflet";
+        } else if (std.mem.indexOf(u8, base_path, "pckt.blog") != null) {
+            actual_platform = "pckt";
+        } else if (std.mem.indexOf(u8, base_path, "offprint.app") != null) {
+            actual_platform = "offprint";
+        } else if (std.mem.indexOf(u8, base_path, "greengale.app") != null) {
+            actual_platform = "greengale";
+        }
+    }
+
     try c.exec(
         "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, platform, source_collection, path orelse "", base_path, has_pub },
+        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub },
     );
 
     // update FTS index

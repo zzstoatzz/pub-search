@@ -15,26 +15,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // init db (turso + local replica)
-    try db.init();
-    db.startSync();
-
-    // start activity tracker
-    activity.init();
-
-    // start tap consumer in background
-    const tap_thread = try Thread.spawn(.{}, tap.consumer, .{allocator});
-    defer tap_thread.join();
-
-    // init thread pool for http connections
-    var pool: Thread.Pool = undefined;
-    try pool.init(.{
-        .allocator = allocator,
-        .n_jobs = MAX_HTTP_WORKERS,
-    });
-    defer pool.deinit();
-
-    // start http server
+    // start http server FIRST so Fly proxy doesn't timeout
     const port: u16 = blk: {
         const port_str = posix.getenv("PORT") orelse "3000";
         break :blk std.fmt.parseInt(u16, port_str, 10) catch 3000;
@@ -46,6 +27,21 @@ pub fn main() !void {
 
     const app_name = posix.getenv("APP_NAME") orelse "leaflet-search";
     std.debug.print("{s} listening on http://0.0.0.0:{d} (max {} workers)\n", .{ app_name, port, MAX_HTTP_WORKERS });
+
+    // init turso client synchronously (fast, needed for search fallback)
+    try db.initTurso();
+
+    // init thread pool for http connections
+    var pool: Thread.Pool = undefined;
+    try pool.init(.{
+        .allocator = allocator,
+        .n_jobs = MAX_HTTP_WORKERS,
+    });
+    defer pool.deinit();
+
+    // init local db and other services in background (slow)
+    const init_thread = try Thread.spawn(.{}, initServices, .{allocator});
+    init_thread.detach();
 
     while (true) {
         const conn = listener.accept() catch |err| {
@@ -62,6 +58,18 @@ pub fn main() !void {
             conn.stream.close();
         };
     }
+}
+
+fn initServices(allocator: std.mem.Allocator) void {
+    // init local db (slow - turso already initialized)
+    db.initLocalDb();
+    db.startSync();
+
+    // start activity tracker
+    activity.init();
+
+    // start tap consumer
+    tap.consumer(allocator);
 }
 
 fn setSocketTimeout(fd: posix.fd_t, secs: u32) !void {

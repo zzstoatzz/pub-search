@@ -161,19 +161,20 @@ def extract_document(record: dict, collection: str) -> dict | None:
     if not title:
         return None
 
-    # Get content - try textContent (site.standard), then leaflet blocks, then content/text
+    # Get content - try textContent (site.standard), then leaflet blocks
     content = value.get("textContent") or ""
     if not content:
-        # Try leaflet-style pages/blocks
+        # Try leaflet-style pages/blocks at top level (pub.leaflet.document)
         pages = value.get("pages", [])
         if pages:
             content = extract_leaflet_blocks(pages)
     if not content:
-        # Fall back to simple content/text fields
-        content = value.get("content") or value.get("text") or ""
-    if isinstance(content, dict):
-        # Handle richtext format
-        content = content.get("text", "")
+        # Try content.pages (site.standard.document with pub.leaflet.content)
+        content_obj = value.get("content")
+        if isinstance(content_obj, dict):
+            pages = content_obj.get("pages", [])
+            if pages:
+                content = extract_leaflet_blocks(pages)
 
     # Get created_at
     created_at = value.get("createdAt", "")

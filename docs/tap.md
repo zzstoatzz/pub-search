@@ -4,7 +4,7 @@ leaflet-search uses [tap](https://github.com/bluesky-social/indigo/tree/main/cmd
 
 ## what is tap?
 
-tap subscribes to the ATProto firehose, filters for specific collections (e.g., `pub.leaflet.document`), and broadcasts matching events to websocket clients. it also does initial crawling/backfilling of existing records.
+tap subscribes to the ATProto firehose, filters for specific collections (e.g., `site.standard.document`), and broadcasts matching events to websocket clients. it also does initial crawling/backfilling of existing records.
 
 key behavior: **tap backfills historical data when repos are added**. when a repo is added to tracking:
 1. tap fetches the full repo from the account's PDS using `com.atproto.sync.getRepo`
@@ -26,7 +26,7 @@ tap sends JSON messages over websocket. record events look like:
     "live": true,
     "did": "did:plc:abc123...",
     "rev": "3mbspmpaidl2a",
-    "collection": "pub.leaflet.document",
+    "collection": "site.standard.document",
     "rkey": "3lzyrj6q6gs27",
     "action": "create",
     "record": { ... },
@@ -42,13 +42,13 @@ tap sends JSON messages over websocket. record events look like:
 | type | string | "record", "identity", "account" | message type |
 | action | **string** | "create", "update", "delete" | NOT an enum! |
 | live | bool | true/false | true = firehose, false = resync |
-| collection | string | e.g., "pub.leaflet.document" | lexicon collection |
+| collection | string | e.g., "site.standard.document" | lexicon collection |
 
 ## gotchas
 
 1. **action is a string, not an enum** - tap sends `"action": "create"` as a JSON string. if your parser expects an enum type, extraction will silently fail. use string comparison.
 
-2. **collection filters apply to output** - `TAP_COLLECTION_FILTERS` controls which records tap sends to clients. records from other collections are fetched but not forwarded.
+2. **collection filters apply during processing** - `TAP_COLLECTION_FILTERS` controls which records tap processes and sends to clients, both during live commits and resync CAR walks. records from other collections are skipped entirely.
 
 3. **signal collection vs collection filters** - `TAP_SIGNAL_COLLECTION` controls auto-discovery of repos (which repos to track), while `TAP_COLLECTION_FILTERS` controls which records from those repos to output. a repo must either be auto-discovered via signal collection OR manually added via `/repos/add`.
 
@@ -178,7 +178,7 @@ tap exposes HTTP endpoints for monitoring and control:
 | `/stats/repo-count` | number of tracked repos |
 | `/stats/record-count` | total records processed |
 | `/stats/outbox-buffer` | events waiting to be sent |
-| `/stats/resync-buffer` | DIDs waiting to be resynced |
+| `/stats/resync-buffer` | buffered commits for repos currently resyncing (NOT the resync queue) |
 | `/stats/cursors` | firehose cursor position |
 | `/info/:did` | repo status: `{"did":"...","state":"active","records":N}` |
 | `/repos/add` | POST with `{"dids":["did:plc:..."]}` to add repos |

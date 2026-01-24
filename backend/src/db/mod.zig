@@ -17,14 +17,22 @@ var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var client: ?Client = null;
 var local_db: ?LocalDb = null;
 
-pub fn init() !void {
+/// Initialize Turso client only (fast, call synchronously at startup)
+pub fn initTurso() !void {
     client = try Client.init(gpa.allocator());
     try schema.init(&client.?);
+}
 
-    // initialize local replica (non-fatal if it fails)
+/// Initialize local SQLite replica (slow, call in background thread)
+pub fn initLocalDb() void {
     initLocal() catch |err| {
         std.debug.print("local db init failed (will use turso only): {}\n", .{err});
     };
+}
+
+pub fn init() !void {
+    try initTurso();
+    initLocalDb();
 }
 
 fn initLocal() !void {

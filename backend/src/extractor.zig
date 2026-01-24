@@ -150,8 +150,13 @@ fn extractContent(allocator: Allocator, record: json.Value) ![]u8 {
         try buf.appendSlice(allocator, desc);
     }
 
-    if (zat.json.getArray(record, "pages")) |pages| {
-        for (pages) |page| {
+    // check for pages at top level (pub.leaflet.document)
+    // or nested in content object (site.standard.document with pub.leaflet.content)
+    const pages = zat.json.getArray(record, "pages") orelse
+        zat.json.getArray(record, "content.pages");
+
+    if (pages) |p| {
+        for (p) |page| {
             if (page == .object) {
                 try extractPageContent(allocator, &buf, page.object);
             }
@@ -260,4 +265,22 @@ test "Platform.name" {
 test "Platform.displayName" {
     try std.testing.expectEqualStrings("leaflet", Platform.leaflet.displayName());
     try std.testing.expectEqualStrings("other", Platform.other.displayName());
+}
+
+test "extractDocument: site.standard.document with pub.leaflet.content" {
+    const allocator = std.testing.allocator;
+
+    // minimal site.standard.document with embedded pub.leaflet.content
+    const test_json =
+        \\{"title":"Test Post","content":{"$type":"pub.leaflet.content","pages":[{"id":"page1","$type":"pub.leaflet.pages.linearDocument","blocks":[{"$type":"pub.leaflet.pages.linearDocument#block","block":{"$type":"pub.leaflet.blocks.text","plaintext":"Hello world"}}]}]}}
+    ;
+
+    const parsed = try json.parseFromSlice(json.Value, allocator, test_json, .{});
+    defer parsed.deinit();
+
+    var doc = try extractDocument(allocator, parsed.value.object, "site.standard.document");
+    defer doc.deinit();
+
+    try std.testing.expectEqualStrings("Test Post", doc.title);
+    try std.testing.expectEqualStrings("Hello world", doc.content);
 }
