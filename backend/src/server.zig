@@ -78,18 +78,22 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
     defer timing.record(.search, start_time);
 
-    const span = logfire.span("http.search", .{});
-    defer span.end();
-
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    // parse query params: /search?q=something&tag=foo&platform=leaflet&since=2025-01-01
+    // parse query params first so we can include them in the span
     const query = parseQueryParam(alloc, target, "q") catch "";
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
     const platform_filter = parseQueryParam(alloc, target, "platform") catch null;
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
+
+    const span = logfire.span("http.search", .{
+        .query = if (query.len > 0) query else null,
+        .tag = tag_filter,
+        .platform = platform_filter,
+    });
+    defer span.end();
 
     if (query.len == 0 and tag_filter == null) {
         try sendJson(request, "{\"error\":\"enter a search term\"}");
@@ -294,17 +298,21 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
     defer timing.record(.similar, start_time);
 
-    const span = logfire.span("http.similar", .{});
-    defer span.end();
-
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
     const uri = parseQueryParam(alloc, target, "uri") catch {
+        const span = logfire.span("http.similar", .{});
+        defer span.end();
         try sendJson(request, "{\"error\":\"missing uri parameter\"}");
         return;
     };
+
+    const span = logfire.span("http.similar", .{
+        .uri = uri,
+    });
+    defer span.end();
 
     const results = search.findSimilar(alloc, uri, 5) catch {
         try sendJson(request, "[]");
