@@ -111,8 +111,23 @@ pub fn insertDocument(
         }
     }
 
+    // use ON CONFLICT to preserve embedding column (INSERT OR REPLACE would nuke it)
     try c.exec(
-        "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\ON CONFLICT(uri) DO UPDATE SET
+        \\  did = excluded.did,
+        \\  rkey = excluded.rkey,
+        \\  title = excluded.title,
+        \\  content = excluded.content,
+        \\  created_at = excluded.created_at,
+        \\  publication_uri = excluded.publication_uri,
+        \\  platform = excluded.platform,
+        \\  source_collection = excluded.source_collection,
+        \\  path = excluded.path,
+        \\  base_path = excluded.base_path,
+        \\  has_publication = excluded.has_publication
+    ,
         &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub },
     );
 

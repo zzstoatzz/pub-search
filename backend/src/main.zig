@@ -6,6 +6,7 @@ const db = @import("db/mod.zig");
 const activity = @import("activity.zig");
 const server = @import("server.zig");
 const tap = @import("tap.zig");
+const embedder = @import("embedder.zig");
 
 const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 30;
@@ -67,6 +68,9 @@ fn initServices(allocator: std.mem.Allocator) void {
 
     // start activity tracker
     activity.init();
+
+    // start embedder (generates embeddings for new docs)
+    embedder.start(allocator);
 
     // start tap consumer
     tap.consumer(allocator);
