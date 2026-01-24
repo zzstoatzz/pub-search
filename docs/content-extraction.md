@@ -8,11 +8,11 @@ lessons learned from implementing cross-platform content extraction.
 
 > The `site.standard.document` "content" field kinda confuses me. I see my leaflet posts have a $type field of "pub.leaflet.content". So if I were writing a renderer for site.standard.document records, presumably I'd have to know about separate things for leaflet, pckt, and offprint.
 
-short answer: yes, and it's messier than the spec suggests.
+short answer: yes. but once you handle `content.pages` extraction, it's straightforward.
 
-## what the spec promises
+## textContent: platform-dependent
 
-`site.standard.document` has a `textContent` field that should contain pre-flattened plaintext:
+`site.standard.document` has a `textContent` field for pre-flattened plaintext:
 
 ```json
 {
@@ -25,62 +25,49 @@ short answer: yes, and it's messier than the spec suggests.
 }
 ```
 
-in theory, you just use `textContent` and ignore the nested `content` structure.
+**pckt, offprint, greengale** populate `textContent`. extraction is trivial.
 
-## what we actually found
+**leaflet** intentionally leaves `textContent` null to avoid inflating record size. content lives in `content.pages[].blocks[].block.plaintext`.
 
-### pckt, offprint, greengale: textContent works
+## extraction strategy
 
-these platforms properly populate `textContent`. extraction is simple:
+priority order (in `extractor.zig`):
+
+1. `textContent` - use if present
+2. `pages` - top-level blocks (pub.leaflet.document)
+3. `content.pages` - nested blocks (site.standard.document with pub.leaflet.content)
 
 ```zig
+// try textContent first
 if (zat.json.getString(record, "textContent")) |text| {
-    return text;  // done
+    return text;
 }
+
+// fall back to block parsing
+const pages = zat.json.getArray(record, "pages") orelse
+    zat.json.getArray(record, "content.pages");
 ```
 
-### leaflet: textContent is often empty
-
-when `site.standard.document` has `content.$type: "pub.leaflet.content"`, the `textContent` field is frequently empty. the actual content lives in:
-
-```
-content.pages[].blocks[].block.plaintext
-```
-
-our extraction priority (in `extractor.zig`):
-
-1. `textContent` - use if present (ideal case)
-2. `pages` - parse blocks at top level (pub.leaflet.document)
-3. `content.pages` - parse blocks nested in content (site.standard.document with pub.leaflet.content)
-
-### sometimes you need a PDS fetch
-
-when we receive a `site.standard.document` with embedded `pub.leaflet.content` but no parseable content, we fetch the corresponding `pub.leaflet.document` from the user's PDS:
-
-```zig
-// in tap.zig
-if (doc.content.len == 0 and collection == STANDARD_DOCUMENT) {
-    if (content_type == "pub.leaflet.content") {
-        // fetch pub.leaflet.document from PDS to get actual content
-        const leaflet_content = fetchLeafletContent(allocator, did, rkey);
-        // ...
-    }
-}
-```
-
-this adds latency but ensures we don't miss content.
+the key insight: if you extract from `content.pages` correctly, you're good. no need for extra network calls.
 
 ## deduplication
 
-the same document can appear in both collections with identical `(did, rkey)`:
+documents can appear in both collections with identical `(did, rkey)`:
 - `site.standard.document`
 - `pub.leaflet.document`
 
-we dedupe on insert - if a record with the same `(did, rkey)` exists under a different URI, we delete the old one first.
+handle with `ON CONFLICT`:
+
+```sql
+INSERT INTO documents (uri, ...)
+ON CONFLICT(uri) DO UPDATE SET ...
+```
+
+note: leaflet is phasing out `pub.leaflet.document` records, keeping old ones for backwards compat.
 
 ## platform detection
 
-collection name alone doesn't tell you the platform for `site.standard.*` records. we infer from publication `basePath`:
+collection name doesn't indicate platform for `site.standard.*` records. infer from publication `basePath`:
 
 | basePath contains | platform |
 |-------------------|----------|
@@ -88,21 +75,16 @@ collection name alone doesn't tell you the platform for `site.standard.*` record
 | `pckt.blog` | pckt |
 | `offprint.app` | offprint |
 | `greengale.app` | greengale |
-| (none of the above) | other |
+| (none) | other |
 
-## implications for implementers
+## summary
 
-**if you're building a renderer**: you need to understand each platform's block structure anyway, so indexing platform-specific collections (`pub.leaflet.document`, etc.) might be simpler.
-
-**if you're building search/backlinks/RSS**: `site.standard.document` gives you a unified envelope, but:
-- check `textContent` first
-- fall back to parsing `content.pages` for leaflet
-- consider fetching from PDS as last resort
-
-**the wrapper pattern is useful** for cross-platform tools, but the reality is messier than "just use textContent."
+- **pckt/offprint/greengale**: use `textContent` directly
+- **leaflet**: extract from `content.pages[].blocks[].block.plaintext`
+- **deduplication**: `ON CONFLICT` on `(did, rkey)` or `uri`
+- **platform**: infer from publication basePath, not collection name
 
 ## code references
 
 - `backend/src/extractor.zig` - content extraction logic
-- `backend/src/tap.zig:232-244` - PDS fetch fallback
 - `backend/src/indexer.zig:99-112` - platform detection from basePath
