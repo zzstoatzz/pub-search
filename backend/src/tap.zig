@@ -227,22 +227,6 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
     };
     defer doc.deinit();
 
-    // if content is empty and this is a site.standard.document with pub.leaflet.content,
-    // fetch the pub.leaflet.document from PDS to get actual content
-    if (doc.content.len == 0 and mem.eql(u8, collection, STANDARD_DOCUMENT)) {
-        const record_val: json.Value = .{ .object = record };
-        const content_type = zat.json.getString(record_val, "content.$type");
-        if (content_type != null and mem.eql(u8, content_type.?, "pub.leaflet.content")) {
-            if (fetchLeafletContent(allocator, did, rkey)) |leaflet_content| {
-                allocator.free(doc.content);
-                doc.content = leaflet_content;
-                std.debug.print("fetched leaflet content for {s}: {} chars\n", .{ uri, leaflet_content.len });
-            } else |err| {
-                std.debug.print("failed to fetch leaflet content for {s}: {}\n", .{ uri, err });
-            }
-        }
-    }
-
     try indexer.insertDocument(
         uri,
         did,
@@ -257,48 +241,6 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.path,
     );
     std.debug.print("indexed document: {s} [{s}] ({} chars, {} tags)\n", .{ uri, doc.platformName(), doc.content.len, doc.tags.len });
-}
-
-/// fetch content from pub.leaflet.document for a given DID/rkey
-fn fetchLeafletContent(allocator: Allocator, did: []const u8, rkey: []const u8) ![]u8 {
-    // resolve DID to get PDS endpoint
-    const did_parsed = zat.Did.parse(did) orelse return error.InvalidDid;
-    var resolver = zat.DidResolver.init(allocator);
-    defer resolver.deinit();
-
-    var did_doc = try resolver.resolve(did_parsed);
-    defer did_doc.deinit();
-
-    const pds = did_doc.pdsEndpoint() orelse return error.NoPdsEndpoint;
-
-    // fetch pub.leaflet.document from PDS
-    var client = zat.XrpcClient.init(allocator, pds);
-    defer client.deinit();
-
-    const nsid = zat.Nsid.parse("com.atproto.repo.getRecord") orelse return error.InvalidNsid;
-
-    var params = std.StringHashMap([]const u8).init(allocator);
-    defer params.deinit();
-    try params.put("repo", did);
-    try params.put("collection", LEAFLET_DOCUMENT);
-    try params.put("rkey", rkey);
-
-    var response = try client.query(nsid, params);
-    defer response.deinit();
-
-    if (!response.ok()) return error.PdsRequestFailed;
-
-    // parse response and extract content
-    var parsed = try response.json();
-    defer parsed.deinit();
-
-    const record_obj = zat.json.getObject(parsed.value, "value") orelse return error.NoValueInResponse;
-
-    // use extractor to get content from pub.leaflet.document
-    var leaflet_doc = try extractor.extractDocument(allocator, record_obj, LEAFLET_DOCUMENT);
-    defer leaflet_doc.deinit();
-
-    return leaflet_doc.takeContent();
 }
 
 fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
