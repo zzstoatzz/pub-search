@@ -5,6 +5,7 @@ const std = @import("std");
 const posix = std.posix;
 const zqlite = @import("zqlite");
 const Allocator = std.mem.Allocator;
+const logfire = @import("logfire");
 
 const LocalDb = @This();
 
@@ -256,12 +257,17 @@ pub const Rows = struct {
 
 /// Execute a SELECT query with comptime SQL, returns row iterator
 pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
+    const span = logfire.span("db.local.query", .{
+        .sql = truncateSql(sql),
+    });
+    defer span.end();
+
     self.mutex.lock();
     defer self.mutex.unlock();
 
     const c = self.conn orelse return error.NotOpen;
     const rows = c.rows(sql, args) catch |e| {
-        std.debug.print("local db query error: {}\n", .{e});
+        logfire.err("local db query error: {}", .{e});
         return e;
     };
     return .{ .inner = rows };
@@ -269,12 +275,17 @@ pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
 
 /// Execute a SELECT query expecting single row
 pub fn queryOne(self: *LocalDb, comptime sql: []const u8, args: anytype) !?Row {
+    const span = logfire.span("db.local.query", .{
+        .sql = truncateSql(sql),
+    });
+    defer span.end();
+
     self.mutex.lock();
     defer self.mutex.unlock();
 
     const c = self.conn orelse return error.NotOpen;
     const row = c.row(sql, args) catch |e| {
-        std.debug.print("local db queryOne error: {}\n", .{e});
+        logfire.err("local db queryOne error: {}", .{e});
         return e;
     };
     if (row) |r| {
@@ -308,4 +319,9 @@ pub fn lock(self: *LocalDb) void {
 /// Unlock after batch operations
 pub fn unlock(self: *LocalDb) void {
     self.mutex.unlock();
+}
+
+fn truncateSql(sql: []const u8) []const u8 {
+    const max_len = 100;
+    return if (sql.len > max_len) sql[0..max_len] else sql;
 }

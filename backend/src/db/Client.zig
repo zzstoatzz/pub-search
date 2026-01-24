@@ -6,6 +6,7 @@ const http = std.http;
 const json = std.json;
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const logfire = @import("logfire");
 
 const result = @import("result.zig");
 pub const Result = result.Result;
@@ -116,6 +117,12 @@ fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
 }
 
 fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const u8 {
+    const span = logfire.span("db.query", .{
+        .sql = truncateSql(sql),
+        .args_count = @as(i64, @intCast(args.len)),
+    });
+    defer span.end();
+
     self.mutex.lock();
     defer self.mutex.unlock();
 
@@ -143,12 +150,12 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
         .payload = body,
         .response_writer = &response_body.writer,
     }) catch |err| {
-        std.debug.print("turso request failed: {}\n", .{err});
+        logfire.err("turso request failed: {}", .{err});
         return error.HttpError;
     };
 
     if (res.status != .ok) {
-        std.debug.print("turso error: {}\n", .{res.status});
+        logfire.err("turso error: {}", .{res.status});
         return error.TursoError;
     }
 
@@ -156,6 +163,13 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
 }
 
 fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
+    const first_sql = if (statements.len > 0) truncateSql(statements[0].sql) else "";
+    const span = logfire.span("db.batch", .{
+        .statement_count = @as(i64, @intCast(statements.len)),
+        .first_sql = first_sql,
+    });
+    defer span.end();
+
     self.mutex.lock();
     defer self.mutex.unlock();
 
@@ -183,12 +197,12 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
         .payload = body,
         .response_writer = &response_body.writer,
     }) catch |err| {
-        std.debug.print("turso batch request failed: {}\n", .{err});
+        logfire.err("turso batch request failed: {}", .{err});
         return error.HttpError;
     };
 
     if (res.status != .ok) {
-        std.debug.print("turso batch error: {}\n", .{res.status});
+        logfire.err("turso batch error: {}", .{res.status});
         return error.TursoError;
     }
 
@@ -283,4 +297,9 @@ fn countArgsType(comptime ArgsType: type) usize {
     }
 
     return 0;
+}
+
+fn truncateSql(sql: []const u8) []const u8 {
+    const max_len = 100;
+    return if (sql.len > max_len) sql[0..max_len] else sql;
 }
