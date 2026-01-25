@@ -14,7 +14,7 @@
         },
         .zat = .{
             .url = "https://tangled.sh/zat.dev/zat/archive/main",
-            .hash = "zat-0.1.0-5PuC7heIAQA4j2UVmJT-oivQh5AwZTrFQ-NC4CJi2-_R",
+            .hash = "zat-0.1.0-5PuC7tmRAQCPov0UFkeXFBgfytd6_P3GZPSlvy9OvvgW",
         },
         .zqlite = .{
             .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
@@ -22,7 +22,7 @@
         },
         .logfire = .{
             .url = "https://tangled.sh/zzstoatzz.io/logfire-zig/archive/main",
-            .hash = "logfire_zig-0.1.0-x2yDLoSdAQCsojDtNe1PhziA_pw4U1dQPRCQdW_JMpsR",
+            .hash = "logfire_zig-0.1.0-x2yDLgdwAABPUnnE_Smk0Rjrf93qyC5vcJXzvieuNFWI",
         },
     },
     .paths = .{
