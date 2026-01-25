@@ -240,6 +240,7 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.platformName(),
         doc.source_collection,
         doc.path,
+        doc.content_type,
     );
     logfire.counter("tap.documents_indexed", 1);
 }

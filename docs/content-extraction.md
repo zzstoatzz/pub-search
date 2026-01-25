@@ -67,7 +67,9 @@ note: leaflet is phasing out `pub.leaflet.document` records, keeping old ones fo
 
 ## platform detection
 
-collection name doesn't indicate platform for `site.standard.*` records. infer from publication `basePath`:
+collection name doesn't indicate platform for `site.standard.*` records. detection order:
+
+1. **basePath** - infer from publication basePath:
 
 | basePath contains | platform |
 |-------------------|----------|
@@ -75,16 +77,23 @@ collection name doesn't indicate platform for `site.standard.*` records. infer f
 | `pckt.blog` | pckt |
 | `offprint.app` | offprint |
 | `greengale.app` | greengale |
-| (none) | other |
+
+2. **content.$type** - fallback for custom domains (e.g., `cailean.journal.ewancroft.uk`):
+
+| content.$type starts with | platform |
+|---------------------------|----------|
+| `pub.leaflet.` | leaflet |
+
+3. if neither matches → `other`
 
 ## summary
 
 - **pckt/offprint/greengale**: use `textContent` directly
 - **leaflet**: extract from `content.pages[].blocks[].block.plaintext`
 - **deduplication**: `ON CONFLICT` on `(did, rkey)` or `uri`
-- **platform**: infer from publication basePath, not collection name
+- **platform**: infer from basePath, fallback to content.$type for custom domains
 
 ## code references
 
-- `backend/src/extractor.zig` - content extraction logic
-- `backend/src/indexer.zig:99-112` - platform detection from basePath
+- `backend/src/extractor.zig` - content extraction logic, content_type field
+- `backend/src/indexer.zig:99-118` - platform detection from basePath + content_type

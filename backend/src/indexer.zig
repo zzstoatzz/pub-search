@@ -13,6 +13,7 @@ pub fn insertDocument(
     platform: []const u8,
     source_collection: []const u8,
     path: ?[]const u8,
+    content_type: ?[]const u8,
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
@@ -108,6 +109,12 @@ pub fn insertDocument(
             actual_platform = "offprint";
         } else if (std.mem.indexOf(u8, base_path, "greengale.app") != null) {
             actual_platform = "greengale";
+        } else if (content_type) |ct| {
+            // fallback: detect platform from content.$type for custom domains
+            // e.g., "pub.leaflet.content" indicates leaflet even with custom domain
+            if (std.mem.startsWith(u8, ct, "pub.leaflet.")) {
+                actual_platform = "leaflet";
+            }
         }
     }
 

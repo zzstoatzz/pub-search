@@ -43,6 +43,7 @@ pub const ExtractedDocument = struct {
     platform: Platform,
     source_collection: []const u8,
     path: ?[]const u8, // URL path from record (e.g., "/001" for zat.dev)
+    content_type: ?[]const u8, // content.$type (e.g., "pub.leaflet.content") for platform detection
 
     pub fn deinit(self: *ExtractedDocument) void {
         self.allocator.free(self.content);
@@ -103,6 +104,9 @@ pub fn extractDocument(
     // extract URL path (site.standard.document uses "path" field like "/001")
     const path = zat.json.getString(record_val, "path");
 
+    // extract content.$type for platform detection (e.g., "pub.leaflet.content")
+    const content_type = zat.json.getString(record_val, "content.$type");
+
     // extract tags - allocate owned slice
     const tags = try extractTags(allocator, record_val);
     errdefer allocator.free(tags);
@@ -120,6 +124,7 @@ pub fn extractDocument(
         .platform = platform,
         .source_collection = collection,
         .path = path,
+        .content_type = content_type,
     };
 }
 
@@ -291,4 +296,6 @@ test "extractDocument: site.standard.document with pub.leaflet.content" {
 
     try std.testing.expectEqualStrings("Test Post", doc.title);
     try std.testing.expectEqualStrings("Hello world", doc.content);
+    // content_type should be extracted for platform detection (custom domain support)
+    try std.testing.expectEqualStrings("pub.leaflet.content", doc.content_type.?);
 }
