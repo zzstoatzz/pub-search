@@ -220,6 +220,16 @@ fn createSchema(self: *LocalDb) !void {
         \\  count INTEGER DEFAULT 1
         \\)
     , .{}) catch {};
+
+    // similarity cache (local copy for fast lookups)
+    c.exec(
+        \\CREATE TABLE IF NOT EXISTS similarity_cache (
+        \\  source_uri TEXT PRIMARY KEY,
+        \\  results TEXT NOT NULL,
+        \\  doc_count INTEGER NOT NULL,
+        \\  computed_at INTEGER NOT NULL
+        \\)
+    , .{}) catch {};
 }
 
 /// Row adapter matching result.Row interface (column-indexed access)

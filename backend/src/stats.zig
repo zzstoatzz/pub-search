@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const zql = @import("zql");
 const db = @import("db/mod.zig");
 const activity = @import("activity.zig");
+const stats_buffer = @import("stats_buffer.zig");
 
 const TagJson = struct { tag: []const u8, count: i64 };
 const PopularJson = struct { query: []const u8, count: i64 };
@@ -103,15 +104,16 @@ pub fn getStats() Stats {
     defer res.deinit();
 
     const row = res.first() orelse return default_stats;
+    // include pending deltas from buffer
     return .{
         .documents = row.int(0),
         .publications = row.int(1),
         .embeddings = row.int(2),
-        .searches = row.int(3),
-        .errors = row.int(4),
+        .searches = stats_buffer.getSearchCount(row.int(3)),
+        .errors = stats_buffer.getErrorCount(row.int(4)),
         .started_at = row.int(5),
-        .cache_hits = row.int(6),
-        .cache_misses = row.int(7),
+        .cache_hits = stats_buffer.getCacheHitCount(row.int(6)),
+        .cache_misses = stats_buffer.getCacheMissCount(row.int(7)),
     };
 }
 
@@ -136,46 +138,35 @@ fn getStatsLocal(local: *db.LocalDb) !Stats {
     defer rows.deinit();
     const row = rows.next() orelse return error.NoRows;
 
+    // include pending deltas from buffer
     return .{
         .documents = row.int(0),
         .publications = row.int(1),
         .embeddings = row.int(2),
-        .searches = stats_row.int(0),
-        .errors = stats_row.int(1),
+        .searches = stats_buffer.getSearchCount(stats_row.int(0)),
+        .errors = stats_buffer.getErrorCount(stats_row.int(1)),
         .started_at = stats_row.int(2),
-        .cache_hits = stats_row.int(3),
-        .cache_misses = stats_row.int(4),
+        .cache_hits = stats_buffer.getCacheHitCount(stats_row.int(3)),
+        .cache_misses = stats_buffer.getCacheMissCount(stats_row.int(4)),
     };
 }
 
 pub fn recordSearch(query: []const u8) void {
-    const c = db.getClient() orelse return;
-
     activity.record();
-    c.exec("UPDATE stats SET total_searches = total_searches + 1 WHERE id = 1", &.{}) catch {};
-
-    // track popular searches (skip empty/very short queries)
-    if (query.len >= 2) {
-        c.exec(
-            "INSERT INTO popular_searches (query, count) VALUES (?, 1) ON CONFLICT(query) DO UPDATE SET count = count + 1",
-            &.{query},
-        ) catch {};
-    }
+    stats_buffer.recordSearch();
+    stats_buffer.queuePopularSearch(query);
 }
 
 pub fn recordError() void {
-    const c = db.getClient() orelse return;
-    c.exec("UPDATE stats SET total_errors = total_errors + 1 WHERE id = 1", &.{}) catch {};
+    stats_buffer.recordError();
 }
 
 pub fn recordCacheHit() void {
-    const c = db.getClient() orelse return;
-    c.exec("UPDATE stats SET cache_hits = COALESCE(cache_hits, 0) + 1 WHERE id = 1", &.{}) catch {};
+    stats_buffer.recordCacheHit();
 }
 
 pub fn recordCacheMiss() void {
-    const c = db.getClient() orelse return;
-    c.exec("UPDATE stats SET cache_misses = COALESCE(cache_misses, 0) + 1 WHERE id = 1", &.{}) catch {};
+    stats_buffer.recordCacheMiss();
 }
 
 const PlatformCount = struct { platform: []const u8, count: i64 };

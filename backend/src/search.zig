@@ -5,6 +5,11 @@ const zql = @import("zql");
 const db = @import("db/mod.zig");
 const stats = @import("stats.zig");
 
+// cached embedded doc count (refresh every 5 minutes)
+var cached_doc_count: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var doc_count_updated_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+const DOC_COUNT_CACHE_SECS = 300; // 5 minutes
+
 // JSON output type for search results
 const SearchResultJson = struct {
     type: []const u8,
@@ -565,12 +570,24 @@ fn getDocQueryArgs(alloc: Allocator, fts_query: []const u8, tag: ?[]const u8, pl
 pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
-    // get current doc count (for cache invalidation)
-    const doc_count = getEmbeddedDocCount(c) orelse return error.QueryFailed;
+    // get cached doc count (rarely hits Turso - refreshes every 5 min)
+    const doc_count = getEmbeddedDocCountCached(c) orelse return error.QueryFailed;
 
-    // check cache
+    // check LOCAL cache first (instant)
+    if (db.getLocalDb()) |local| {
+        if (getCachedSimilarLocal(alloc, local, uri, doc_count)) |cached| {
+            stats.recordCacheHit();
+            return cached;
+        }
+    }
+
+    // check Turso cache (slower, but needed if local empty)
     if (getCachedSimilar(alloc, c, uri, doc_count)) |cached| {
         stats.recordCacheHit();
+        // also write to local cache for next time
+        if (db.getLocalDb()) |local| {
+            cacheSimilarResultsLocal(local, uri, cached, doc_count);
+        }
         return cached;
     }
     stats.recordCacheMiss();
@@ -607,7 +624,12 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
 
     const results = try output.toOwnedSlice();
 
-    // cache the results (fire and forget)
+    // cache to LOCAL db (instant)
+    if (db.getLocalDb()) |local| {
+        cacheSimilarResultsLocal(local, uri, results, doc_count);
+    }
+
+    // cache to Turso (fire and forget - still useful for durability)
     cacheSimilarResults(c, uri, results, doc_count);
 
     return results;
@@ -618,6 +640,23 @@ fn getEmbeddedDocCount(c: *db.Client) ?i64 {
     defer res.deinit();
     if (res.rows.len == 0) return null;
     return res.rows[0].int(0);
+}
+
+fn getEmbeddedDocCountCached(c: *db.Client) ?i64 {
+    const now = std.time.timestamp();
+    const last_update = doc_count_updated_at.load(.acquire);
+
+    // use cached value if fresh enough
+    if (now - last_update < DOC_COUNT_CACHE_SECS) {
+        const cached = cached_doc_count.load(.acquire);
+        if (cached > 0) return cached;
+    }
+
+    // refresh from Turso
+    const count = getEmbeddedDocCount(c) orelse return null;
+    cached_doc_count.store(count, .release);
+    doc_count_updated_at.store(now, .release);
+    return count;
 }
 
 fn getCachedSimilar(alloc: Allocator, c: *db.Client, uri: []const u8, current_doc_count: i64) ?[]const u8 {
@@ -644,6 +683,32 @@ fn cacheSimilarResults(c: *db.Client, uri: []const u8, results: []const u8, doc_
     c.exec(
         "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
         &.{ uri, results, count_str, ts_str },
+    ) catch {};
+}
+
+fn getCachedSimilarLocal(alloc: Allocator, local: *db.LocalDb, uri: []const u8, current_doc_count: i64) ?[]const u8 {
+    var rows = local.query(
+        "SELECT results, doc_count FROM similarity_cache WHERE source_uri = ?",
+        .{uri},
+    ) catch return null;
+    defer rows.deinit();
+
+    const row = rows.next() orelse return null;
+    // check doc_count matches for cache validity
+    if (row.int(1) != current_doc_count) return null;
+    return alloc.dupe(u8, row.text(0)) catch null;
+}
+
+fn cacheSimilarResultsLocal(local: *db.LocalDb, uri: []const u8, results: []const u8, doc_count: i64) void {
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{doc_count}) catch return;
+
+    var ts_buf: [20]u8 = undefined;
+    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch return;
+
+    local.exec(
+        "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
+        .{ uri, results, count_str, ts_str },
     ) catch {};
 }
 

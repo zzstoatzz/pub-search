@@ -1,0 +1,172 @@
+//! Buffered stats with background sync to Turso
+//! Follows activity.zig pattern: instant local writes, periodic remote sync
+
+const std = @import("std");
+const db = @import("db/mod.zig");
+const logfire = @import("logfire");
+
+const SYNC_INTERVAL_MS = 5000; // 5 seconds
+const MAX_PENDING_SEARCHES = 256;
+
+// atomic deltas (since last sync)
+var delta_searches: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var delta_errors: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var delta_cache_hits: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var delta_cache_misses: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+
+// popular searches ring buffer
+var pending_searches: [MAX_PENDING_SEARCHES]?[]const u8 = .{null} ** MAX_PENDING_SEARCHES;
+var search_write_idx: usize = 0;
+var search_read_idx: usize = 0;
+var search_mutex: std.Thread.Mutex = .{};
+
+// allocator for search string copies
+var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+
+var sync_thread: ?std.Thread = null;
+
+pub fn init() void {
+    sync_thread = std.Thread.spawn(.{}, syncLoop, .{}) catch |err| {
+        logfire.warn("stats_buffer: failed to start sync thread: {}", .{err});
+        return;
+    };
+    if (sync_thread) |t| t.detach();
+    logfire.info("stats_buffer: initialized with {d}ms sync interval", .{SYNC_INTERVAL_MS});
+}
+
+// instant, non-blocking increments
+pub fn recordSearch() void {
+    _ = delta_searches.fetchAdd(1, .monotonic);
+}
+
+pub fn recordError() void {
+    _ = delta_errors.fetchAdd(1, .monotonic);
+}
+
+pub fn recordCacheHit() void {
+    _ = delta_cache_hits.fetchAdd(1, .monotonic);
+}
+
+pub fn recordCacheMiss() void {
+    _ = delta_cache_misses.fetchAdd(1, .monotonic);
+}
+
+// queue popular search (best effort, drops if full)
+pub fn queuePopularSearch(query: []const u8) void {
+    if (query.len < 2) return;
+
+    search_mutex.lock();
+    defer search_mutex.unlock();
+
+    // check if buffer is full
+    const next_write = (search_write_idx + 1) % MAX_PENDING_SEARCHES;
+    if (next_write == search_read_idx) {
+        // buffer full, drop oldest
+        if (pending_searches[search_read_idx]) |old| {
+            gpa.allocator().free(old);
+            pending_searches[search_read_idx] = null;
+        }
+        search_read_idx = (search_read_idx + 1) % MAX_PENDING_SEARCHES;
+    }
+
+    // allocate copy
+    const copy = gpa.allocator().dupe(u8, query) catch return;
+    pending_searches[search_write_idx] = copy;
+    search_write_idx = next_write;
+}
+
+// get current totals (base from db + pending deltas)
+pub fn getSearchCount(base: i64) i64 {
+    return base + delta_searches.load(.acquire);
+}
+
+pub fn getErrorCount(base: i64) i64 {
+    return base + delta_errors.load(.acquire);
+}
+
+pub fn getCacheHitCount(base: i64) i64 {
+    return base + delta_cache_hits.load(.acquire);
+}
+
+pub fn getCacheMissCount(base: i64) i64 {
+    return base + delta_cache_misses.load(.acquire);
+}
+
+fn syncLoop() void {
+    while (true) {
+        std.Thread.sleep(SYNC_INTERVAL_MS * std.time.ns_per_ms);
+        syncToTurso();
+    }
+}
+
+fn syncToTurso() void {
+    const c = db.getClient() orelse return;
+
+    // swap deltas to zero and get values
+    const searches = delta_searches.swap(0, .acq_rel);
+    const errors = delta_errors.swap(0, .acq_rel);
+    const cache_hits = delta_cache_hits.swap(0, .acq_rel);
+    const cache_misses = delta_cache_misses.swap(0, .acq_rel);
+
+    // sync stats if any changed
+    if (searches != 0 or errors != 0 or cache_hits != 0 or cache_misses != 0) {
+        syncStatsDelta(c, searches, errors, cache_hits, cache_misses);
+    }
+
+    // sync popular searches
+    syncPopularSearches(c);
+}
+
+fn syncStatsDelta(c: *db.Client, searches: i64, errors: i64, cache_hits: i64, cache_misses: i64) void {
+    // build SQL with values embedded (safe - these are i64, not user input)
+    var sql_buf: [512]u8 = undefined;
+    const sql = std.fmt.bufPrint(&sql_buf,
+        \\UPDATE stats SET
+        \\  total_searches = total_searches + {d},
+        \\  total_errors = total_errors + {d},
+        \\  cache_hits = COALESCE(cache_hits, 0) + {d},
+        \\  cache_misses = COALESCE(cache_misses, 0) + {d}
+        \\WHERE id = 1
+    , .{ searches, errors, cache_hits, cache_misses }) catch return;
+
+    // use queryBatch which accepts runtime SQL
+    var statements = [_]db.Client.Statement{.{ .sql = sql, .args = &.{} }};
+    var batch = c.queryBatch(&statements) catch |err| {
+        logfire.warn("stats_buffer: sync failed: {}, restoring deltas", .{err});
+        // restore deltas on failure
+        _ = delta_searches.fetchAdd(searches, .monotonic);
+        _ = delta_errors.fetchAdd(errors, .monotonic);
+        _ = delta_cache_hits.fetchAdd(cache_hits, .monotonic);
+        _ = delta_cache_misses.fetchAdd(cache_misses, .monotonic);
+        return;
+    };
+    batch.deinit();
+
+    logfire.debug("stats_buffer: synced deltas (searches={d}, errors={d}, hits={d}, misses={d})", .{ searches, errors, cache_hits, cache_misses });
+}
+
+fn syncPopularSearches(c: *db.Client) void {
+    search_mutex.lock();
+    defer search_mutex.unlock();
+
+    var synced: usize = 0;
+    while (search_read_idx != search_write_idx) {
+        if (pending_searches[search_read_idx]) |query| {
+            // sync to Turso
+            c.exec(
+                "INSERT INTO popular_searches (query, count) VALUES (?, 1) ON CONFLICT(query) DO UPDATE SET count = count + 1",
+                &.{query},
+            ) catch {};
+
+            // free and clear
+            gpa.allocator().free(query);
+            pending_searches[search_read_idx] = null;
+            synced += 1;
+        }
+        search_read_idx = (search_read_idx + 1) % MAX_PENDING_SEARCHES;
+    }
+
+    if (synced > 0) {
+        logfire.debug("stats_buffer: synced {d} popular searches", .{synced});
+    }
+}

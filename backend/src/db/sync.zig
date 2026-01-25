@@ -138,6 +138,31 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         }
     }
 
+    // sync similarity cache
+    var cache_count: usize = 0;
+    {
+        conn.exec("DELETE FROM similarity_cache", .{}) catch {};
+
+        if (turso.query(
+            "SELECT source_uri, results, doc_count, computed_at FROM similarity_cache",
+            &.{},
+        )) |res_val| {
+            var res = res_val;
+            defer res.deinit();
+
+            for (res.rows) |row| {
+                conn.exec(
+                    "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
+                    .{ row.text(0), row.text(1), row.text(2), row.text(3) },
+                ) catch {};
+                cache_count += 1;
+            }
+        } else |err| {
+            std.debug.print("sync: turso similarity_cache query failed: {}\n", .{err});
+            // continue anyway - cache isn't critical
+        }
+    }
+
     // record sync time
     var ts_buf: [20]u8 = undefined;
     const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
@@ -157,7 +182,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     };
 
     local.setReady(true);
-    std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular\n", .{ doc_count, pub_count, tag_count, popular_count });
+    std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular, {d} cached\n", .{ doc_count, pub_count, tag_count, popular_count, cache_count });
 }
 
 /// Incremental sync: fetch documents created since last sync

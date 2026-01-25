@@ -5,6 +5,7 @@ const Thread = std.Thread;
 const logfire = @import("logfire");
 const db = @import("db/mod.zig");
 const activity = @import("activity.zig");
+const stats_buffer = @import("stats_buffer.zig");
 const server = @import("server.zig");
 const tap = @import("tap.zig");
 const embedder = @import("embedder.zig");
@@ -78,6 +79,9 @@ fn initServices(allocator: std.mem.Allocator) void {
 
     // start activity tracker
     activity.init();
+
+    // start stats buffer (background sync to Turso)
+    stats_buffer.init();
 
     // start embedder (generates embeddings for new docs)
     embedder.start(allocator);
