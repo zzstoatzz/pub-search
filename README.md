@@ -10,7 +10,7 @@ search ATProto publishing platforms ([leaflet](https://leaflet.pub), [pckt](http
 
 ## how it works
 
-1. **tap** syncs content from ATProto firehose (signals on `pub.leaflet.document`, filters `pub.leaflet.*` + `site.standard.*`)
+1. **[tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap)** syncs content from ATProto firehose (signals on `site.standard.document`, filters `pub.leaflet.*` + `site.standard.*`)
 2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API
 3. **site** static frontend on Cloudflare Pages
 
@@ -60,33 +60,13 @@ the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `
 
 ## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 
-- [Fly.io](https://fly.io) hosts backend + tap
-- [Turso](https://turso.tech) cloud SQLite with vector support
-- [Voyage AI](https://voyageai.com) embeddings (voyage-3-lite)
+- [Fly.io](https://fly.io) hosts [Zig](https://ziglang.org) search API and content indexing
+- [Turso](https://turso.tech) cloud SQLite with [Voyage AI](https://voyageai.com) vector support
 - [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs content from ATProto firehose
-- [Zig](https://ziglang.org) HTTP server, search API, content indexing
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend
 
 ## embeddings
 
-documents are embedded using Voyage AI's `voyage-3-lite` model (512 dimensions). new documents from the firehose don't automatically get embeddings - they need to be backfilled periodically.
-
-### backfill embeddings
-
-requires `TURSO_URL`, `TURSO_TOKEN`, and `VOYAGE_API_KEY` in `.env`:
-
-```bash
-# check how many docs need embeddings
-./scripts/backfill-embeddings --dry-run
-
-# run the backfill (uses batching + concurrency)
-./scripts/backfill-embeddings --batch-size 50
-```
-
-the script:
-- fetches docs where `embedding IS NULL`
-- batches them to Voyage API (50 docs/batch default)
-- writes embeddings to Turso in batched transactions
-- runs 8 concurrent workers
+documents are embedded using Voyage AI's `voyage-3-lite` model (512 dimensions). the backend automatically generates embeddings for new documents via a background worker - no manual backfill needed.
 
 **note:** we use brute-force cosine similarity instead of a vector index. Turso's DiskANN index has ~60s write latency per row, making it impractical for incremental updates. brute-force on 3500 vectors runs in ~0.15s which is fine for this scale.

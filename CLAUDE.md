@@ -17,7 +17,7 @@
 - **db**: Turso (source of truth) + local SQLite read replica (FTS queries)
 
 ## platforms
-- leaflet, pckt, offprint: known platforms (detected via basePath)
+- leaflet, pckt, offprint, greengale: known platforms (detected via basePath)
 - other: site.standard.* documents not from a known platform
 
 ## search ranking
@@ -30,5 +30,4 @@
 - see `docs/tap.md` for memory tuning and debugging
 
 ## common tasks
-- backfill embeddings: `./scripts/backfill-embeddings`
 - check indexing: `curl -s https://leaflet-search-backend.fly.dev/api/dashboard | jq`
