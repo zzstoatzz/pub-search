@@ -154,9 +154,19 @@ async def get_document(uri: str) -> Document:
         value = dict(value)
 
     # extract content from leaflet's block structure
-    # pages[].blocks[].block.plaintext
+    # pub.leaflet.document: pages[].blocks[].block.plaintext
+    # site.standard.document: content.pages[].blocks[].block.plaintext
     content_parts = []
-    for page in value.get("pages", []):
+
+    # handle both formats: top-level pages (pub.leaflet.document)
+    # or nested under content (site.standard.document)
+    pages = value.get("pages", [])
+    if not pages:
+        content_obj = value.get("content", {})
+        if isinstance(content_obj, dict):
+            pages = content_obj.get("pages", [])
+
+    for page in pages:
         for block_wrapper in page.get("blocks", []):
             block = block_wrapper.get("block", {})
             plaintext = block.get("plaintext", "")
