@@ -151,6 +151,7 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
         .response_writer = &response_body.writer,
     }) catch |err| {
         logfire.err("db.query http failed: {s} | sql: {s}", .{ @errorName(err), truncateSql(sql) });
+        span.recordError(error.HttpError);
         return error.HttpError;
     };
 
@@ -159,6 +160,9 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
         defer if (resp_text.len > 0) self.allocator.free(resp_text);
         const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
         logfire.err("db.query turso error: {} | sql: {s} | response: {s}", .{ res.status, truncateSql(sql), resp_preview });
+        span.recordError(error.TursoError);
+        span.setAttribute("turso.status", @intFromEnum(res.status));
+        span.setAttribute("turso.response", resp_preview);
         return error.TursoError;
     }
 
@@ -201,6 +205,7 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
         .response_writer = &response_body.writer,
     }) catch |err| {
         logfire.err("db.batch http failed: {s} | first_sql: {s}", .{ @errorName(err), first_sql });
+        span.recordError(error.HttpError);
         return error.HttpError;
     };
 
@@ -209,6 +214,9 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
         defer if (resp_text.len > 0) self.allocator.free(resp_text);
         const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
         logfire.err("db.batch turso error: {} | first_sql: {s} | response: {s}", .{ res.status, first_sql, resp_preview });
+        span.recordError(error.TursoError);
+        span.setAttribute("turso.status", @intFromEnum(res.status));
+        span.setAttribute("turso.response", resp_preview);
         return error.TursoError;
     }
 
