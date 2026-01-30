@@ -119,9 +119,11 @@ pub fn insertDocument(
     }
 
     // use ON CONFLICT to preserve embedding column (INSERT OR REPLACE would nuke it)
+    // indexed_at uses strftime to record when this row was inserted/updated in Turso
+    // (created_at is the document's publication date, which can be old for resynced docs)
     try c.exec(
-        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         \\ON CONFLICT(uri) DO UPDATE SET
         \\  did = excluded.did,
         \\  rkey = excluded.rkey,
@@ -133,7 +135,8 @@ pub fn insertDocument(
         \\  source_collection = excluded.source_collection,
         \\  path = excluded.path,
         \\  base_path = excluded.base_path,
-        \\  has_publication = excluded.has_publication
+        \\  has_publication = excluded.has_publication,
+        \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
     ,
         &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub },
     );

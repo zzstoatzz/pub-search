@@ -290,8 +290,8 @@ def main():
                     turso_exec(
                         settings,
                         """
-                        INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, indexed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
                         ON CONFLICT(did, rkey) DO UPDATE SET
                             uri = excluded.uri,
                             title = excluded.title,
@@ -300,7 +300,8 @@ def main():
                             publication_uri = excluded.publication_uri,
                             platform = excluded.platform,
                             source_collection = excluded.source_collection,
-                            path = excluded.path
+                            path = excluded.path,
+                            indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
                         """,
                         [uri, did, rkey, doc["title"], doc["content"], doc["created_at"], doc["publication_uri"], doc["platform"], doc["collection"], doc["path"]],
                     )

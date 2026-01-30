@@ -232,4 +232,13 @@ fn runMigrations(client: *Client) !void {
         \\AND (base_path = 'greengale.app' OR base_path LIKE '%pckt.blog%')
         \\AND did IN (SELECT did FROM publications WHERE base_path LIKE 'greengale.app/%')
     , &.{}) catch {};
+
+    // indexed_at: tracks when a document was inserted/updated in Turso
+    // used by incremental sync (created_at is publication date, not insertion time,
+    // so resynced documents with old created_at were missed by incremental sync)
+    client.exec("ALTER TABLE documents ADD COLUMN indexed_at TEXT", &.{}) catch {};
+    client.exec(
+        "UPDATE documents SET indexed_at = created_at WHERE indexed_at IS NULL",
+        &.{},
+    ) catch {};
 }

@@ -43,7 +43,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
 
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
-            \\  platform, source_collection, path, base_path, has_publication
+            \\  platform, source_collection, path, base_path, has_publication, indexed_at
             \\FROM documents
             \\ORDER BY uri
             \\LIMIT 500 OFFSET ?
@@ -240,15 +240,16 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
 
     std.debug.print("sync: incremental sync since {s}\n", .{since_str});
 
-    // fetch new documents
+    // fetch new documents (use indexed_at, not created_at, because resynced
+    // documents can have old publication dates but recent insertion times)
     var new_docs: usize = 0;
     {
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
-            \\  platform, source_collection, path, base_path, has_publication
+            \\  platform, source_collection, path, base_path, has_publication, indexed_at
             \\FROM documents
-            \\WHERE created_at >= ?
-            \\ORDER BY created_at
+            \\WHERE indexed_at >= ?
+            \\ORDER BY indexed_at
         , &.{since_str}) catch |err| {
             std.debug.print("sync: incremental query failed: {}\n", .{err});
             return;
@@ -287,8 +288,8 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
     conn.exec(
         \\INSERT OR REPLACE INTO documents
         \\(uri, did, rkey, title, content, created_at, publication_uri,
-        \\ platform, source_collection, path, base_path, has_publication)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\ platform, source_collection, path, base_path, has_publication, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     , .{
         row.text(0),  // uri
         row.text(1),  // did
@@ -302,6 +303,7 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
         row.text(9),  // path
         row.text(10), // base_path
         row.int(11),  // has_publication
+        row.text(12), // indexed_at
     }) catch |err| {
         return err;
     };
