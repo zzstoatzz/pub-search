@@ -231,6 +231,9 @@ fn createSchema(self: *LocalDb) !void {
         \\  computed_at INTEGER NOT NULL
         \\)
     , .{}) catch {};
+
+    // migrations for existing local DBs
+    c.exec("ALTER TABLE documents ADD COLUMN indexed_at TEXT", .{}) catch {};
 }
 
 /// Row adapter matching result.Row interface (column-indexed access)
