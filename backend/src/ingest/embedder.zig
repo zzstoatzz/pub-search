@@ -19,7 +19,7 @@ const EMBEDDING_DIM = 1024;
 const POLL_INTERVAL_SECS: u64 = 60; // check for new docs every minute
 const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
 
-const NUM_WORKERS = 3;
+const NUM_WORKERS = 1;
 
 /// Start the embedder background workers
 pub fn start(allocator: Allocator) void {
