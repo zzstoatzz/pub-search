@@ -233,8 +233,8 @@ fn runMigrations(client: *Client) !void {
         \\AND did IN (SELECT did FROM publications WHERE base_path LIKE 'greengale.app/%')
     , &.{}) catch {};
 
-    // DiskANN vector index for fast cosine similarity search via vector_top_k()
-    client.exec("CREATE INDEX IF NOT EXISTS documents_embedding_idx ON documents(libsql_vector_idx(embedding))", &.{}) catch {};
+    // DiskANN vector index (documents_embedding_idx) is managed via scripts/rebuild-documents-table
+    // DO NOT add CREATE INDEX here — it hangs on startup when the index already exists
 
     // indexed_at: tracks when a document was inserted/updated in Turso
     // used by incremental sync (created_at is publication date, not insertion time,
