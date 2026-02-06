@@ -802,7 +802,7 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
 
 // --- semantic search ---
 
-const EMBEDDING_DIM = 512;
+const EMBEDDING_DIM = 1024;
 
 /// Embed a query string via Voyage AI, returns JSON array string for vector32()
 fn embedQuery(alloc: Allocator, query: []const u8) ![]const u8 {
@@ -816,7 +816,7 @@ fn embedQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &body.writer, .options = .{} };
     try jw.beginObject();
     try jw.objectField("model");
-    try jw.write("voyage-3-lite");
+    try jw.write("voyage-3");
     try jw.objectField("input_type");
     try jw.write("query");
     try jw.objectField("input");

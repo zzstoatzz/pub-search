@@ -12,10 +12,10 @@ const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const db = @import("../db/mod.zig");
 
-// voyage-3-lite limits
+// voyage-3 limits
 const MAX_BATCH_SIZE = 20; // conservative batch size for reliability
 const MAX_CONTENT_CHARS = 8000; // ~2000 tokens, well under 32K limit
-const EMBEDDING_DIM = 512;
+const EMBEDDING_DIM = 1024;
 const POLL_INTERVAL_SECS: u64 = 60; // check for new docs every minute
 const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
 
@@ -216,7 +216,7 @@ fn buildVoyageRequest(allocator: Allocator, docs: []const DocToEmbed) ![]const u
     try jw.beginObject();
 
     try jw.objectField("model");
-    try jw.write("voyage-3-lite");
+    try jw.write("voyage-3");
 
     try jw.objectField("input_type");
     try jw.write("document");
