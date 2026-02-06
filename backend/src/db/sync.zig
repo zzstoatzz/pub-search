@@ -10,13 +10,16 @@ const LocalDb = @import("LocalDb.zig");
 const BATCH_SIZE = 500;
 
 /// Full sync: fetch all data from Turso and populate local SQLite
-/// Uses brief locks per batch so search queries aren't blocked during sync.
+/// Local stays not-ready during sync — search goes to Turso (no mutex there).
+/// When sync completes, local becomes ready and search uses the fast local path.
 pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     std.debug.print("sync: starting full sync...\n", .{});
 
+    local.setReady(false);
+
     const conn = local.getConn() orelse return error.LocalNotOpen;
 
-    // clear existing data (brief lock)
+    // clear existing data
     {
         local.lock();
         defer local.unlock();
@@ -26,9 +29,6 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         conn.exec("DELETE FROM publications", .{}) catch {};
         conn.exec("DELETE FROM document_tags", .{}) catch {};
     }
-
-    // mark ready so search can fall through to Turso while we sync
-    local.setReady(true);
 
     // sync documents in batches — fetch from Turso unlocked, write to local with brief lock
     var doc_count: usize = 0;
@@ -195,6 +195,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         };
     }
 
+    local.setReady(true);
     std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular, {d} cached\n", .{ doc_count, pub_count, tag_count, popular_count, cache_count });
 }
 
