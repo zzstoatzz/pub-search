@@ -140,6 +140,15 @@
       color: #555;
     }
 
+    .author-name a {
+      color: #888;
+      text-decoration: none;
+    }
+
+    .author-name a:hover {
+      color: #2a9d5c;
+    }
+
     .entity-type {
       font-size: 10px;
       padding: 2px 6px;
@@ -612,9 +621,10 @@
 
     let currentTag = null;
     let currentPlatform = null;
-    let currentMode = 'keyword';
+    let currentMode = 'hybrid';
     let allTags = [];
     let popularSearches = [];
+    const authorCache = new Map();
 
     async function search(query, tag = null, platform = null) {
       if (!query.trim() && !tag && !platform) return;
@@ -623,7 +633,7 @@
       let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
-      if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
+      if (currentMode !== 'hybrid') searchUrl += `&mode=${currentMode}`;
 
       const modeLabel = currentMode === 'semantic' ? 'finding similar...'
         : currentMode === 'hybrid' ? 'searching + embedding...'
@@ -685,8 +695,8 @@
                   : escapeHtml(doc.title || 'Untitled')}
               </div>
               <div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>
-              <div class="result-meta">
-                ${date ? `${date} | ` : ''}${platformHome.url
+              <div class="result-meta" ${doc.did ? `data-did="${escapeHtml(doc.did)}"` : ''}>
+                ${date ? `${date} | ` : ''}<span class="author-name"></span>${platformHome.url
                   ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
                   : platformHome.label}
               </div>
@@ -696,6 +706,9 @@
 
         resultsDiv.innerHTML = html;
         statsDiv.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
+
+        // resolve author display names (non-blocking)
+        resolveAuthors(results);
 
         // load related documents based on top result (skip for semantic/hybrid - already using embeddings)
         if (currentMode === 'keyword' && results.length > 0 && results[0].uri) {
@@ -707,6 +720,47 @@
       } finally {
         searchBtn.disabled = false;
       }
+    }
+
+    async function resolveAuthors(results) {
+      // collect unique DIDs, skip publications
+      const dids = [...new Set(
+        results
+          .filter(r => r.did && (r.type || 'article') !== 'publication')
+          .map(r => r.did)
+      )];
+
+      // find which DIDs we still need to fetch
+      const toFetch = dids.filter(d => !authorCache.has(d));
+
+      if (toFetch.length > 0) {
+        try {
+          // batch up to 25 per request
+          for (let i = 0; i < toFetch.length; i += 25) {
+            const batch = toFetch.slice(i, i + 25);
+            const params = batch.map(d => `actors=${encodeURIComponent(d)}`).join('&');
+            const res = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?${params}`);
+            if (res.ok) {
+              const data = await res.json();
+              for (const profile of data.profiles) {
+                authorCache.set(profile.did, profile.handle);
+              }
+            }
+          }
+        } catch (e) {
+          // graceful degradation — results already visible without names
+        }
+      }
+
+      // populate DOM
+      document.querySelectorAll('.result-meta[data-did]').forEach(el => {
+        const did = el.dataset.did;
+        const handle = authorCache.get(did);
+        if (!handle) return;
+        const nameSpan = el.querySelector('.author-name');
+        if (!nameSpan || nameSpan.innerHTML) return; // already populated
+        nameSpan.innerHTML = `<a href="https://bsky.app/profile/${encodeURIComponent(did)}" target="_blank">@${escapeHtml(handle)}</a> · `;
+      });
     }
 
     function escapeHtml(str) {
@@ -846,7 +900,7 @@
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
-      if (currentMode !== 'keyword') params.set('mode', currentMode);
+      if (currentMode !== 'hybrid') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
     }
@@ -1042,7 +1096,7 @@
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
-      currentMode = params.get('mode') || 'keyword';
+      currentMode = params.get('mode') || 'hybrid';
       renderActiveFilter();
       renderTags();
       renderPlatformFilter();
