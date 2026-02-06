@@ -10,37 +10,34 @@ const LocalDb = @import("LocalDb.zig");
 const BATCH_SIZE = 500;
 
 /// Full sync: fetch all data from Turso and populate local SQLite
+/// Uses brief locks per batch so search queries aren't blocked during sync.
 pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     std.debug.print("sync: starting full sync...\n", .{});
 
-    local.setReady(false);
-
     const conn = local.getConn() orelse return error.LocalNotOpen;
 
-    local.lock();
-    defer local.unlock();
+    // clear existing data (brief lock)
+    {
+        local.lock();
+        defer local.unlock();
+        conn.exec("DELETE FROM documents_fts", .{}) catch {};
+        conn.exec("DELETE FROM documents", .{}) catch {};
+        conn.exec("DELETE FROM publications_fts", .{}) catch {};
+        conn.exec("DELETE FROM publications", .{}) catch {};
+        conn.exec("DELETE FROM document_tags", .{}) catch {};
+    }
 
-    // start transaction for bulk insert
-    conn.exec("BEGIN IMMEDIATE", .{}) catch |err| {
-        std.debug.print("sync: failed to begin transaction: {}\n", .{err});
-        return err;
-    };
-    errdefer conn.exec("ROLLBACK", .{}) catch {};
+    // mark ready so search can fall through to Turso while we sync
+    local.setReady(true);
 
-    // clear existing data
-    conn.exec("DELETE FROM documents_fts", .{}) catch {};
-    conn.exec("DELETE FROM documents", .{}) catch {};
-    conn.exec("DELETE FROM publications_fts", .{}) catch {};
-    conn.exec("DELETE FROM publications", .{}) catch {};
-    conn.exec("DELETE FROM document_tags", .{}) catch {};
-
-    // sync documents in batches
+    // sync documents in batches — fetch from Turso unlocked, write to local with brief lock
     var doc_count: usize = 0;
     var offset: usize = 0;
     while (true) {
         var offset_buf: [16]u8 = undefined;
         const offset_str = std.fmt.bufPrint(&offset_buf, "{d}", .{offset}) catch break;
 
+        // fetch from Turso (no lock held — search can use local DB)
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
             \\  platform, source_collection, path, base_path, has_publication, indexed_at
@@ -55,11 +52,18 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
 
         if (result.rows.len == 0) break;
 
-        for (result.rows) |row| {
-            insertDocumentLocal(conn, row) catch |err| {
-                std.debug.print("sync: insert doc failed: {}\n", .{err});
-            };
-            doc_count += 1;
+        // write batch to local (brief lock)
+        {
+            local.lock();
+            defer local.unlock();
+            conn.exec("BEGIN", .{}) catch {};
+            for (result.rows) |row| {
+                insertDocumentLocal(conn, row) catch |err| {
+                    std.debug.print("sync: insert doc failed: {}\n", .{err});
+                };
+                doc_count += 1;
+            }
+            conn.exec("COMMIT", .{}) catch {};
         }
 
         offset += result.rows.len;
@@ -68,7 +72,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         }
     }
 
-    // sync publications
+    // sync publications (fetch unlocked, write with brief lock)
     var pub_count: usize = 0;
     {
         var pub_result = turso.query(
@@ -76,18 +80,20 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             &.{},
         ) catch |err| {
             std.debug.print("sync: turso publications query failed: {}\n", .{err});
-            conn.exec("COMMIT", .{}) catch {};
-            local.setReady(true);
             return;
         };
         defer pub_result.deinit();
 
+        local.lock();
+        defer local.unlock();
+        conn.exec("BEGIN", .{}) catch {};
         for (pub_result.rows) |row| {
             insertPublicationLocal(conn, row) catch |err| {
                 std.debug.print("sync: insert pub failed: {}\n", .{err});
             };
             pub_count += 1;
         }
+        conn.exec("COMMIT", .{}) catch {};
     }
 
     // sync tags
@@ -98,12 +104,13 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             &.{},
         ) catch |err| {
             std.debug.print("sync: turso tags query failed: {}\n", .{err});
-            conn.exec("COMMIT", .{}) catch {};
-            local.setReady(true);
             return;
         };
         defer tags_result.deinit();
 
+        local.lock();
+        defer local.unlock();
+        conn.exec("BEGIN", .{}) catch {};
         for (tags_result.rows) |row| {
             conn.exec(
                 "INSERT OR IGNORE INTO document_tags (document_uri, tag) VALUES (?, ?)",
@@ -111,24 +118,25 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             ) catch {};
             tag_count += 1;
         }
+        conn.exec("COMMIT", .{}) catch {};
     }
 
     // sync popular searches
     var popular_count: usize = 0;
     {
-        conn.exec("DELETE FROM popular_searches", .{}) catch {};
-
         var popular_result = turso.query(
             "SELECT query, count FROM popular_searches",
             &.{},
         ) catch |err| {
             std.debug.print("sync: turso popular_searches query failed: {}\n", .{err});
-            conn.exec("COMMIT", .{}) catch {};
-            local.setReady(true);
             return;
         };
         defer popular_result.deinit();
 
+        local.lock();
+        defer local.unlock();
+        conn.exec("DELETE FROM popular_searches", .{}) catch {};
+        conn.exec("BEGIN", .{}) catch {};
         for (popular_result.rows) |row| {
             conn.exec(
                 "INSERT OR REPLACE INTO popular_searches (query, count) VALUES (?, ?)",
@@ -136,13 +144,12 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             ) catch {};
             popular_count += 1;
         }
+        conn.exec("COMMIT", .{}) catch {};
     }
 
     // sync similarity cache
     var cache_count: usize = 0;
     {
-        conn.exec("DELETE FROM similarity_cache", .{}) catch {};
-
         if (turso.query(
             "SELECT source_uri, results, doc_count, computed_at FROM similarity_cache",
             &.{},
@@ -150,6 +157,10 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             var res = res_val;
             defer res.deinit();
 
+            local.lock();
+            defer local.unlock();
+            conn.exec("DELETE FROM similarity_cache", .{}) catch {};
+            conn.exec("BEGIN", .{}) catch {};
             for (res.rows) |row| {
                 conn.exec(
                     "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
@@ -157,31 +168,33 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
                 ) catch {};
                 cache_count += 1;
             }
+            conn.exec("COMMIT", .{}) catch {};
         } else |err| {
             std.debug.print("sync: turso similarity_cache query failed: {}\n", .{err});
-            // continue anyway - cache isn't critical
         }
     }
 
-    // record sync time
-    var ts_buf: [20]u8 = undefined;
-    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
-    conn.exec(
-        "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync', ?)",
-        .{ts_str},
-    ) catch {};
-
-    conn.exec("COMMIT", .{}) catch |err| {
-        std.debug.print("sync: commit failed: {}\n", .{err});
-        return err;
-    };
+    // record sync time (brief lock)
+    {
+        local.lock();
+        defer local.unlock();
+        var ts_buf: [20]u8 = undefined;
+        const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
+        conn.exec(
+            "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync', ?)",
+            .{ts_str},
+        ) catch {};
+    }
 
     // checkpoint WAL to prevent unbounded growth
-    conn.exec("PRAGMA wal_checkpoint(TRUNCATE)", .{}) catch |err| {
-        std.debug.print("sync: wal checkpoint failed: {}\n", .{err});
-    };
+    {
+        local.lock();
+        defer local.unlock();
+        conn.exec("PRAGMA wal_checkpoint(PASSIVE)", .{}) catch |err| {
+            std.debug.print("sync: wal checkpoint failed: {}\n", .{err});
+        };
+    }
 
-    local.setReady(true);
     std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular, {d} cached\n", .{ doc_count, pub_count, tag_count, popular_count, cache_count });
 }
 
