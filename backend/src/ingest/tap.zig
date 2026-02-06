@@ -188,18 +188,27 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     };
 
     // validate DID
-    const did = zat.Did.parse(rec.did) orelse return;
+    const did = zat.Did.parse(rec.did) orelse {
+        logfire.counter("tap.dropped.invalid_did", 1);
+        return;
+    };
 
     // build AT-URI string (no allocation - uses stack buffer)
     var uri_buf: [256]u8 = undefined;
-    const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse return;
+    const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse {
+        logfire.counter("tap.dropped.uri_too_long", 1);
+        return;
+    };
 
     // span for the actual indexing work
     const span = logfire.span("tap.index_record", .{});
     defer span.end();
 
     if (rec.isCreate() or rec.isUpdate()) {
-        const inner_record = zat.json.getObject(parsed.value, "record.record") orelse return;
+        const inner_record = zat.json.getObject(parsed.value, "record.record") orelse {
+            logfire.counter("tap.dropped.no_inner_record", 1);
+            return;
+        };
 
         if (isDocumentCollection(rec.collection)) {
             processDocument(allocator, uri, did.raw, rec.rkey, inner_record, rec.collection) catch |err| {
@@ -221,7 +230,12 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 
 fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8) !void {
     var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
-        if (err != error.NoContent and err != error.MissingTitle) {
+        if (err == error.MissingTitle) {
+            logfire.counter("tap.dropped.missing_title", 1);
+        } else if (err == error.NoContent) {
+            logfire.counter("tap.dropped.no_content", 1);
+        } else {
+            logfire.counter("tap.dropped.extraction_error", 1);
             logfire.warn("extraction error for {s}: {}", .{ uri, err });
         }
         return;
@@ -249,7 +263,10 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
     const record_val: json.Value = .{ .object = record };
 
     // extract required field
-    const name = zat.json.getString(record_val, "name") orelse return;
+    const name = zat.json.getString(record_val, "name") orelse {
+        logfire.counter("tap.dropped.pub_missing_name", 1);
+        return;
+    };
     const description = zat.json.getString(record_val, "description");
 
     // base_path: try leaflet's "base_path", then site.standard's "url"
