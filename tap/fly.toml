@@ -2,7 +2,10 @@ app = 'leaflet-search-tap'
 primary_region = 'ewr'
 
 [build]
-  image = 'ghcr.io/bluesky-social/indigo/tap:latest'
+  # pinned to v0.1.3 - v0.1.4 has nil pointer crash in validateCommitAndFilterOps
+  # when prevData is null. see: https://github.com/bluesky-social/indigo/issues/XXX
+  # TODO: upgrade when v0.1.5+ is released with fix
+  image = 'ghcr.io/bluesky-social/indigo/tap@sha256:7c0774981025efe6a2dc0943942466fc60481b8a654bea65a4635981d0d415bc'
 
 [env]
   TAP_DATABASE_URL = 'sqlite:///data/tap.db'
