@@ -2,6 +2,7 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const zql = @import("zql");
+const logfire = @import("logfire");
 const db = @import("db/mod.zig");
 const stats = @import("metrics.zig").stats;
 
@@ -271,13 +272,17 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     // try local SQLite first (faster for FTS queries)
     if (db.getLocalDb()) |local| {
         if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter)) |result| {
+            logfire.info("search.local hit", .{});
             return result;
         } else |err| {
-            std.debug.print("local search failed ({s}), falling back to turso\n", .{@errorName(err)});
+            logfire.warn("search.local failed, falling back to turso: {s}", .{@errorName(err)});
         }
+    } else {
+        logfire.warn("search.local unavailable (not ready), falling back to turso", .{});
     }
 
     // fall back to Turso
+    logfire.info("search.turso fallback", .{});
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
