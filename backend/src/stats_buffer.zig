@@ -14,6 +14,14 @@ var delta_errors: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var delta_cache_hits: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var delta_cache_misses: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 
+// cached base values from Turso (refreshed every sync cycle)
+var cached_base_searches: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var cached_base_errors: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var cached_base_cache_hits: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var cached_base_cache_misses: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var cached_started_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var cache_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 // popular searches ring buffer
 var pending_searches: [MAX_PENDING_SEARCHES]?[]const u8 = .{null} ** MAX_PENDING_SEARCHES;
 var search_write_idx: usize = 0;
@@ -26,6 +34,12 @@ var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var sync_thread: ?std.Thread = null;
 
 pub fn init() void {
+    // seed cache immediately (so first /stats request is fast)
+    if (db.getClient()) |c| {
+        refreshCachedStats(c);
+        logfire.debug("stats_buffer: seeded cache from Turso", .{});
+    }
+
     sync_thread = std.Thread.spawn(.{}, syncLoop, .{}) catch |err| {
         logfire.warn("stats_buffer: failed to start sync thread: {}", .{err});
         return;
@@ -92,6 +106,26 @@ pub fn getCacheMissCount(base: i64) i64 {
     return base + delta_cache_misses.load(.acquire);
 }
 
+// cached stats (base + delta) - returns null if cache not yet initialized
+pub const CachedStats = struct {
+    searches: i64,
+    errors: i64,
+    cache_hits: i64,
+    cache_misses: i64,
+    started_at: i64,
+};
+
+pub fn getCachedStats() ?CachedStats {
+    if (!cache_initialized.load(.acquire)) return null;
+    return .{
+        .searches = cached_base_searches.load(.acquire) + delta_searches.load(.acquire),
+        .errors = cached_base_errors.load(.acquire) + delta_errors.load(.acquire),
+        .cache_hits = cached_base_cache_hits.load(.acquire) + delta_cache_hits.load(.acquire),
+        .cache_misses = cached_base_cache_misses.load(.acquire) + delta_cache_misses.load(.acquire),
+        .started_at = cached_started_at.load(.acquire),
+    };
+}
+
 fn syncLoop() void {
     while (true) {
         std.Thread.sleep(SYNC_INTERVAL_MS * std.time.ns_per_ms);
@@ -111,10 +145,29 @@ fn syncToTurso() void {
     // sync stats if any changed
     if (searches != 0 or errors != 0 or cache_hits != 0 or cache_misses != 0) {
         syncStatsDelta(c, searches, errors, cache_hits, cache_misses);
+        // refresh cache after writing (base values changed)
+        refreshCachedStats(c);
     }
 
     // sync popular searches
     syncPopularSearches(c);
+}
+
+fn refreshCachedStats(c: *db.Client) void {
+    var res = c.query(
+        \\SELECT total_searches, total_errors, service_started_at,
+        \\       COALESCE(cache_hits, 0), COALESCE(cache_misses, 0)
+        \\FROM stats WHERE id = 1
+    , &.{}) catch return;
+    defer res.deinit();
+
+    const row = res.first() orelse return;
+    cached_base_searches.store(row.int(0), .release);
+    cached_base_errors.store(row.int(1), .release);
+    cached_started_at.store(row.int(2), .release);
+    cached_base_cache_hits.store(row.int(3), .release);
+    cached_base_cache_misses.store(row.int(4), .release);
+    cache_initialized.store(true, .release);
 }
 
 fn syncStatsDelta(c: *db.Client, searches: i64, errors: i64, cache_hits: i64, cache_misses: i64) void {

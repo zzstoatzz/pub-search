@@ -118,15 +118,8 @@ pub fn getStats() Stats {
 }
 
 fn getStatsLocal(local: *db.LocalDb) !Stats {
-    // get stats table from Turso (doesn't sync to local replica)
-    const client = db.getClient() orelse return error.NotInitialized;
-    var stats_res = client.query(
-        \\SELECT total_searches, total_errors, service_started_at,
-        \\       COALESCE(cache_hits, 0), COALESCE(cache_misses, 0)
-        \\FROM stats WHERE id = 1
-    , &.{}) catch return error.QueryFailed;
-    defer stats_res.deinit();
-    const stats_row = stats_res.first() orelse return error.NoStats;
+    // use cached stats from stats_buffer (instant, no Turso round-trip)
+    const cached = stats_buffer.getCachedStats() orelse return error.CacheNotInitialized;
 
     // get document counts from local (fast)
     var rows = try local.query(
@@ -138,16 +131,15 @@ fn getStatsLocal(local: *db.LocalDb) !Stats {
     defer rows.deinit();
     const row = rows.next() orelse return error.NoRows;
 
-    // include pending deltas from buffer
     return .{
         .documents = row.int(0),
         .publications = row.int(1),
         .embeddings = row.int(2),
-        .searches = stats_buffer.getSearchCount(stats_row.int(0)),
-        .errors = stats_buffer.getErrorCount(stats_row.int(1)),
-        .started_at = stats_row.int(2),
-        .cache_hits = stats_buffer.getCacheHitCount(stats_row.int(3)),
-        .cache_misses = stats_buffer.getCacheMissCount(stats_row.int(4)),
+        .searches = cached.searches,
+        .errors = cached.errors,
+        .started_at = cached.started_at,
+        .cache_hits = cached.cache_hits,
+        .cache_misses = cached.cache_misses,
     };
 }
 

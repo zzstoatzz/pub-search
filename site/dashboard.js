@@ -126,77 +126,113 @@ function renderLatencyChart(timing) {
     return;
   }
 
-  const canvas = document.createElement('canvas');
-  const chartDiv = document.createElement('div');
-  chartDiv.className = 'latency-chart';
-  chartDiv.appendChild(canvas);
-  container.appendChild(chartDiv);
+  // create a grid of mini-charts, each with its own scale
+  const grid = document.createElement('div');
+  grid.className = 'latency-grid';
+  container.appendChild(grid);
 
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const rect = chartDiv.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.scale(dpr, dpr);
-
-  const w = rect.width;
-  const h = rect.height;
-  const padding = { top: 10, right: 10, bottom: 20, left: 10 };
-  const chartW = w - padding.left - padding.right;
-  const chartH = h - padding.top - padding.bottom;
-
-  // find max value across all endpoints
-  let maxVal = 0;
   endpoints.forEach(name => {
     const history = timing[name]?.history || [];
-    history.forEach(p => { if (p.avg_ms > maxVal) maxVal = p.avg_ms; });
-  });
-  if (maxVal === 0) maxVal = 100;
-
-  // draw each endpoint as an area chart
-  endpoints.forEach(name => {
-    const history = timing[name]?.history || [];
-    if (history.length === 0) return;
-
     const color = ENDPOINT_COLORS[name];
-    const points = history.map((p, i) => ({
-      x: padding.left + (i / (history.length - 1)) * chartW,
-      y: padding.top + chartH - (p.avg_ms / maxVal) * chartH
-    }));
 
-    // draw filled area
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, padding.top + chartH);
-    points.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
-    ctx.closePath();
-    ctx.fillStyle = color + '20';
-    ctx.fill();
+    // find max for this endpoint only
+    let maxVal = 0;
+    history.forEach(p => { if (p.avg_ms > maxVal) maxVal = p.avg_ms; });
+    if (maxVal === 0) maxVal = 100;
 
-    // draw line
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
+    const cell = document.createElement('div');
+    cell.className = 'latency-cell';
+
+    const label = document.createElement('div');
+    label.className = 'latency-cell-label';
+    label.innerHTML = '<span class="dot" style="background:' + color + '"></span>' + name +
+      '<span class="latency-cell-max">' + formatMs(maxVal) + '</span>';
+    cell.appendChild(label);
+
+    if (history.length === 0 || !history.some(h => h.count > 0)) {
+      const empty = document.createElement('div');
+      empty.className = 'latency-cell-empty';
+      empty.textContent = '--';
+      cell.appendChild(empty);
+      grid.appendChild(cell);
+      return;
     }
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  });
 
-  // legend with max value
-  const legend = document.createElement('div');
-  legend.className = 'latency-legend';
-  endpoints.forEach(name => {
-    const span = document.createElement('span');
-    span.innerHTML = '<span class="dot" style="background:' + ENDPOINT_COLORS[name] + '"></span>' + name;
-    legend.appendChild(span);
+    const canvasWrap = document.createElement('div');
+    canvasWrap.className = 'latency-canvas-wrap';
+    const canvas = document.createElement('canvas');
+    const tooltip = document.createElement('div');
+    tooltip.className = 'latency-tooltip';
+    canvasWrap.appendChild(canvas);
+    canvasWrap.appendChild(tooltip);
+    cell.appendChild(canvasWrap);
+    grid.appendChild(cell);
+
+    // draw after append so we can measure
+    requestAnimationFrame(() => {
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+
+      const w = rect.width;
+      const h = rect.height;
+      const padding = { top: 2, right: 2, bottom: 2, left: 2 };
+      const chartW = w - padding.left - padding.right;
+      const chartH = h - padding.top - padding.bottom;
+
+      const points = history.map((p, i) => ({
+        x: padding.left + (i / Math.max(history.length - 1, 1)) * chartW,
+        y: padding.top + chartH - (p.avg_ms / maxVal) * chartH
+      }));
+
+      // draw filled area
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, padding.top + chartH);
+      points.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
+      ctx.closePath();
+      ctx.fillStyle = color + '20';
+      ctx.fill();
+
+      // draw line
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // hover interaction
+      canvas.addEventListener('mousemove', e => {
+        const canvasRect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - canvasRect.left;
+        const idx = Math.round((mouseX - padding.left) / chartW * (history.length - 1));
+        const clampedIdx = Math.max(0, Math.min(history.length - 1, idx));
+        const point = history[clampedIdx];
+        if (point) {
+          const time = formatTimestamp(point.hour);
+          tooltip.textContent = time + ' · ' + formatMs(point.avg_ms);
+          tooltip.style.opacity = '1';
+        }
+      });
+      canvas.addEventListener('mouseleave', () => {
+        tooltip.style.opacity = '0';
+      });
+    });
   });
-  const maxLabel = document.createElement('span');
-  maxLabel.className = 'latency-max';
-  maxLabel.textContent = formatMs(maxVal) + ' max';
-  legend.appendChild(maxLabel);
-  container.appendChild(legend);
+}
+
+function formatTimestamp(hour) {
+  const d = new Date(hour * 1000);
+  const h = d.getHours();
+  const ampm = h >= 12 ? 'pm' : 'am';
+  const h12 = h % 12 || 12;
+  return h12 + ampm;
 }
 
 function escapeHtml(str) {
