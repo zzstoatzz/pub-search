@@ -759,7 +759,7 @@
         if (!handle) return;
         const nameSpan = el.querySelector('.author-name');
         if (!nameSpan || nameSpan.innerHTML) return; // already populated
-        nameSpan.innerHTML = `<a href="https://bsky.app/profile/${encodeURIComponent(did)}" target="_blank">@${escapeHtml(handle)}</a> · `;
+        nameSpan.innerHTML = `<a href="https://bsky.app/profile/${escapeHtml(did)}" target="_blank">@${escapeHtml(handle)}</a> · `;
       });
     }
 
