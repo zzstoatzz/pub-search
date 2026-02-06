@@ -599,20 +599,22 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
-    // fetch limit+1 since source doc appears in its own nearest neighbors
     var limit_buf: [8]u8 = undefined;
-    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit + 1}) catch "6";
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch "5";
 
-    // indexed similarity: get source embedding via subquery, then use vector index
+    // brute-force cosine similarity search (no vector index needed)
     var res = c.query(
-        \\SELECT d.uri, d.did, d.title, '' as snippet,
-        \\  d.created_at, d.rkey, d.base_path, d.has_publication,
-        \\  d.platform, COALESCE(d.path, '') as path
-        \\FROM vector_top_k('documents_embedding_idx',
-        \\  (SELECT embedding FROM documents WHERE uri = ?), ?) v
-        \\JOIN documents d ON d.rowid = v.id
-        \\WHERE d.uri != ?
-    , &.{ uri, limit_str, uri }) catch {
+        \\SELECT d2.uri, d2.did, d2.title, '' as snippet,
+        \\  d2.created_at, d2.rkey, d2.base_path, d2.has_publication,
+        \\  d2.platform, COALESCE(d2.path, '') as path
+        \\FROM documents d1, documents d2
+        \\WHERE d1.uri = ?
+        \\  AND d2.uri != d1.uri
+        \\  AND d1.embedding IS NOT NULL
+        \\  AND d2.embedding IS NOT NULL
+        \\ORDER BY vector_distance_cos(d1.embedding, d2.embedding)
+        \\LIMIT ?
+    , &.{ uri, limit_str }) catch {
         try output.writer.writeAll("[]");
         return try output.toOwnedSlice();
     };
@@ -899,16 +901,15 @@ pub fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]c
     try jw.beginArray();
 
     if (platform_filter) |platform| {
-        // fetch extra from index since platform filter is post-filter on top-k results
         var res = c.query(
             \\SELECT d.uri, d.did, d.title, '' as snippet,
             \\  d.created_at, d.rkey, d.base_path, d.has_publication,
             \\  d.platform, COALESCE(d.path, '') as path
-            \\FROM vector_top_k('documents_embedding_idx', vector32(?), 40) v
-            \\JOIN documents d ON d.rowid = v.id
-            \\WHERE d.platform = ?
+            \\FROM documents d
+            \\WHERE d.embedding IS NOT NULL AND d.platform = ?
+            \\ORDER BY vector_distance_cos(vector32(?), d.embedding)
             \\LIMIT 20
-        , &.{ embedding_json, platform }) catch {
+        , &.{ platform, embedding_json }) catch {
             try jw.endArray();
             return try output.toOwnedSlice();
         };
@@ -919,8 +920,10 @@ pub fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]c
             \\SELECT d.uri, d.did, d.title, '' as snippet,
             \\  d.created_at, d.rkey, d.base_path, d.has_publication,
             \\  d.platform, COALESCE(d.path, '') as path
-            \\FROM vector_top_k('documents_embedding_idx', vector32(?), 20) v
-            \\JOIN documents d ON d.rowid = v.id
+            \\FROM documents d
+            \\WHERE d.embedding IS NOT NULL
+            \\ORDER BY vector_distance_cos(vector32(?), d.embedding)
+            \\LIMIT 20
         , &.{embedding_json}) catch {
             try jw.endArray();
             return try output.toOwnedSlice();
@@ -945,26 +948,28 @@ pub fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8
     // keyword search (fast: local SQLite)
     const keyword_json = try search(alloc, query, tag_filter, platform_filter, since_filter);
 
-    // vector search (Turso) — uses DiskANN vector index
+    // vector search (Turso)
     const c = db.getClient() orelse return keyword_json;
     var vector_res = blk: {
         if (platform_filter) |platform| {
-            // fetch extra from index since platform filter is post-filter on top-k results
             break :blk c.query(
                 \\SELECT d.uri, d.did, d.title, '' as snippet,
                 \\  d.created_at, d.rkey, d.base_path, d.has_publication,
                 \\  d.platform, COALESCE(d.path, '') as path
-                \\FROM vector_top_k('documents_embedding_idx', vector32(?), 20) v
-                \\JOIN documents d ON d.rowid = v.id
-                \\WHERE d.platform = ?
-            , &.{ embedding_json, platform }) catch return keyword_json;
+                \\FROM documents d
+                \\WHERE d.embedding IS NOT NULL AND d.platform = ?
+                \\ORDER BY vector_distance_cos(vector32(?), d.embedding)
+                \\LIMIT 10
+            , &.{ platform, embedding_json }) catch return keyword_json;
         } else {
             break :blk c.query(
                 \\SELECT d.uri, d.did, d.title, '' as snippet,
                 \\  d.created_at, d.rkey, d.base_path, d.has_publication,
                 \\  d.platform, COALESCE(d.path, '') as path
-                \\FROM vector_top_k('documents_embedding_idx', vector32(?), 10) v
-                \\JOIN documents d ON d.rowid = v.id
+                \\FROM documents d
+                \\WHERE d.embedding IS NOT NULL
+                \\ORDER BY vector_distance_cos(vector32(?), d.embedding)
+                \\LIMIT 10
             , &.{embedding_json}) catch return keyword_json;
         }
     };
