@@ -3,7 +3,7 @@ const json = std.json;
 const Allocator = std.mem.Allocator;
 const zql = @import("zql");
 const db = @import("db/mod.zig");
-const stats = @import("stats.zig");
+const stats = @import("metrics/mod.zig").stats;
 
 // cached embedded doc count (refresh every 5 minutes)
 var cached_doc_count: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);

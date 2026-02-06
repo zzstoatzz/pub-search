@@ -2,7 +2,7 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const db = @import("db/mod.zig");
-const timing = @import("timing.zig");
+const timing = @import("metrics/mod.zig").timing;
 
 // JSON output types
 const TagJson = struct { tag: []const u8, count: i64 };
@@ -40,7 +40,7 @@ const PLATFORMS_SQL =
     \\ORDER BY count DESC
 ;
 
-const TAGS_SQL =
+pub const TAGS_SQL =
     \\SELECT tag, COUNT(*) as count
     \\FROM document_tags
     \\GROUP BY tag

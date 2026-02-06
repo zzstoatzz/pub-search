@@ -1,5 +1,5 @@
 const std = @import("std");
-const db = @import("db/mod.zig");
+const db = @import("../db/mod.zig");
 
 pub fn insertDocument(
     uri: []const u8,

@@ -287,27 +287,6 @@ pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
     return .{ .inner = rows };
 }
 
-/// Execute a SELECT query expecting single row
-pub fn queryOne(self: *LocalDb, comptime sql: []const u8, args: anytype) !?Row {
-    const span = logfire.span("db.local.query", .{
-        .sql = truncateSql(sql),
-    });
-    defer span.end();
-
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
-    const c = self.conn orelse return error.NotOpen;
-    const row = c.row(sql, args) catch |e| {
-        logfire.err("db.local.queryOne failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
-        return e;
-    };
-    if (row) |r| {
-        return .{ .stmt = r };
-    }
-    return null;
-}
-
 /// Execute a statement (INSERT, UPDATE, DELETE)
 pub fn exec(self: *LocalDb, comptime sql: []const u8, args: anytype) !void {
     self.mutex.lock();

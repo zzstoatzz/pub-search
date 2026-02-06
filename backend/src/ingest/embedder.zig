@@ -10,7 +10,7 @@ const mem = std.mem;
 const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
-const db = @import("db/mod.zig");
+const db = @import("../db/mod.zig");
 
 // voyage-3-lite limits
 const MAX_BATCH_SIZE = 20; // conservative batch size for reliability

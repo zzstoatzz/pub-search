@@ -3,11 +3,12 @@ const net = std.net;
 const http = std.http;
 const mem = std.mem;
 const json = std.json;
+const Allocator = mem.Allocator;
 const logfire = @import("logfire");
-const activity = @import("activity.zig");
+const zql = @import("zql");
+const db = @import("db/mod.zig");
+const metrics = @import("metrics/mod.zig");
 const search = @import("search.zig");
-const stats = @import("stats.zig");
-const timing = @import("timing.zig");
 const dashboard = @import("dashboard.zig");
 
 const HTTP_BUF_SIZE = 8192;
@@ -59,8 +60,6 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         try sendJson(request, "{\"status\":\"ok\"}");
     } else if (mem.eql(u8, target, "/popular")) {
         try handlePopular(request);
-    } else if (mem.eql(u8, target, "/platforms")) {
-        try handlePlatforms(request);
     } else if (mem.eql(u8, target, "/dashboard")) {
         try handleDashboard(request);
     } else if (mem.eql(u8, target, "/api/dashboard")) {
@@ -76,7 +75,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
 
 fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
-    defer timing.record(.search, start_time);
+    defer metrics.timing.record(.search, start_time);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -103,17 +102,17 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     // perform FTS search - arena handles cleanup
     const results = search.search(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
         logfire.err("search failed: {}", .{err});
-        stats.recordError();
+        metrics.stats.recordError();
         return err;
     };
-    stats.recordSearch(query);
+    metrics.stats.recordSearch(query);
     logfire.counter("search.requests", 1);
     try sendJson(request, results);
 }
 
 fn handleTags(request: *http.Server.Request) !void {
     const start_time = std.time.microTimestamp();
-    defer timing.record(.tags, start_time);
+    defer metrics.timing.record(.tags, start_time);
 
     const span = logfire.span("http.tags", .{});
     defer span.end();
@@ -122,13 +121,13 @@ fn handleTags(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const tags = try stats.getTags(alloc);
+    const tags = try getTags(alloc);
     try sendJson(request, tags);
 }
 
 fn handlePopular(request: *http.Server.Request) !void {
     const start_time = std.time.microTimestamp();
-    defer timing.record(.popular, start_time);
+    defer metrics.timing.record(.popular, start_time);
 
     const span = logfire.span("http.popular", .{});
     defer span.end();
@@ -137,17 +136,111 @@ fn handlePopular(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const popular = try stats.getPopular(alloc, 5);
+    const popular = try getPopular(alloc, 5);
     try sendJson(request, popular);
 }
 
-fn handlePlatforms(request: *http.Server.Request) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+// --- tags/popular query logic ---
 
-    const data = try stats.getPlatformCounts(alloc);
-    try sendJson(request, data);
+const TagJson = struct { tag: []const u8, count: i64 };
+const PopularJson = struct { query: []const u8, count: i64 };
+
+const TagsQuery = zql.Query(dashboard.TAGS_SQL);
+
+fn getTags(alloc: Allocator) ![]const u8 {
+    // try local SQLite first (faster)
+    if (db.getLocalDb()) |local| {
+        if (getTagsLocal(alloc, local)) |result| {
+            return result;
+        } else |_| {}
+    }
+
+    // fall back to Turso
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var res = c.query(TagsQuery.positional, &.{}) catch {
+        try output.writer.writeAll("{\"error\":\"failed to fetch tags\"}");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn getTagsLocal(alloc: Allocator, local: *db.LocalDb) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var rows = try local.query(dashboard.TAGS_SQL, .{});
+    defer rows.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
+    // try local SQLite first (faster)
+    if (db.getLocalDb()) |local| {
+        if (getPopularLocal(alloc, local, limit)) |result| {
+            return result;
+        } else |_| {}
+    }
+
+    // fall back to Turso
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var buf: [8]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&buf, "{d}", .{limit}) catch "3";
+
+    var res = c.query(
+        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT ?",
+        &.{limit_str},
+    ) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn getPopularLocal(alloc: Allocator, local: *db.LocalDb, limit: usize) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    _ = limit; // zqlite doesn't support runtime LIMIT, use fixed 10
+    var rows = try local.query(
+        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT 10",
+        .{},
+    );
+    defer rows.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }
 
 fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const u8) ![]const u8 {
@@ -176,8 +269,8 @@ fn handleStats(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const db_stats = stats.getStats();
-    const all_timing = timing.getAllStats();
+    const db_stats = metrics.stats.getStats();
+    const all_timing = metrics.timing.getAllStats();
 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
@@ -204,7 +297,7 @@ fn handleStats(request: *http.Server.Request) !void {
     // timing stats per endpoint
     try jw.objectField("timing");
     try jw.beginObject();
-    inline for (@typeInfo(timing.Endpoint).@"enum".fields, 0..) |field, i| {
+    inline for (@typeInfo(metrics.timing.Endpoint).@"enum".fields, 0..) |field, i| {
         const t = all_timing[i];
         try jw.objectField(field.name);
         try jw.beginObject();
@@ -296,7 +389,7 @@ fn handleDashboard(request: *http.Server.Request) !void {
 
 fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
-    defer timing.record(.similar, start_time);
+    defer metrics.timing.record(.similar, start_time);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -320,7 +413,7 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn handleActivity(request: *http.Server.Request) !void {
-    const counts = activity.getCounts();
+    const counts = metrics.activity.getCounts();
 
     // format as JSON array
     var buf: [512]u8 = undefined;

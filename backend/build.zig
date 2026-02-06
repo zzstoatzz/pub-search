@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
 
     const test_files = [_][]const u8{
         "src/search.zig",
-        "src/extractor.zig",
+        "src/ingest/extractor.zig",
     };
 
     for (test_files) |file| {

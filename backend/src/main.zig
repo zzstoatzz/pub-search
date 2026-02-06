@@ -4,11 +4,9 @@ const posix = std.posix;
 const Thread = std.Thread;
 const logfire = @import("logfire");
 const db = @import("db/mod.zig");
-const activity = @import("activity.zig");
-const stats_buffer = @import("stats_buffer.zig");
+const metrics = @import("metrics/mod.zig");
 const server = @import("server.zig");
-const tap = @import("tap.zig");
-const embedder = @import("embedder.zig");
+const ingest = @import("ingest/mod.zig");
 
 const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 30;
@@ -78,16 +76,16 @@ fn initServices(allocator: std.mem.Allocator) void {
     db.startSync();
 
     // start activity tracker
-    activity.init();
+    metrics.activity.init();
 
     // start stats buffer (background sync to Turso)
-    stats_buffer.init();
+    metrics.buffer.init();
 
     // start embedder (generates embeddings for new docs)
-    embedder.start(allocator);
+    ingest.embedder.start(allocator);
 
     // start tap consumer
-    tap.consumer(allocator);
+    ingest.tap.consumer(allocator);
 }
 
 fn setSocketTimeout(fd: posix.fd_t, secs: u32) !void {

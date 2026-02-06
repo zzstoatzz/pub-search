@@ -30,11 +30,6 @@ pub fn initLocalDb() void {
     };
 }
 
-pub fn init() !void {
-    try initTurso();
-    initLocalDb();
-}
-
 fn initLocal() !void {
     // check if local db is disabled
     if (posix.getenv("LOCAL_DB_ENABLED")) |val| {

@@ -25,10 +25,6 @@ pub const Platform = enum {
         return @tagName(self);
     }
 
-    /// Display name (for UI)
-    pub fn displayName(self: Platform) []const u8 {
-        return @tagName(self);
-    }
 };
 
 /// Extracted document data ready for indexing.
@@ -72,11 +68,6 @@ const plaintext_blocks = std.StaticStringMap(void).initComptime(.{
     .{ "pub.leaflet.blocks.code", {} },
 });
 
-/// Detect platform from collection name
-pub fn detectPlatform(collection: []const u8) Platform {
-    return Platform.fromCollection(collection);
-}
-
 /// Extract document content from a record.
 /// Caller owns the returned ExtractedDocument and must call deinit().
 pub fn extractDocument(
@@ -85,7 +76,7 @@ pub fn extractDocument(
     collection: []const u8,
 ) !ExtractedDocument {
     const record_val: json.Value = .{ .object = record };
-    const platform = detectPlatform(collection);
+    const platform = Platform.fromCollection(collection);
 
     // extract required fields
     const title = zat.json.getString(record_val, "title") orelse return error.MissingTitle;
@@ -273,11 +264,6 @@ test "Platform.name" {
     try std.testing.expectEqualStrings("leaflet", Platform.leaflet.name());
     try std.testing.expectEqualStrings("other", Platform.other.name());
     try std.testing.expectEqualStrings("unknown", Platform.unknown.name());
-}
-
-test "Platform.displayName" {
-    try std.testing.expectEqualStrings("leaflet", Platform.leaflet.displayName());
-    try std.testing.expectEqualStrings("other", Platform.other.displayName());
 }
 
 test "extractDocument: site.standard.document with pub.leaflet.content" {
