@@ -189,14 +189,14 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 
     // validate DID
     const did = zat.Did.parse(rec.did) orelse {
-        logfire.counter("tap.dropped.invalid_did", 1);
+        logfire.span("tap.dropped", .{ .reason = "invalid_did", .collection = rec.collection }).end();
         return;
     };
 
     // build AT-URI string (no allocation - uses stack buffer)
     var uri_buf: [256]u8 = undefined;
     const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse {
-        logfire.counter("tap.dropped.uri_too_long", 1);
+        logfire.span("tap.dropped", .{ .reason = "uri_too_long", .collection = rec.collection }).end();
         return;
     };
 
@@ -206,7 +206,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 
     if (rec.isCreate() or rec.isUpdate()) {
         const inner_record = zat.json.getObject(parsed.value, "record.record") orelse {
-            logfire.counter("tap.dropped.no_inner_record", 1);
+            logfire.span("tap.dropped", .{ .reason = "no_inner_record", .collection = rec.collection, .uri = uri }).end();
             return;
         };
 
@@ -231,12 +231,11 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8) !void {
     var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
         if (err == error.MissingTitle) {
-            logfire.counter("tap.dropped.missing_title", 1);
+            logfire.span("tap.dropped", .{ .reason = "missing_title", .collection = collection, .uri = uri }).end();
         } else if (err == error.NoContent) {
-            logfire.counter("tap.dropped.no_content", 1);
+            logfire.span("tap.dropped", .{ .reason = "no_content", .collection = collection, .uri = uri }).end();
         } else {
-            logfire.counter("tap.dropped.extraction_error", 1);
-            logfire.warn("extraction error for {s}: {}", .{ uri, err });
+            logfire.span("tap.dropped", .{ .reason = "extraction_error", .collection = collection, .uri = uri }).end();
         }
         return;
     };
@@ -264,7 +263,7 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 
     // extract required field
     const name = zat.json.getString(record_val, "name") orelse {
-        logfire.counter("tap.dropped.pub_missing_name", 1);
+        logfire.span("tap.dropped", .{ .reason = "pub_missing_name", .uri = uri }).end();
         return;
     };
     const description = zat.json.getString(record_val, "description");
