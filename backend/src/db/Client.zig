@@ -27,8 +27,6 @@ const AUTH_BUF_SIZE = 512;
 allocator: Allocator,
 url: []const u8,
 token: []const u8,
-mutex: std.Thread.Mutex = .{},
-http_client: http.Client,
 
 pub fn init(allocator: Allocator) !Client {
     const url = std.posix.getenv("TURSO_URL") orelse {
@@ -52,12 +50,11 @@ pub fn init(allocator: Allocator) !Client {
         .allocator = allocator,
         .url = host,
         .token = token,
-        .http_client = .{ .allocator = allocator },
     };
 }
 
 pub fn deinit(self: *Client) void {
-    self.http_client.deinit();
+    _ = self;
 }
 
 pub fn query(self: *Client, comptime sql: []const u8, args: anytype) !Result {
@@ -123,9 +120,6 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
     });
     defer span.end();
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
         return error.UrlTooLong;
@@ -140,7 +134,11 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
     var response_body: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer response_body.deinit();
 
-    const res = self.http_client.fetch(.{
+    // per-request http client — no shared mutex needed
+    var hc: http.Client = .{ .allocator = self.allocator };
+    defer hc.deinit();
+
+    const res = hc.fetch(.{
         .location = .{ .url = url },
         .method = .POST,
         .headers = .{
@@ -177,9 +175,6 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
     });
     defer span.end();
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
         return error.UrlTooLong;
@@ -194,7 +189,10 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
     var response_body: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer response_body.deinit();
 
-    const res = self.http_client.fetch(.{
+    var hc: http.Client = .{ .allocator = self.allocator };
+    defer hc.deinit();
+
+    const res = hc.fetch(.{
         .location = .{ .url = url },
         .method = .POST,
         .headers = .{
