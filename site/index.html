@@ -371,53 +371,6 @@
       color: #555;
     }
 
-    .mode-selector {
-      margin-bottom: 1rem;
-    }
-
-    .mode-selector-label {
-      font-size: 11px;
-      color: #444;
-      margin-bottom: 0.5rem;
-    }
-
-    .mode-list {
-      display: flex;
-      gap: 0.5rem;
-    }
-
-    .mode-option {
-      font-size: 11px;
-      padding: 3px 8px;
-      background: #151515;
-      border: 1px solid #252525;
-      border-radius: 3px;
-      cursor: pointer;
-      color: #777;
-    }
-
-    .mode-option:hover {
-      background: #1a1a1a;
-      border-color: #333;
-      color: #aaa;
-    }
-
-    .mode-option.active {
-      background: rgba(100, 100, 200, 0.2);
-      border-color: #6a6ad4;
-      color: #8a8ae4;
-    }
-
-    .mode-option .mode-desc {
-      font-size: 9px;
-      color: #555;
-      margin-left: 4px;
-    }
-
-    .mode-option.active .mode-desc {
-      color: #6a6ad4;
-    }
-
     .platform-filter {
       margin-bottom: 1rem;
     }
@@ -489,7 +442,7 @@
       }
 
       /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .mode-option, .suggestion, input.tag-input {
+      .tag, .platform-option, .suggestion, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -567,7 +520,7 @@
 
     /* ensure touch targets on tablets too */
     @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .mode-option, .suggestion, .related-item, input.tag-input {
+      .tag, .platform-option, .suggestion, .related-item, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -583,8 +536,6 @@
       <input type="text" id="query" placeholder="search content..." autofocus>
       <button id="search-btn">search</button>
     </div>
-
-    <div id="mode-selector" class="mode-selector"></div>
 
     <div id="suggestions"></div>
 
@@ -617,28 +568,21 @@
     const activeFilterDiv = document.getElementById('active-filter');
     const suggestionsDiv = document.getElementById('suggestions');
     const platformFilterDiv = document.getElementById('platform-filter');
-    const modeSelectorDiv = document.getElementById('mode-selector');
 
     let currentTag = null;
     let currentPlatform = null;
-    let currentMode = 'hybrid';
     let allTags = [];
     let popularSearches = [];
     const authorCache = new Map();
-
     async function search(query, tag = null, platform = null) {
       if (!query.trim() && !tag && !platform) return;
 
       searchBtn.disabled = true;
+      resultsDiv.innerHTML = `<div class="status">searching...</div>`;
+
       let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
-      if (currentMode !== 'hybrid') searchUrl += `&mode=${currentMode}`;
-
-      const modeLabel = currentMode === 'semantic' ? 'finding similar...'
-        : currentMode === 'hybrid' ? 'searching + embedding...'
-        : 'searching...';
-      resultsDiv.innerHTML = `<div class="status">${modeLabel}</div>`;
 
       try {
         const res = await fetch(searchUrl);
@@ -661,7 +605,6 @@
           resultsDiv.innerHTML = `
             <div class="empty-state">
               <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
-              <p>try different keywords</p>
             </div>
           `;
           statsDiv.textContent = '';
@@ -669,22 +612,16 @@
         }
 
         let html = '';
-
         for (const doc of results) {
           const entityType = doc.type || 'article';
-          const platform = doc.platform || 'leaflet';
-
-          // build URL based on entity type and platform
-          const docUrl = buildDocUrl(doc, entityType, platform);
-          // only show platform badge for actual platforms, not for lexicon-only records
-          const platformConfig = PLATFORM_CONFIG[platform];
+          const plat = doc.platform || 'leaflet';
+          const docUrl = buildDocUrl(doc, entityType, plat);
+          const platformConfig = PLATFORM_CONFIG[plat];
           const platformBadge = platformConfig
             ? `<span class="platform-badge">${escapeHtml(platformConfig.label)}</span>`
             : '';
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
-
-          // platform home URL for meta link
-          const platformHome = getPlatformHome(platform, doc.basePath);
+          const platformHome = getPlatformHome(plat, doc.basePath);
 
           html += `
             <div class="result">
@@ -706,17 +643,14 @@
 
         resultsDiv.innerHTML = html;
         statsDiv.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
-
-        // resolve author display names (non-blocking)
         resolveAuthors(results);
 
-        // load related documents based on top result (skip for semantic/hybrid - already using embeddings)
-        if (currentMode === 'keyword' && results.length > 0 && results[0].uri) {
+        if (results.length > 0 && results[0].uri) {
           loadRelated(results[0]);
         }
 
       } catch (err) {
-        resultsDiv.innerHTML = `<div class="status error">error: ${err.message}<br><code style="font-size:0.7rem">${searchUrl}</code></div>`;
+        resultsDiv.innerHTML = `<div class="status error">error: ${err.message}</div>`;
       } finally {
         searchBtn.disabled = false;
       }
@@ -900,7 +834,6 @@
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
-      if (currentMode !== 'hybrid') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
     }
@@ -954,26 +887,6 @@
       } else {
         renderEmptyState();
       }
-    }
-
-    function setMode(mode) {
-      currentMode = mode;
-      renderModeSelector();
-      if (queryInput.value.trim() || currentTag || currentPlatform) {
-        doSearch();
-      }
-    }
-
-    function renderModeSelector() {
-      const modes = [
-        { id: 'keyword', label: 'keyword', desc: 'BM25' },
-        { id: 'semantic', label: 'semantic', desc: 'embeddings' },
-        { id: 'hybrid', label: 'hybrid', desc: 'both' },
-      ];
-      const html = modes.map(m => `
-        <span class="mode-option${currentMode === m.id ? ' active' : ''}" onclick="setMode('${m.id}')">${m.label}<span class="mode-desc">${m.desc}</span></span>
-      `).join('');
-      modeSelectorDiv.innerHTML = `<div class="mode-selector-label">search mode:</div><div class="mode-list">${html}</div>`;
     }
 
     function renderPlatformFilter() {
@@ -1096,11 +1009,9 @@
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
-      currentMode = params.get('mode') || 'hybrid';
       renderActiveFilter();
       renderTags();
       renderPlatformFilter();
-      renderModeSelector();
       if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
     });
 
@@ -1109,14 +1020,11 @@
     const initialQuery = initialParams.get('q');
     const initialTag = initialParams.get('tag');
     const initialPlatform = initialParams.get('platform');
-    const initialMode = initialParams.get('mode');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
     if (initialPlatform) currentPlatform = initialPlatform;
-    if (initialMode) currentMode = initialMode;
     renderActiveFilter();
     renderPlatformFilter();
-    renderModeSelector();
 
     if (initialQuery || initialTag || initialPlatform) {
       search(initialQuery || '', initialTag, initialPlatform);

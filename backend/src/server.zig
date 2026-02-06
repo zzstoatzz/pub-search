@@ -85,13 +85,12 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
     const platform_filter = parseQueryParam(alloc, target, "platform") catch null;
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
-    const mode = parseQueryParam(alloc, target, "mode") catch "keyword";
 
+    // span attributes are now copied internally, safe to use arena strings
     const span = logfire.span("http.search", .{
         .query = query,
         .tag = tag_filter,
         .platform = platform_filter,
-        .mode = mode,
     });
     defer span.end();
 
@@ -100,40 +99,12 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
         return;
     }
 
-    const results = blk: {
-        if (mem.eql(u8, mode, "semantic")) {
-            if (query.len == 0) {
-                try sendJson(request, "{\"error\":\"semantic search requires a query\"}");
-                return;
-            }
-            break :blk search.searchSemantic(alloc, query, platform_filter) catch |err| {
-                logfire.err("semantic search failed: {}", .{err});
-                metrics.stats.recordError();
-                return err;
-            };
-        } else if (mem.eql(u8, mode, "hybrid")) {
-            if (query.len == 0) {
-                // hybrid without query falls back to keyword (tag/platform browsing)
-                break :blk search.search(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
-                    logfire.err("search failed: {}", .{err});
-                    metrics.stats.recordError();
-                    return err;
-                };
-            }
-            break :blk search.searchHybrid(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
-                logfire.err("hybrid search failed: {}", .{err});
-                metrics.stats.recordError();
-                return err;
-            };
-        } else {
-            break :blk search.search(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
-                logfire.err("search failed: {}", .{err});
-                metrics.stats.recordError();
-                return err;
-            };
-        }
+    // perform FTS search - arena handles cleanup
+    const results = search.search(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
+        logfire.err("search failed: {}", .{err});
+        metrics.stats.recordError();
+        return err;
     };
-
     metrics.stats.recordSearch(query);
     logfire.counter("search.requests", 1);
     try sendJson(request, results);

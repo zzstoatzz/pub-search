@@ -12,30 +12,26 @@ const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const db = @import("../db/mod.zig");
 
-// voyage-3 limits
-const MAX_BATCH_SIZE = 100; // voyage-3 supports up to 128 per request
+// voyage-3-lite limits
+const MAX_BATCH_SIZE = 20; // conservative batch size for reliability
 const MAX_CONTENT_CHARS = 8000; // ~2000 tokens, well under 32K limit
-const EMBEDDING_DIM = 1024;
+const EMBEDDING_DIM = 512;
 const POLL_INTERVAL_SECS: u64 = 60; // check for new docs every minute
 const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
 
-const NUM_WORKERS = 1;
-
-/// Start the embedder background workers
+/// Start the embedder background worker
 pub fn start(allocator: Allocator) void {
     const api_key = posix.getenv("VOYAGE_API_KEY") orelse {
         logfire.info("embedder: VOYAGE_API_KEY not set, embeddings disabled", .{});
         return;
     };
 
-    for (0..NUM_WORKERS) |i| {
-        const thread = std.Thread.spawn(.{}, worker, .{ allocator, api_key }) catch |err| {
-            logfire.err("embedder: failed to start worker {d}: {}", .{ i, err });
-            continue;
-        };
-        thread.detach();
-    }
-    logfire.info("embedder: {d} background workers started", .{NUM_WORKERS});
+    const thread = std.Thread.spawn(.{}, worker, .{ allocator, api_key }) catch |err| {
+        logfire.err("embedder: failed to start thread: {}", .{err});
+        return;
+    };
+    thread.detach();
+    logfire.info("embedder: background worker started", .{});
 }
 
 fn worker(allocator: Allocator, api_key: []const u8) void {
@@ -77,9 +73,9 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
 
     const client = db.getClient() orelse return error.NoClient;
 
-    // query for documents needing embeddings (RANDOM order for parallel workers)
+    // query for documents needing embeddings
     var result = try client.query(
-        "SELECT uri, title, content FROM documents WHERE embedding IS NULL ORDER BY RANDOM() LIMIT ?",
+        "SELECT uri, title, content FROM documents WHERE embedding IS NULL LIMIT ?",
         &.{std.fmt.comptimePrint("{}", .{MAX_BATCH_SIZE})},
     );
     defer result.deinit();
@@ -220,7 +216,7 @@ fn buildVoyageRequest(allocator: Allocator, docs: []const DocToEmbed) ![]const u
     try jw.beginObject();
 
     try jw.objectField("model");
-    try jw.write("voyage-3");
+    try jw.write("voyage-3-lite");
 
     try jw.objectField("input_type");
     try jw.write("document");
