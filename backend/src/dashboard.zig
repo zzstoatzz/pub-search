@@ -2,7 +2,7 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const db = @import("db/mod.zig");
-const timing = @import("metrics/mod.zig").timing;
+const timing = @import("metrics.zig").timing;
 
 // JSON output types
 const TagJson = struct { tag: []const u8, count: i64 };

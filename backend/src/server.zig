@@ -7,7 +7,7 @@ const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
 const db = @import("db/mod.zig");
-const metrics = @import("metrics/mod.zig");
+const metrics = @import("metrics.zig");
 const search = @import("search.zig");
 const dashboard = @import("dashboard.zig");
 

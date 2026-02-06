@@ -4,9 +4,9 @@ const posix = std.posix;
 const Thread = std.Thread;
 const logfire = @import("logfire");
 const db = @import("db/mod.zig");
-const metrics = @import("metrics/mod.zig");
+const metrics = @import("metrics.zig");
 const server = @import("server.zig");
-const ingest = @import("ingest/mod.zig");
+const ingest = @import("ingest.zig");
 
 const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 30;
