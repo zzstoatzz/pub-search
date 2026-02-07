@@ -230,6 +230,9 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
         return fullSync(turso, local);
     }
 
+    // local has data from a previous sync — mark ready immediately
+    local.setReady(true);
+
     // convert timestamp to ISO date for query
     // rough estimate: subtract 5 minutes buffer to catch any stragglers
     const since_ts = last_sync_ts - 300;
