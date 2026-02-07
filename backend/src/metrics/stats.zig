@@ -31,7 +31,7 @@ pub fn getStats() Stats {
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
-        \\  (SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL) as embeddings,
+        \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
         \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
         \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
         \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at,
@@ -63,7 +63,7 @@ fn getStatsLocal(local: *db.LocalDb) !Stats {
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
-        \\  (SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL) as embeddings
+        \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings
     , .{});
     defer rows.deinit();
     const row = rows.next() orelse return error.NoRows;

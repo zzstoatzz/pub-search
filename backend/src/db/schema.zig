@@ -100,16 +100,6 @@ fn createTables(client: *Client) !void {
         \\)
     , &.{});
 
-    // similarity cache: stores precomputed similar documents
-    // invalidated when doc_count changes (new docs added/removed)
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS similarity_cache (
-        \\  source_uri TEXT PRIMARY KEY,
-        \\  results TEXT NOT NULL,
-        \\  doc_count INTEGER NOT NULL,
-        \\  computed_at INTEGER NOT NULL
-        \\)
-    , &.{});
 }
 
 fn runMigrations(client: *Client) !void {
@@ -134,7 +124,9 @@ fn runMigrations(client: *Client) !void {
     client.exec("UPDATE publications SET platform = 'leaflet' WHERE platform IS NULL", &.{}) catch {};
     client.exec("UPDATE publications SET source_collection = 'pub.leaflet.publication' WHERE source_collection IS NULL", &.{}) catch {};
 
-    // vector embeddings column already added by backfill script
+    // embedded_at: tracks when a document was embedded into turbopuffer
+    // (replaces the old turso embedding column — can't DROP COLUMN in SQLite, but NULL = no space)
+    client.exec("ALTER TABLE documents ADD COLUMN embedded_at TEXT", &.{}) catch {};
 
     // dedupe index: same (did, rkey) across collections = same document
     // e.g., pub.leaflet.document/abc and site.standard.document/abc are the same content

@@ -125,7 +125,7 @@ pub fn setReady(self: *LocalDb, ready: bool) void {
 fn createSchema(self: *LocalDb) !void {
     const c = self.conn orelse return error.NotOpen;
 
-    // documents table (no embedding column - vectors stay on Turso)
+    // documents table (no embedding/embedded_at — vectors are in turbopuffer)
     c.exec(
         \\CREATE TABLE IF NOT EXISTS documents (
         \\  uri TEXT PRIMARY KEY,
@@ -236,16 +236,6 @@ fn createSchema(self: *LocalDb) !void {
         \\CREATE TABLE IF NOT EXISTS popular_searches (
         \\  query TEXT PRIMARY KEY,
         \\  count INTEGER DEFAULT 1
-        \\)
-    , .{}) catch {};
-
-    // similarity cache (local copy for fast lookups)
-    c.exec(
-        \\CREATE TABLE IF NOT EXISTS similarity_cache (
-        \\  source_uri TEXT PRIMARY KEY,
-        \\  results TEXT NOT NULL,
-        \\  doc_count INTEGER NOT NULL,
-        \\  computed_at INTEGER NOT NULL
         \\)
     , .{}) catch {};
 

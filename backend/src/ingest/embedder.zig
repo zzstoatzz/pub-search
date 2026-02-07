@@ -26,7 +26,7 @@ const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
 const DocsNeedingEmbeddings = zql.Query(
     \\SELECT uri, title, content, did, created_at, rkey,
     \\  base_path, has_publication, platform, COALESCE(path, '') as path
-    \\FROM documents WHERE embedding IS NULL LIMIT :limit
+    \\FROM documents WHERE embedded_at IS NULL LIMIT :limit
 );
 
 /// Start the embedder background worker
@@ -136,38 +136,42 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
         allocator.free(embeddings);
     }
 
-    // update Turso with embeddings
-    for (docs.items, embeddings) |doc, embedding| {
-        updateDocumentEmbedding(client, doc.uri, embedding) catch |err| {
-            logfire.err("embedder: failed to update {s}: {}", .{ doc.uri, err });
+    // upsert to turbopuffer (sole vector store)
+    if (!tpuf.isEnabled()) {
+        logfire.warn("embedder: tpuf not configured, skipping batch", .{});
+        return 0;
+    }
+
+    var tpuf_docs = try allocator.alloc(tpuf.VectorDoc, docs.items.len);
+    defer allocator.free(tpuf_docs);
+
+    for (docs.items, embeddings, 0..) |doc, embedding, i| {
+        tpuf_docs[i] = .{
+            .id = doc.uri,
+            .vector = embedding,
+            .title = doc.title,
+            .did = doc.did,
+            .created_at = doc.created_at,
+            .rkey = doc.rkey,
+            .base_path = doc.base_path,
+            .platform = doc.platform,
+            .path = doc.path,
+            .has_publication = doc.has_publication,
         };
     }
 
-    // sync to turbopuffer (fire-and-forget — search works without it)
-    if (tpuf.isEnabled()) {
-        var tpuf_docs = allocator.alloc(tpuf.VectorDoc, docs.items.len) catch {
-            logfire.warn("embedder: failed to alloc tpuf batch", .{});
-            return docs.items.len;
-        };
-        defer allocator.free(tpuf_docs);
+    tpuf.upsert(allocator, tpuf_docs) catch |err| {
+        logfire.warn("embedder: tpuf upsert failed: {}, will retry", .{err});
+        return error.TpufUpsertFailed;
+    };
 
-        for (docs.items, embeddings, 0..) |doc, embedding, i| {
-            tpuf_docs[i] = .{
-                .id = doc.uri,
-                .vector = embedding,
-                .title = doc.title,
-                .did = doc.did,
-                .created_at = doc.created_at,
-                .rkey = doc.rkey,
-                .base_path = doc.base_path,
-                .platform = doc.platform,
-                .path = doc.path,
-                .has_publication = doc.has_publication,
-            };
-        }
-
-        tpuf.upsert(allocator, tpuf_docs) catch |err| {
-            logfire.warn("embedder: tpuf upsert failed: {}, continuing", .{err});
+    // mark docs as embedded in turso (so they won't be re-processed)
+    for (docs.items) |doc| {
+        client.exec(
+            "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
+            &.{doc.uri},
+        ) catch |err| {
+            logfire.err("embedder: failed to mark {s} as embedded: {}", .{ doc.uri, err });
         };
     }
 
@@ -335,33 +339,3 @@ fn parseVoyageResponse(allocator: Allocator, response: []const u8, expected_coun
     return embeddings;
 }
 
-fn updateDocumentEmbedding(client: *db.Client, uri: []const u8, embedding: []f32) !void {
-    const allocator = client.allocator;
-
-    // serialize embedding to JSON array string for vector32()
-    var embedding_json: std.ArrayList(u8) = .empty;
-    defer embedding_json.deinit(allocator);
-
-    try embedding_json.append(allocator, '[');
-    for (embedding, 0..) |val, i| {
-        if (i > 0) try embedding_json.append(allocator, ',');
-        var buf: [32]u8 = undefined;
-        const str = std.fmt.bufPrint(&buf, "{d:.6}", .{val}) catch continue;
-        try embedding_json.appendSlice(allocator, str);
-    }
-    try embedding_json.append(allocator, ']');
-
-    // use batch API to execute dynamic SQL
-    const statements = [_]db.Client.Statement{
-        .{
-            .sql = "UPDATE documents SET embedding = vector32(?) WHERE uri = ?",
-            .args = &.{ embedding_json.items, uri },
-        },
-    };
-
-    var result = client.queryBatch(&statements) catch |err| {
-        std.debug.print("embedder: update failed for {s}: {}\n", .{ uri, err });
-        return err;
-    };
-    defer result.deinit();
-}

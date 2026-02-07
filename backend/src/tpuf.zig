@@ -123,6 +123,23 @@ pub fn query(allocator: Allocator, vector: []const f32, top_k: usize) ![]QueryRe
     return parseQueryResponse(allocator, response);
 }
 
+/// Retrieve a document's vector by its ID (AT-URI).
+/// Used to get the source vector for ANN similarity queries.
+pub fn getVectorById(allocator: Allocator, id: []const u8) ![]f32 {
+    const key = api_key orelse return error.NotConfigured;
+
+    const span = logfire.span("tpuf.get_vector", .{});
+    defer span.end();
+
+    const body = try buildGetVectorBody(allocator, id);
+    defer allocator.free(body);
+
+    const response = try doRequest(allocator, key, query_url, body);
+    defer allocator.free(response);
+
+    return parseVectorResponse(allocator, response);
+}
+
 /// Delete vectors by ID. Can be batched into a single write call.
 pub fn delete(allocator: Allocator, ids: []const []const u8) !void {
     const key = api_key orelse return error.NotConfigured;
@@ -233,6 +250,39 @@ fn buildQueryBody(allocator: Allocator, vector: []const f32, top_k: usize) ![]co
     return try output.toOwnedSlice();
 }
 
+fn buildGetVectorBody(allocator: Allocator, id: []const u8) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
+
+    // rank_by: ["id", "asc"] — return by ID order (we only want 1)
+    try jw.objectField("rank_by");
+    try jw.beginArray();
+    try jw.write("id");
+    try jw.write("asc");
+    try jw.endArray();
+
+    // filters: ["id", "Eq", "<id>"]
+    try jw.objectField("filters");
+    try jw.beginArray();
+    try jw.write("id");
+    try jw.write("Eq");
+    try jw.write(id);
+    try jw.endArray();
+
+    try jw.objectField("top_k");
+    try jw.write(1);
+
+    try jw.objectField("include_vectors");
+    try jw.write(true);
+
+    try jw.endObject();
+
+    return try output.toOwnedSlice();
+}
+
 fn buildDeleteBody(allocator: Allocator, ids: []const []const u8) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
@@ -300,6 +350,50 @@ fn parseQueryResponse(allocator: Allocator, response: []const u8) ![]QueryResult
         return allocator.realloc(results, count) catch results[0..count];
     }
     return results;
+}
+
+fn parseVectorResponse(allocator: Allocator, response: []const u8) ![]f32 {
+    const parsed = json.parseFromSlice(json.Value, allocator, response, .{}) catch {
+        logfire.err("tpuf: failed to parse vector response", .{});
+        return error.ParseError;
+    };
+    defer parsed.deinit();
+
+    const rows = switch (parsed.value) {
+        .object => |obj| obj.get("rows") orelse return error.NoRows,
+        else => return error.InvalidResponse,
+    };
+
+    const items = switch (rows) {
+        .array => |arr| arr.items,
+        else => return error.InvalidResponse,
+    };
+
+    if (items.len == 0) return error.NotFound;
+
+    const row = switch (items[0]) {
+        .object => |o| o,
+        else => return error.InvalidResponse,
+    };
+
+    const vec_val = row.get("vector") orelse return error.NoVector;
+    const vec_items = switch (vec_val) {
+        .array => |arr| arr.items,
+        else => return error.InvalidResponse,
+    };
+
+    const vector = try allocator.alloc(f32, vec_items.len);
+    errdefer allocator.free(vector);
+
+    for (vec_items, 0..) |val, i| {
+        vector[i] = switch (val) {
+            .float => @floatCast(val.float),
+            .integer => @floatFromInt(val.integer),
+            else => return error.InvalidValue,
+        };
+    }
+
+    return vector;
 }
 
 // --- JSON helpers ---
