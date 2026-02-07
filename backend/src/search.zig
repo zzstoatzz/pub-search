@@ -681,8 +681,8 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     };
     defer alloc.free(vector);
 
-    // ANN query
-    const results = tpuf.query(alloc, vector, 20) catch |err| {
+    // ANN query — over-fetch to allow filtering
+    const results = tpuf.query(alloc, vector, 40) catch |err| {
         logfire.warn("search.semantic: tpuf query failed: {}", .{err});
         return try alloc.dupe(u8, "{\"error\":\"vector search failed\"}");
     };
@@ -701,16 +701,23 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         alloc.free(results);
     }
 
-    // serialize results, post-filtering by platform if set
+    // serialize results, filtering by distance + platform, capped at 20
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
+    var count: usize = 0;
     for (results) |r| {
+        if (count >= 20) break;
+        // skip results with high cosine distance (low similarity)
+        if (r.dist > 0.5) continue;
+        // skip documents with empty/test titles
+        if (r.title.len == 0) continue;
         if (platform_filter) |pf| {
             if (!std.mem.eql(u8, r.platform, pf)) continue;
         }
+        count += 1;
         try jw.write(SearchResultJson{
             .type = if (r.has_publication) "article" else "looseleaf",
             .uri = r.uri,

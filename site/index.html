@@ -182,52 +182,6 @@
       color: #d4956a;
     }
 
-    .mode-toggle {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-    }
-
-    .mode-option {
-      font-size: 11px;
-      padding: 3px 8px;
-      background: #151515;
-      border: 1px solid #252525;
-      border-radius: 3px;
-      cursor: pointer;
-      color: #777;
-    }
-
-    .mode-option:hover {
-      background: #1a1a1a;
-      border-color: #333;
-      color: #aaa;
-    }
-
-    .mode-option.active {
-      background: rgba(27, 115, 64, 0.2);
-      border-color: #1B7340;
-      color: #2a9d5c;
-    }
-
-    .source-badge {
-      font-size: 9px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      margin-left: 6px;
-      text-transform: lowercase;
-    }
-
-    .source-badge.keyword {
-      background: rgba(64, 115, 180, 0.2);
-      color: #6a9fd4;
-    }
-
-    .source-badge.semantic {
-      background: rgba(140, 80, 200, 0.2);
-      color: #b08ae0;
-    }
-
     .status {
       padding: 1rem;
       text-align: center;
@@ -488,7 +442,7 @@
       }
 
       /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .mode-option, .suggestion, input.tag-input {
+      .tag, .platform-option, .suggestion, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -566,7 +520,7 @@
 
     /* ensure touch targets on tablets too */
     @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .mode-option, .suggestion, .related-item, input.tag-input {
+      .tag, .platform-option, .suggestion, .related-item, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -582,8 +536,6 @@
       <input type="text" id="query" placeholder="search content..." autofocus>
       <button id="search-btn">search</button>
     </div>
-
-    <div id="mode-toggle" class="mode-toggle"></div>
 
     <div id="suggestions"></div>
 
@@ -616,191 +568,91 @@
     const activeFilterDiv = document.getElementById('active-filter');
     const suggestionsDiv = document.getElementById('suggestions');
     const platformFilterDiv = document.getElementById('platform-filter');
-    const modeToggleDiv = document.getElementById('mode-toggle');
-
     let currentTag = null;
     let currentPlatform = null;
-    let currentMode = 'keyword';
     let allTags = [];
     let popularSearches = [];
     const authorCache = new Map();
-
-    function renderModeToggle() {
-      const modes = [
-        { id: 'keyword', label: 'keyword' },
-        { id: 'semantic', label: 'semantic' },
-        { id: 'hybrid', label: 'hybrid' },
-      ];
-      modeToggleDiv.innerHTML = modes.map(m => `
-        <span class="mode-option${currentMode === m.id ? ' active' : ''}" onclick="setMode('${m.id}')">${m.label}</span>
-      `).join('');
-    }
-
-    function setMode(mode) {
-      currentMode = mode;
-      renderModeToggle();
-      // hide tag filter in semantic/hybrid since tpuf doesn't store tags
-      tagsDiv.style.display = (mode === 'keyword') ? '' : 'none';
-      if (mode !== 'keyword') {
-        currentTag = null;
-        renderActiveFilter();
-      }
-      if (queryInput.value.trim() || currentTag || currentPlatform) {
-        doSearch();
-      }
-    }
-
     async function search(query, tag = null, platform = null) {
       if (!query.trim() && !tag && !platform) return;
 
       searchBtn.disabled = true;
       resultsDiv.innerHTML = `<div class="status">searching...</div>`;
 
+      let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
+      if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
+      if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
+
       try {
-        if (currentMode === 'hybrid') {
-          await searchHybrid(query, tag, platform);
-        } else if (currentMode === 'semantic') {
-          await searchSingle(query, platform, 'semantic');
-        } else {
-          await searchSingle(query, platform, 'keyword', tag);
+        const res = await fetch(searchUrl);
+        const rawText = await res.text();
+        let results;
+
+        try {
+          results = JSON.parse(rawText);
+        } catch (parseErr) {
+          resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
+          return;
         }
+
+        if (results.error) {
+          resultsDiv.innerHTML = `<div class="status error">${results.error}</div>`;
+          return;
+        }
+
+        if (results.length === 0) {
+          resultsDiv.innerHTML = `
+            <div class="empty-state">
+              <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
+            </div>
+          `;
+          statsDiv.textContent = '';
+          return;
+        }
+
+        let html = '';
+        for (const doc of results) {
+          const entityType = doc.type || 'article';
+          const plat = doc.platform || 'leaflet';
+          const docUrl = buildDocUrl(doc, entityType, plat);
+          const platformConfig = PLATFORM_CONFIG[plat];
+          const platformBadge = platformConfig
+            ? `<span class="platform-badge">${escapeHtml(platformConfig.label)}</span>`
+            : '';
+          const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
+          const platformHome = getPlatformHome(plat, doc.basePath);
+
+          html += `
+            <div class="result">
+              <div class="result-title">
+                <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}
+                ${docUrl
+                  ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
+                  : escapeHtml(doc.title || 'Untitled')}
+              </div>
+              <div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>
+              <div class="result-meta" ${doc.did ? `data-did="${escapeHtml(doc.did)}"` : ''}>
+                ${date ? `${date} | ` : ''}<span class="author-name"></span>${platformHome.url
+                  ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
+                  : platformHome.label}
+              </div>
+            </div>
+          `;
+        }
+
+        resultsDiv.innerHTML = html;
+        statsDiv.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
+        resolveAuthors(results);
+
+        if (results.length > 0 && results[0].uri) {
+          loadRelated(results[0]);
+        }
+
       } catch (err) {
         resultsDiv.innerHTML = `<div class="status error">error: ${err.message}</div>`;
       } finally {
         searchBtn.disabled = false;
       }
-    }
-
-    async function searchSingle(query, platform, mode, tag = null) {
-      let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
-      if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
-      if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
-      if (mode === 'semantic') searchUrl += '&mode=semantic';
-
-      const res = await fetch(searchUrl);
-      const rawText = await res.text();
-      let results;
-
-      try {
-        results = JSON.parse(rawText);
-      } catch (parseErr) {
-        resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
-        return;
-      }
-
-      if (results.error) {
-        resultsDiv.innerHTML = `<div class="status error">${results.error}</div>`;
-        return;
-      }
-
-      if (results.length === 0) {
-        resultsDiv.innerHTML = `
-          <div class="empty-state">
-            <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
-          </div>
-        `;
-        statsDiv.textContent = '';
-        return;
-      }
-
-      renderResults(results, query);
-      resolveAuthors(results);
-
-      if (results.length > 0 && results[0].uri) {
-        loadRelated(results[0]);
-      }
-    }
-
-    async function searchHybrid(query, tag, platform) {
-      let kwUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
-      if (tag) kwUrl += `&tag=${encodeURIComponent(tag)}`;
-      if (platform) kwUrl += `&platform=${encodeURIComponent(platform)}`;
-
-      let semUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}&mode=semantic`;
-      if (platform) semUrl += `&platform=${encodeURIComponent(platform)}`;
-
-      const kwPromise = fetch(kwUrl).then(r => r.json());
-      const semPromise = fetch(semUrl).then(r => r.json());
-
-      // show keyword results as soon as they arrive
-      const kwResults = await kwPromise;
-      if (kwResults.error) {
-        resultsDiv.innerHTML = `<div class="status error">${kwResults.error}</div>`;
-        return;
-      }
-
-      // tag each result with source
-      const tagged = (kwResults || []).map(r => ({ ...r, _source: 'keyword' }));
-      renderResults(tagged, query, true);
-      resolveAuthors(tagged);
-
-      // append semantic results when ready
-      try {
-        const semResults = await semPromise;
-        if (!semResults.error && semResults.length > 0) {
-          const seenUris = new Set(tagged.map(r => r.uri));
-          const unique = semResults.filter(r => !seenUris.has(r.uri)).map(r => ({ ...r, _source: 'semantic' }));
-          if (unique.length > 0) {
-            const merged = [...tagged, ...unique];
-            renderResults(merged, query, true);
-            resolveAuthors(unique);
-          }
-        }
-      } catch (e) {
-        // semantic failed silently — keyword results already shown
-      }
-
-      if (tagged.length > 0 && tagged[0].uri) {
-        loadRelated(tagged[0]);
-      }
-    }
-
-    function renderResults(results, query, showSource = false) {
-      if (results.length === 0) {
-        resultsDiv.innerHTML = `
-          <div class="empty-state">
-            <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}</p>
-          </div>
-        `;
-        statsDiv.textContent = '';
-        return;
-      }
-
-      let html = '';
-      for (const doc of results) {
-        const entityType = doc.type || 'article';
-        const plat = doc.platform || 'leaflet';
-        const docUrl = buildDocUrl(doc, entityType, plat);
-        const platformConfig = PLATFORM_CONFIG[plat];
-        const platformBadge = platformConfig
-          ? `<span class="platform-badge">${escapeHtml(platformConfig.label)}</span>`
-          : '';
-        const sourceBadge = showSource && doc._source
-          ? `<span class="source-badge ${doc._source}">${doc._source}</span>`
-          : '';
-        const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
-        const platformHome = getPlatformHome(plat, doc.basePath);
-
-        html += `
-          <div class="result">
-            <div class="result-title">
-              <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}
-              ${docUrl
-                ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
-                : escapeHtml(doc.title || 'Untitled')}${sourceBadge}
-            </div>
-            ${doc.snippet ? `<div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>` : ''}
-            <div class="result-meta" ${doc.did ? `data-did="${escapeHtml(doc.did)}"` : ''}>
-              ${date ? `${date} | ` : ''}<span class="author-name"></span>${platformHome.url
-                ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
-                : platformHome.label}
-            </div>
-          </div>
-        `;
-      }
-
-      resultsDiv.innerHTML = html;
-      statsDiv.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
     }
 
     async function resolveAuthors(results) {
@@ -981,7 +833,6 @@
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
-      if (currentMode !== 'keyword') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
     }
@@ -1157,12 +1008,9 @@
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
-      currentMode = params.get('mode') || 'keyword';
       renderActiveFilter();
       renderTags();
       renderPlatformFilter();
-      renderModeToggle();
-      tagsDiv.style.display = (currentMode === 'keyword') ? '' : 'none';
       if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
     });
 
@@ -1171,15 +1019,11 @@
     const initialQuery = initialParams.get('q');
     const initialTag = initialParams.get('tag');
     const initialPlatform = initialParams.get('platform');
-    const initialMode = initialParams.get('mode');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
     if (initialPlatform) currentPlatform = initialPlatform;
-    if (initialMode) currentMode = initialMode;
     renderActiveFilter();
     renderPlatformFilter();
-    renderModeToggle();
-    tagsDiv.style.display = (currentMode === 'keyword') ? '' : 'none';
 
     if (initialQuery || initialTag || initialPlatform) {
       search(initialQuery || '', initialTag, initialPlatform);

@@ -26,7 +26,10 @@ const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
 const DocsNeedingEmbeddings = zql.Query(
     \\SELECT uri, title, content, did, created_at, rkey,
     \\  base_path, has_publication, platform, COALESCE(path, '') as path
-    \\FROM documents WHERE embedded_at IS NULL LIMIT :limit
+    \\FROM documents WHERE embedded_at IS NULL
+    \\  AND LENGTH(content) > 50
+    \\  AND title NOT IN ('test', 'testing', 'Test', 'Testing', 'Untitled')
+    \\LIMIT :limit
 );
 
 /// Start the embedder background worker

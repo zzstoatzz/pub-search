@@ -1,0 +1,135 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Delete junk vectors from turbopuffer.
+
+Finds documents with short content or test titles in turso,
+hashes their URIs, and deletes the corresponding vectors from tpuf.
+"""
+
+import hashlib
+import os
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+    turbopuffer_api_key: str
+    turbopuffer_namespace: str = "leaflet-search"
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://"):]
+        return url
+
+
+def turso_query(settings: Settings, sql: str, args: list | None = None):
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = [{"type": "text", "value": str(a)} for a in args]
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "requests": [
+                {"type": "execute", "stmt": stmt},
+                {"type": "close"},
+            ],
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def hash_id(uri: str) -> str:
+    """Match tpuf.zig hashId: first 32 hex chars of SHA256."""
+    return hashlib.sha256(uri.encode()).hexdigest()[:32]
+
+
+def tpuf_delete(settings: Settings, ids: list[str]):
+    """Delete vectors by ID from turbopuffer."""
+    url = f"https://api.turbopuffer.com/v2/namespaces/{settings.turbopuffer_namespace}"
+    response = httpx.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {settings.turbopuffer_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={"deletes": ids},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+settings = Settings()  # type: ignore
+
+# find junk docs: short content OR test titles
+sql = """
+SELECT uri, title, LENGTH(content) as content_len
+FROM documents
+WHERE embedded_at IS NOT NULL
+  AND (
+    LENGTH(content) <= 50
+    OR LOWER(title) IN ('test', 'testing', 'untitled', 'test test', 'hello world')
+    OR LOWER(title) LIKE 'test %'
+    OR LOWER(title) LIKE '% test'
+  )
+ORDER BY content_len ASC
+"""
+
+result = turso_query(settings, sql)
+rows = result["results"][0]["response"]["result"]["rows"]
+
+print(f"found {len(rows)} junk documents with vectors")
+
+if not rows:
+    print("nothing to clean up")
+    raise SystemExit(0)
+
+# show what we'll delete
+for row in rows[:20]:
+    uri = row[0]["value"] if isinstance(row[0], dict) else row[0]
+    title = row[1]["value"] if isinstance(row[1], dict) else row[1]
+    content_len = row[2]["value"] if isinstance(row[2], dict) else row[2]
+    print(f"  [{content_len:>5} chars] {title!r:40s} {uri[:60]}")
+
+if len(rows) > 20:
+    print(f"  ... and {len(rows) - 20} more")
+
+# compute tpuf IDs
+uris = [row[0]["value"] if isinstance(row[0], dict) else row[0] for row in rows]
+tpuf_ids = [hash_id(uri) for uri in uris]
+
+print(f"\ndeleting {len(tpuf_ids)} vectors from turbopuffer...")
+
+# batch delete (tpuf accepts up to 1000 per request)
+for i in range(0, len(tpuf_ids), 100):
+    batch = tpuf_ids[i : i + 100]
+    tpuf_delete(settings, batch)
+    print(f"  deleted batch {i // 100 + 1} ({len(batch)} vectors)")
+
+print("done")
+
+# also clear embedded_at so these docs don't get re-embedded
+# (the new embedder filter will skip them anyway, but belt + suspenders)
+print("\nclearing embedded_at on junk docs...")
+for uri in uris:
+    turso_query(settings, "UPDATE documents SET embedded_at = NULL WHERE uri = ?", [uri])
+
+print(f"cleared {len(uris)} embedded_at timestamps")
