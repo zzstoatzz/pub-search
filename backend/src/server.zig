@@ -26,16 +26,33 @@ pub fn handleConnection(conn: net.Server.Connection) void {
     var server = http.Server.init(reader.interface(), &writer.interface);
 
     while (true) {
+        const recv_start = std.time.microTimestamp();
         var request = server.receiveHead() catch |err| {
             if (err != error.HttpConnectionClosing and err != error.EndOfStream) {
                 logfire.debug("http receive error: {}", .{err});
             }
             return;
         };
+        const recv_us = std.time.microTimestamp() - recv_start;
+        const target = request.head.target;
+
+        // log slow receives — this captures time waiting for the request to arrive
+        if (recv_us > 100_000) { // > 100ms
+            logfire.warn("http.receive slow: {d}ms | {s}", .{ @divTrunc(recv_us, 1000), target });
+        }
+
+        const req_span = logfire.span("http.request", .{
+            .target = target,
+            .receive_ms = @divTrunc(recv_us, 1000),
+        });
+
         handleRequest(&server, &request) catch |err| {
             logfire.err("request error: {}", .{err});
+            req_span.end();
             return;
         };
+        req_span.end();
+
         if (!request.head.keep_alive) return;
     }
 }
