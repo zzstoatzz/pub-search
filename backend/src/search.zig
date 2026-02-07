@@ -591,8 +591,11 @@ fn getDocQueryArgs(alloc: Allocator, fts_query: []const u8, tag: ?[]const u8, pl
 /// 2. ANN nearest-neighbor query (~50ms)
 /// 3. Filter out source URI, serialize results
 pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
+    // hash URI to tpuf ID format (AT-URIs exceed tpuf's 64-byte limit)
+    const hashed = tpuf.hashId(uri);
+
     // get source document's vector
-    const vector = tpuf.getVectorById(alloc, uri) catch |err| {
+    const vector = tpuf.getVectorById(alloc, &hashed) catch |err| {
         logfire.warn("similar: getVectorById failed for {s}: {}", .{ uri, err });
         return error.VectorNotFound;
     };
@@ -606,6 +609,7 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     defer {
         for (results) |r| {
             alloc.free(r.id);
+            alloc.free(r.uri);
             alloc.free(r.title);
             alloc.free(r.did);
             alloc.free(r.created_at);
@@ -625,11 +629,11 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     try jw.beginArray();
     var count: usize = 0;
     for (results) |r| {
-        if (std.mem.eql(u8, r.id, uri)) continue;
+        if (std.mem.eql(u8, r.uri, uri)) continue;
         if (count >= limit) break;
         try jw.write(SearchResultJson{
             .type = if (r.has_publication) "article" else "looseleaf",
-            .uri = r.id,
+            .uri = r.uri,
             .did = r.did,
             .title = r.title,
             .snippet = "",

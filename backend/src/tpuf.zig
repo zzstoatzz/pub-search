@@ -16,6 +16,8 @@ const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 
+const Sha256 = std.crypto.hash.sha2.Sha256;
+
 const API_BASE = "https://api.turbopuffer.com/v2/namespaces/";
 
 var api_key: ?[]const u8 = null;
@@ -31,8 +33,9 @@ var query_url: []const u8 = "";
 /// Fields mirror the SearchResultJson output so query results
 /// can be returned directly without a DB roundtrip.
 pub const VectorDoc = struct {
-    id: []const u8, // AT-URI (used as turbopuffer document ID)
+    id: []const u8, // hashed ID for tpuf (via hashId)
     vector: []const f32, // embedding (voyage-3-lite, 512 dims)
+    uri: []const u8, // full AT-URI (stored as metadata)
     title: []const u8,
     did: []const u8,
     created_at: []const u8,
@@ -47,6 +50,7 @@ pub const VectorDoc = struct {
 pub const QueryResult = struct {
     id: []const u8,
     dist: f64,
+    uri: []const u8,
     title: []const u8,
     did: []const u8,
     created_at: []const u8,
@@ -84,6 +88,20 @@ pub fn init() void {
 
 pub fn isEnabled() bool {
     return api_key != null;
+}
+
+/// Hash a URI to a tpuf-safe ID (max 64 bytes).
+/// Uses first 32 hex chars of SHA256 (128 bits — no collisions at our scale).
+pub fn hashId(uri: []const u8) [32]u8 {
+    const hex_chars = "0123456789abcdef";
+    var digest: [32]u8 = undefined;
+    Sha256.hash(uri, &digest, .{});
+    var hex: [32]u8 = undefined;
+    for (digest[0..16], 0..) |byte, i| {
+        hex[i * 2] = hex_chars[byte >> 4];
+        hex[i * 2 + 1] = hex_chars[byte & 0xf];
+    }
+    return hex;
 }
 
 /// Upsert document vectors with metadata. Creates the namespace on first write.
@@ -183,6 +201,8 @@ fn buildUpsertBody(allocator: Allocator, docs: []const VectorDoc) ![]const u8 {
         for (doc.vector) |v| try jw.write(v);
         try jw.endArray();
 
+        try jw.objectField("uri");
+        try jw.write(doc.uri);
         try jw.objectField("title");
         try jw.write(doc.title);
         try jw.objectField("did");
@@ -232,6 +252,7 @@ fn buildQueryBody(allocator: Allocator, vector: []const f32, top_k: usize) ![]co
     try jw.objectField("include_attributes");
     try jw.beginArray();
     for ([_][]const u8{
+        "uri",
         "title",
         "did",
         "created_at",
@@ -333,6 +354,7 @@ fn parseQueryResponse(allocator: Allocator, response: []const u8) ![]QueryResult
         results[count] = .{
             .id = try allocator.dupe(u8, jsonStr(obj, "id")),
             .dist = jsonFloat(obj, "$dist"),
+            .uri = try allocator.dupe(u8, jsonStr(obj, "uri")),
             .title = try allocator.dupe(u8, jsonStr(obj, "title")),
             .did = try allocator.dupe(u8, jsonStr(obj, "did")),
             .created_at = try allocator.dupe(u8, jsonStr(obj, "created_at")),

@@ -145,10 +145,16 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     var tpuf_docs = try allocator.alloc(tpuf.VectorDoc, docs.items.len);
     defer allocator.free(tpuf_docs);
 
+    // pre-compute hashed IDs (tpuf has 64-byte ID limit, AT-URIs are longer)
+    var hashed_ids = try allocator.alloc([32]u8, docs.items.len);
+    defer allocator.free(hashed_ids);
+
     for (docs.items, embeddings, 0..) |doc, embedding, i| {
+        hashed_ids[i] = tpuf.hashId(doc.uri);
         tpuf_docs[i] = .{
-            .id = doc.uri,
+            .id = &hashed_ids[i],
             .vector = embedding,
+            .uri = doc.uri,
             .title = doc.title,
             .did = doc.did,
             .created_at = doc.created_at,
