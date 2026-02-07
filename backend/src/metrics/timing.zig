@@ -2,7 +2,9 @@ const std = @import("std");
 
 /// endpoints we track latency for
 pub const Endpoint = enum {
-    search,
+    search_keyword,
+    search_semantic,
+    search_hybrid,
     similar,
     tags,
     popular,

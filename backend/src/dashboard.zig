@@ -16,6 +16,7 @@ pub const Data = struct {
     searches: i64,
     publications: i64,
     documents: i64,
+    embeddings: i64,
     tags_json: []const u8,
     timeline_json: []const u8,
     top_pubs_json: []const u8,
@@ -30,7 +31,8 @@ const STATS_SQL =
     \\  (SELECT COUNT(*) FROM publications) as pubs,
     \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
     \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
-    \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at
+    \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at,
+    \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings
 ;
 
 const PLATFORMS_SQL =
@@ -93,12 +95,14 @@ pub fn fetch(alloc: Allocator) !Data {
     const searches = if (stats_row) |r| r.int(2) else 0;
     const publications = if (stats_row) |r| r.int(1) else 0;
     const documents = if (stats_row) |r| r.int(0) else 0;
+    const embeddings = if (stats_row) |r| r.int(5) else 0;
 
     return .{
         .started_at = started_at,
         .searches = searches,
         .publications = publications,
         .documents = documents,
+        .embeddings = embeddings,
         .tags_json = try formatTagsJson(alloc, batch.get(2)),
         .timeline_json = try formatTimelineJson(alloc, batch.get(3)),
         .top_pubs_json = try formatPubsJson(alloc, batch.get(4)),
@@ -118,16 +122,18 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const searches = if (turso_stats) |r| r.int(0) else 0;
     const started_at = if (turso_stats) |r| r.int(1) else 0;
 
-    // get document/publication counts from local (fast)
+    // get document/publication/embedding counts from local (fast)
     var counts_rows = try local.query(
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
-        \\  (SELECT COUNT(*) FROM publications) as pubs
+        \\  (SELECT COUNT(*) FROM publications) as pubs,
+        \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings
     , .{});
     defer counts_rows.deinit();
     const counts_row = counts_rows.next() orelse return error.NoStats;
     const documents = counts_row.int(0);
     const publications = counts_row.int(1);
+    const embeddings = counts_row.int(2);
 
     // platforms query
     var platforms_rows = try local.query(PLATFORMS_SQL, .{});
@@ -154,6 +160,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         .searches = searches,
         .publications = publications,
         .documents = documents,
+        .embeddings = embeddings,
         .tags_json = tags_json,
         .timeline_json = timeline_json,
         .top_pubs_json = top_pubs_json,
@@ -318,6 +325,9 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
 
     try jw.objectField("documents");
     try jw.write(data.documents);
+
+    try jw.objectField("embeddings");
+    try jw.write(data.embeddings);
 
     try jw.objectField("platforms");
     try jw.beginWriteRaw();

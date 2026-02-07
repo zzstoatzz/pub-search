@@ -84,13 +84,29 @@ function formatMs(ms) {
   return Math.round(ms * 1000) + 'µs';
 }
 
-const ENDPOINT_COLORS = { search: '#8b5cf6', similar: '#06b6d4', tags: '#10b981', popular: '#f59e0b' };
+const ENDPOINT_COLORS = {
+  search_keyword: '#3b82f6',
+  search_semantic: '#8b5cf6',
+  search_hybrid: '#10b981',
+  similar: '#06b6d4',
+  tags: '#f59e0b',
+  popular: '#f97316',
+};
+
+const ENDPOINT_LABELS = {
+  search_keyword: 'keyword',
+  search_semantic: 'semantic',
+  search_hybrid: 'hybrid',
+  similar: 'similar',
+  tags: 'tags',
+  popular: 'popular',
+};
 
 function renderTiming(timing) {
   const el = document.getElementById('timing');
   if (!timing) return;
 
-  const endpoints = ['search', 'similar', 'tags', 'popular'];
+  const endpoints = ['search_keyword', 'search_semantic', 'search_hybrid', 'similar', 'tags', 'popular'];
   endpoints.forEach(name => {
     const t = timing[name];
     if (!t) return;
@@ -98,11 +114,12 @@ function renderTiming(timing) {
     const row = document.createElement('div');
     row.className = 'timing-row';
     const color = ENDPOINT_COLORS[name];
+    const label = ENDPOINT_LABELS[name] || name;
 
     if (t.count === 0) {
-      row.innerHTML = '<span class="timing-name" style="color:' + color + '">' + name + '</span><span class="timing-value dim">--</span>';
+      row.innerHTML = '<span class="timing-name" style="color:' + color + '">' + label + '</span><span class="timing-value dim">--</span>';
     } else {
-      row.innerHTML = '<span class="timing-name" style="color:' + color + '">' + name + '</span>' +
+      row.innerHTML = '<span class="timing-name" style="color:' + color + '">' + label + '</span>' +
         '<span class="timing-value">' + formatMs(t.p50_ms) + ' <span class="dim">p50</span> · ' +
         formatMs(t.p95_ms) + ' <span class="dim">p95</span></span>';
     }
@@ -117,7 +134,7 @@ function renderLatencyChart(timing) {
   const container = document.getElementById('latency-history');
   if (!container) return;
 
-  const endpoints = ['search', 'similar', 'tags', 'popular'];
+  const endpoints = ['search_keyword', 'search_semantic', 'search_hybrid', 'similar', 'tags', 'popular'];
 
   // check if any endpoint has history data
   const hasData = endpoints.some(name => timing[name]?.history?.some(h => h.count > 0));
@@ -143,9 +160,10 @@ function renderLatencyChart(timing) {
     const cell = document.createElement('div');
     cell.className = 'latency-cell';
 
+    const friendlyName = ENDPOINT_LABELS[name] || name;
     const label = document.createElement('div');
     label.className = 'latency-cell-label';
-    label.innerHTML = '<span class="dot" style="background:' + color + '"></span>' + name +
+    label.innerHTML = '<span class="dot" style="background:' + color + '"></span>' + friendlyName +
       '<span class="latency-cell-max">' + formatMs(maxVal) + '</span>';
     cell.appendChild(label);
 
@@ -256,6 +274,7 @@ async function fetchDashboard() {
 
     document.getElementById('searches').textContent = data.searches;
     document.getElementById('publications').textContent = data.publications;
+    document.getElementById('embeddings').textContent = data.embeddings ?? '--';
 
     renderPlatforms(data.platforms);
     renderTiming(data.timing);

@@ -430,6 +430,66 @@
       color: #c44;
     }
 
+    .mode-toggle {
+      margin-bottom: 1rem;
+    }
+
+    .mode-toggle-label {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 0.5rem;
+    }
+
+    .mode-toggle-list {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .mode-option {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #151515;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #777;
+    }
+
+    .mode-option:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
+    }
+
+    .mode-option.active {
+      background: rgba(139, 92, 246, 0.2);
+      border-color: #8b5cf6;
+      color: #a78bfa;
+    }
+
+    .source-badge {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: 6px;
+      text-transform: lowercase;
+    }
+
+    .source-badge.keyword {
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+    }
+
+    .source-badge.semantic {
+      background: rgba(139, 92, 246, 0.2);
+      color: #a78bfa;
+    }
+
+    .source-badge.keyword-semantic {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+    }
+
     /* mobile improvements */
     @media (max-width: 600px) {
       body {
@@ -442,7 +502,7 @@
       }
 
       /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .suggestion, input.tag-input {
+      .tag, .platform-option, .mode-option, .suggestion, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -520,7 +580,7 @@
 
     /* ensure touch targets on tablets too */
     @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .suggestion, .related-item, input.tag-input {
+      .tag, .platform-option, .mode-option, .suggestion, .related-item, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -536,6 +596,8 @@
       <input type="text" id="query" placeholder="search content..." autofocus>
       <button id="search-btn">search</button>
     </div>
+
+    <div id="mode-toggle" class="mode-toggle"></div>
 
     <div id="suggestions"></div>
 
@@ -568,8 +630,10 @@
     const activeFilterDiv = document.getElementById('active-filter');
     const suggestionsDiv = document.getElementById('suggestions');
     const platformFilterDiv = document.getElementById('platform-filter');
+    const modeToggleDiv = document.getElementById('mode-toggle');
     let currentTag = null;
     let currentPlatform = null;
+    let currentMode = 'keyword';
     let allTags = [];
     let popularSearches = [];
     const authorCache = new Map();
@@ -582,6 +646,7 @@
       let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
+      if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
 
       try {
         const res = await fetch(searchUrl);
@@ -622,15 +687,27 @@
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           const platformHome = getPlatformHome(plat, doc.basePath);
 
+          // source badge (only shown in hybrid/semantic modes)
+          let sourceBadge = '';
+          if (doc.source && currentMode !== 'keyword') {
+            const cls = doc.source.replace('+', '-');
+            sourceBadge = `<span class="source-badge ${cls}">${escapeHtml(doc.source)}</span>`;
+          }
+
+          // skip empty snippet divs (semantic results have no snippet)
+          const snippetHtml = doc.snippet
+            ? `<div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>`
+            : '';
+
           html += `
             <div class="result">
               <div class="result-title">
                 <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}
                 ${docUrl
                   ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
-                  : escapeHtml(doc.title || 'Untitled')}
+                  : escapeHtml(doc.title || 'Untitled')}${sourceBadge}
               </div>
-              <div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>
+              ${snippetHtml}
               <div class="result-meta" ${doc.did ? `data-did="${escapeHtml(doc.did)}"` : ''}>
                 ${date ? `${date} | ` : ''}<span class="author-name"></span>${platformHome.url
                   ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
@@ -833,6 +910,7 @@
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
+      if (currentMode !== 'keyword') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
     }
@@ -900,6 +978,34 @@
         <span class="platform-option${currentPlatform === p.id ? ' active' : ''}" onclick="setPlatform('${p.id}')">${p.label}</span>
       `).join('');
       platformFilterDiv.innerHTML = `<div class="platform-filter-label">filter by platform:</div><div class="platform-filter-list">${html}</div>`;
+    }
+
+    function renderModeToggle() {
+      const modes = [
+        { id: 'keyword', label: 'keyword' },
+        { id: 'semantic', label: 'semantic' },
+        { id: 'hybrid', label: 'hybrid' },
+      ];
+      const html = modes.map(m => `
+        <span class="mode-option${currentMode === m.id ? ' active' : ''}" onclick="setMode('${m.id}')">${m.label}</span>
+      `).join('');
+      modeToggleDiv.innerHTML = `<div class="mode-toggle-label">search mode:</div><div class="mode-toggle-list">${html}</div>`;
+    }
+
+    function setMode(mode) {
+      if (currentMode === mode) return;
+      currentMode = mode;
+      renderModeToggle();
+      // hide tags/since for non-keyword modes (tpuf doesn't support them)
+      tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
+      if (currentMode !== 'keyword') {
+        currentTag = null;
+        renderActiveFilter();
+      }
+      // trigger search if there's a query
+      if (queryInput.value.trim() || currentTag || currentPlatform) {
+        doSearch();
+      }
     }
 
     function renderActiveFilter() {
@@ -1008,9 +1114,12 @@
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
+      currentMode = params.get('mode') || 'keyword';
       renderActiveFilter();
       renderTags();
       renderPlatformFilter();
+      renderModeToggle();
+      tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
       if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
     });
 
@@ -1019,11 +1128,15 @@
     const initialQuery = initialParams.get('q');
     const initialTag = initialParams.get('tag');
     const initialPlatform = initialParams.get('platform');
+    const initialMode = initialParams.get('mode');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
     if (initialPlatform) currentPlatform = initialPlatform;
+    if (initialMode) currentMode = initialMode;
     renderActiveFilter();
     renderPlatformFilter();
+    renderModeToggle();
+    tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
 
     if (initialQuery || initialTag || initialPlatform) {
       search(initialQuery || '', initialTag, initialPlatform);

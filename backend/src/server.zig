@@ -93,7 +93,6 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
 
 fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
-    defer metrics.timing.record(.search, start_time);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -105,6 +104,14 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
     const mode_str = parseQueryParam(alloc, target, "mode") catch null;
     const mode = search.SearchMode.fromString(mode_str);
+
+    // record per-mode latency
+    const timing_endpoint: metrics.timing.Endpoint = switch (mode) {
+        .keyword => .search_keyword,
+        .semantic => .search_semantic,
+        .hybrid => .search_hybrid,
+    };
+    defer metrics.timing.record(timing_endpoint, start_time);
 
     // span attributes are now copied internally, safe to use arena strings
     const span = logfire.span("http.search", .{

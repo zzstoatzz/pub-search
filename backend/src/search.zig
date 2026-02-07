@@ -9,10 +9,12 @@ const tpuf = @import("tpuf.zig");
 pub const SearchMode = enum {
     keyword,
     semantic,
+    hybrid,
 
     pub fn fromString(s: ?[]const u8) SearchMode {
         const str = s orelse return .keyword;
         if (std.mem.eql(u8, str, "semantic")) return .semantic;
+        if (std.mem.eql(u8, str, "hybrid")) return .hybrid;
         return .keyword;
     }
 };
@@ -29,6 +31,7 @@ const SearchResultJson = struct {
     basePath: []const u8,
     platform: []const u8,
     path: []const u8 = "", // URL path from record (e.g., "/001")
+    source: []const u8 = "",
 };
 
 /// Document search result (internal)
@@ -275,8 +278,13 @@ const PubSearch = zql.Query(
 );
 
 pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, mode: SearchMode) ![]const u8 {
+    if (mode == .hybrid) return searchHybrid(alloc, query, tag_filter, platform_filter, since_filter);
     if (mode == .semantic) return searchSemantic(alloc, query, platform_filter);
+    return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter);
+}
 
+/// Keyword search: FTS5 via local SQLite or Turso fallback.
+fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
     // try local SQLite first (faster for FTS queries)
     if (db.getLocalDb()) |local| {
         if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter)) |result| {
@@ -663,6 +671,177 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     return try output.toOwnedSlice();
 }
 
+/// Hybrid search: run keyword + semantic, merge with Reciprocal Rank Fusion.
+/// score(doc) = 1/(k + rank_keyword) + 1/(k + rank_semantic), k=60
+fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
+    if (query.len == 0) return try alloc.dupe(u8, "[]");
+
+    const span = logfire.span("search.hybrid", .{});
+    defer span.end();
+
+    // 1. keyword search (~10ms via local SQLite)
+    const kw_json = searchKeyword(alloc, query, tag_filter, platform_filter, since_filter) catch |err| blk: {
+        logfire.warn("search.hybrid: keyword failed: {}", .{err});
+        break :blk try alloc.dupe(u8, "[]");
+    };
+
+    // 2. semantic search (~550ms via voyage + tpuf)
+    const sem_json = searchSemantic(alloc, query, platform_filter) catch |err| blk: {
+        logfire.warn("search.hybrid: semantic failed: {}", .{err});
+        break :blk try alloc.dupe(u8, "[]");
+    };
+
+    // check if semantic returned an error object (starts with '{')
+    const sem_is_error = sem_json.len > 0 and sem_json[0] == '{';
+
+    // 3. parse both into json.Value arrays
+    const kw_parsed = json.parseFromSlice(json.Value, alloc, kw_json, .{}) catch {
+        // if keyword parse fails, just return semantic (or empty)
+        if (sem_is_error) return try alloc.dupe(u8, "[]");
+        return sem_json;
+    };
+    defer kw_parsed.deinit();
+
+    const kw_items = switch (kw_parsed.value) {
+        .array => |arr| arr.items,
+        else => &[_]json.Value{},
+    };
+
+    var sem_items: []const json.Value = &.{};
+    var sem_parsed_opt: ?json.Parsed(json.Value) = null;
+    defer if (sem_parsed_opt) |*p| p.deinit();
+
+    if (!sem_is_error) {
+        if (json.parseFromSlice(json.Value, alloc, sem_json, .{}) catch null) |parsed| {
+            sem_parsed_opt = parsed;
+            sem_items = switch (parsed.value) {
+                .array => |arr| arr.items,
+                else => &[_]json.Value{},
+            };
+        }
+    }
+
+    // if one side is empty, return the other with source annotation
+    if (kw_items.len == 0 and sem_items.len == 0) {
+        return try alloc.dupe(u8, "[]");
+    }
+
+    // 4. build RRF score map
+    const RRF_K: f64 = 60.0;
+
+    // source bits: 1=keyword, 2=semantic
+    var scores = std.StringHashMap(f64).init(alloc);
+    defer scores.deinit();
+    var source_bits = std.StringHashMap(u8).init(alloc);
+    defer source_bits.deinit();
+
+    // map URI -> json object from keyword results (preferred for snippets)
+    var kw_objects = std.StringHashMap(json.ObjectMap).init(alloc);
+    defer kw_objects.deinit();
+    var sem_objects = std.StringHashMap(json.ObjectMap).init(alloc);
+    defer sem_objects.deinit();
+
+    for (kw_items, 0..) |item, i| {
+        const obj = switch (item) {
+            .object => |o| o,
+            else => continue,
+        };
+        const uri = jsonStr(obj, "uri");
+        if (uri.len == 0) continue;
+
+        const rank: f64 = @floatFromInt(i + 1);
+        const rrf_score = 1.0 / (RRF_K + rank);
+
+        const prev = scores.get(uri) orelse 0.0;
+        try scores.put(uri, prev + rrf_score);
+
+        const prev_bits = source_bits.get(uri) orelse 0;
+        try source_bits.put(uri, prev_bits | 0b01);
+
+        if (!kw_objects.contains(uri)) {
+            try kw_objects.put(uri, obj);
+        }
+    }
+
+    for (sem_items, 0..) |item, i| {
+        const obj = switch (item) {
+            .object => |o| o,
+            else => continue,
+        };
+        const uri = jsonStr(obj, "uri");
+        if (uri.len == 0) continue;
+
+        const rank: f64 = @floatFromInt(i + 1);
+        const rrf_score = 1.0 / (RRF_K + rank);
+
+        const prev = scores.get(uri) orelse 0.0;
+        try scores.put(uri, prev + rrf_score);
+
+        const prev_bits = source_bits.get(uri) orelse 0;
+        try source_bits.put(uri, prev_bits | 0b10);
+
+        if (!sem_objects.contains(uri)) {
+            try sem_objects.put(uri, obj);
+        }
+    }
+
+    // 5. collect and sort by RRF score
+    const ScoredUri = struct {
+        uri: []const u8,
+        score: f64,
+    };
+
+    var scored: std.ArrayList(ScoredUri) = .empty;
+    defer scored.deinit(alloc);
+
+    var it = scores.iterator();
+    while (it.next()) |entry| {
+        try scored.append(alloc, .{ .uri = entry.key_ptr.*, .score = entry.value_ptr.* });
+    }
+
+    std.mem.sort(ScoredUri, scored.items, {}, struct {
+        fn lessThan(_: void, a: ScoredUri, b: ScoredUri) bool {
+            return a.score > b.score; // descending
+        }
+    }.lessThan);
+
+    // 6. serialize top 20 with source annotation
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+
+    const limit = @min(scored.items.len, 20);
+    for (scored.items[0..limit]) |entry| {
+        const bits = source_bits.get(entry.uri) orelse 0;
+        // prefer keyword version (has FTS snippet)
+        const obj = kw_objects.get(entry.uri) orelse sem_objects.get(entry.uri) orelse continue;
+
+        const source_label: []const u8 = switch (bits) {
+            0b01 => "keyword",
+            0b10 => "semantic",
+            0b11 => "keyword+semantic",
+            else => "",
+        };
+
+        try jw.beginObject();
+        // write all standard fields from the source object
+        inline for (.{ "type", "uri", "did", "title", "snippet", "rkey", "basePath", "platform", "path" }) |field| {
+            try jw.objectField(field);
+            try jw.write(jsonStr(obj, field));
+        }
+        try jw.objectField("createdAt");
+        try jw.write(jsonStr(obj, "createdAt"));
+        try jw.objectField("source");
+        try jw.write(source_label);
+        try jw.endObject();
+    }
+
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
 /// Semantic search: embed query via Voyage, ANN search via turbopuffer.
 fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const u8) ![]const u8 {
     if (query.len == 0) return try alloc.dupe(u8, "[]");
@@ -734,6 +913,16 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     try jw.endArray();
 
     return try output.toOwnedSlice();
+}
+
+// --- JSON helpers (for hybrid search parsing) ---
+
+fn jsonStr(obj: json.ObjectMap, key: []const u8) []const u8 {
+    const val = obj.get(key) orelse return "";
+    return switch (val) {
+        .string => |s| s,
+        else => "",
+    };
 }
 
 /// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
