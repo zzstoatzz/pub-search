@@ -85,6 +85,10 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
         return err;
     };
     _ = self.read_conn.?.exec("PRAGMA busy_timeout=1000", .{}) catch {};
+    // mmap for fast reads — avoids pread() syscalls, uses OS page cache directly
+    _ = self.read_conn.?.exec("PRAGMA mmap_size=268435456", .{}) catch {};
+    // 20MB page cache — keeps FTS5 index pages in memory across queries
+    _ = self.read_conn.?.exec("PRAGMA cache_size=-20000", .{}) catch {};
 
     // check integrity - if corrupt, delete and recreate
     if (!self.checkIntegrity()) {
@@ -201,6 +205,9 @@ fn createSchema(self: *LocalDb) !void {
 
     // index for tag queries
     c.exec("CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag)", .{}) catch {};
+
+    // index for base_path join (documents → publications via publication_uri)
+    c.exec("CREATE INDEX IF NOT EXISTS idx_documents_publication_uri ON documents(publication_uri)", .{}) catch {};
 
     // sync metadata table
     c.exec(

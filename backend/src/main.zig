@@ -9,7 +9,7 @@ const server = @import("server.zig");
 const ingest = @import("ingest.zig");
 
 const MAX_HTTP_WORKERS = 16;
-const SOCKET_TIMEOUT_SECS = 30;
+const SOCKET_TIMEOUT_SECS = 5;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -63,7 +63,8 @@ pub fn main() !void {
             logfire.warn("failed to set socket timeout: {}", .{err});
         };
 
-        pool.spawn(server.handleConnection, .{conn}) catch |err| {
+        const accepted_at = std.time.microTimestamp();
+        pool.spawn(server.handleConnection, .{ conn, accepted_at }) catch |err| {
             logfire.err("pool spawn error: {}", .{err});
             conn.stream.close();
         };

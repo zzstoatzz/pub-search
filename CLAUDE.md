@@ -29,5 +29,8 @@
 - from `tap/` directory: `just check` (status), `just turbo` (catch-up), `just normal` (steady state)
 - see `docs/tap.md` for memory tuning and debugging
 
+## zig dependencies
+- update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)
+
 ## common tasks
 - check indexing: `curl -s https://leaflet-search-backend.fly.dev/api/dashboard | jq`

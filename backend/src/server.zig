@@ -11,11 +11,16 @@ const metrics = @import("metrics.zig");
 const search = @import("search.zig");
 const dashboard = @import("dashboard.zig");
 
-const HTTP_BUF_SIZE = 8192;
+const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
 
-pub fn handleConnection(conn: net.Server.Connection) void {
+pub fn handleConnection(conn: net.Server.Connection, accepted_at: i64) void {
     defer conn.stream.close();
+
+    const queue_us = std.time.microTimestamp() - accepted_at;
+    if (queue_us > 100_000) { // > 100ms
+        logfire.warn("http.queue slow: {d}ms", .{@divTrunc(queue_us, 1000)});
+    }
 
     var read_buffer: [HTTP_BUF_SIZE]u8 = undefined;
     var write_buffer: [HTTP_BUF_SIZE]u8 = undefined;
@@ -36,13 +41,9 @@ pub fn handleConnection(conn: net.Server.Connection) void {
         const recv_us = std.time.microTimestamp() - recv_start;
         const target = request.head.target;
 
-        // log slow receives — this captures time waiting for the request to arrive
-        if (recv_us > 100_000) { // > 100ms
-            logfire.warn("http.receive slow: {d}ms | {s}", .{ @divTrunc(recv_us, 1000), target });
-        }
-
         const req_span = logfire.span("http.request", .{
             .target = target,
+            .queue_ms = @divTrunc(queue_us, 1000),
             .receive_ms = @divTrunc(recv_us, 1000),
         });
 

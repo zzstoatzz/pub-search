@@ -446,11 +446,18 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
         , .{fts_query});
         defer rows.deinit();
 
-        while (rows.next()) |row| {
-            const doc = Doc.fromLocalRow(row);
-            const uri_dupe = try alloc.dupe(u8, doc.uri);
-            try seen_uris.put(uri_dupe, {});
-            try jw.write(doc.toJson());
+        {
+            const iter_span = logfire.span("search.iterate.docs_fts", .{});
+            defer iter_span.end();
+            var doc_count: u32 = 0;
+            while (rows.next()) |row| {
+                const doc = Doc.fromLocalRow(row);
+                const uri_dupe = try alloc.dupe(u8, doc.uri);
+                try seen_uris.put(uri_dupe, {});
+                try jw.write(doc.toJson());
+                doc_count += 1;
+            }
+            logfire.info("search.iterate.docs_fts rows={d}", .{doc_count});
         }
 
         // base_path search
@@ -466,11 +473,18 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
         , .{fts_query});
         defer bp_rows.deinit();
 
-        while (bp_rows.next()) |row| {
-            const doc = Doc.fromLocalRow(row);
-            if (!seen_uris.contains(doc.uri)) {
-                try jw.write(doc.toJson());
+        {
+            const iter_span = logfire.span("search.iterate.base_path", .{});
+            defer iter_span.end();
+            var bp_count: u32 = 0;
+            while (bp_rows.next()) |row| {
+                const doc = Doc.fromLocalRow(row);
+                if (!seen_uris.contains(doc.uri)) {
+                    try jw.write(doc.toJson());
+                }
+                bp_count += 1;
             }
+            logfire.info("search.iterate.base_path rows={d}", .{bp_count});
         }
 
         // publication search
@@ -485,8 +499,15 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
         , .{fts_query});
         defer pub_rows.deinit();
 
-        while (pub_rows.next()) |row| {
-            try jw.write(Pub.fromLocalRow(row).toJson());
+        {
+            const iter_span = logfire.span("search.iterate.pubs_fts", .{});
+            defer iter_span.end();
+            var pub_count: u32 = 0;
+            while (pub_rows.next()) |row| {
+                try jw.write(Pub.fromLocalRow(row).toJson());
+                pub_count += 1;
+            }
+            logfire.info("search.iterate.pubs_fts rows={d}", .{pub_count});
         }
     }
 
