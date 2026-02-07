@@ -165,11 +165,24 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
         return error.TpufUpsertFailed;
     };
 
-    // mark docs as embedded in turso (one exec per doc — simpler than batch)
+    // mark docs as embedded in turso
+    // generate timestamp in Zig (avoids any strftime/pipeline API quirks)
+    const now_ts = std.time.timestamp();
+    const epoch_secs: u64 = @intCast(now_ts);
+    const epoch = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
+    const day = epoch.getDaySeconds();
+    const yd = epoch.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    var ts_buf: [20]u8 = undefined;
+    const ts = std.fmt.bufPrint(&ts_buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+        yd.year, md.month.numeric(), @as(u32, md.day_index) + 1,
+        day.getHoursIntoDay(), day.getMinutesIntoHour(), day.getSecondsIntoMinute(),
+    }) catch "1970-01-01T00:00:00";
+
     for (docs.items) |doc| {
         client.exec(
-            "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
-            &.{doc.uri},
+            "UPDATE documents SET embedded_at = ? WHERE uri = ?",
+            &.{ ts, doc.uri },
         ) catch |err| {
             logfire.warn("embedder: failed to mark {s}: {}", .{ doc.uri, err });
         };
