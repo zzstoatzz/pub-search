@@ -4,6 +4,12 @@ const Allocator = std.mem.Allocator;
 const zql = @import("zql");
 const logfire = @import("logfire");
 const db = @import("db/mod.zig");
+const metrics = @import("metrics.zig");
+
+// cached embedded doc count (refresh every 5 minutes)
+var cached_doc_count: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+var doc_count_updated_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+const DOC_COUNT_CACHE_SECS = 300; // 5 minutes
 
 // JSON output type for search results
 const SearchResultJson = struct {
@@ -585,6 +591,152 @@ fn getDocQueryArgs(alloc: Allocator, fts_query: []const u8, tag: ?[]const u8, pl
     return &.{};
 }
 
+/// Find documents similar to a given document using vector similarity
+/// Uses brute-force cosine distance with caching (cache invalidated when doc count changes)
+pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    // get cached doc count (rarely hits Turso - refreshes every 5 min)
+    const doc_count = getEmbeddedDocCountCached(c) orelse return error.QueryFailed;
+
+    // check LOCAL cache first (instant)
+    if (db.getLocalDb()) |local| {
+        if (getCachedSimilarLocal(alloc, local, uri, doc_count)) |cached| {
+            metrics.stats.recordCacheHit();
+            return cached;
+        }
+    }
+
+    // check Turso cache (slower, but needed if local empty)
+    if (getCachedSimilar(alloc, c, uri, doc_count)) |cached| {
+        metrics.stats.recordCacheHit();
+        // also write to local cache for next time
+        if (db.getLocalDb()) |local| {
+            cacheSimilarResultsLocal(local, uri, cached, doc_count);
+        }
+        return cached;
+    }
+    metrics.stats.recordCacheMiss();
+
+    // cache miss - compute similarity
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var limit_buf: [8]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch "5";
+
+    // brute-force cosine similarity search (no vector index needed)
+    var res = c.query(
+        \\SELECT d2.uri, d2.did, d2.title, '' as snippet,
+        \\  d2.created_at, d2.rkey, d2.base_path, d2.has_publication,
+        \\  d2.platform, COALESCE(d2.path, '') as path
+        \\FROM documents d1, documents d2
+        \\WHERE d1.uri = ?
+        \\  AND d2.uri != d1.uri
+        \\  AND d1.embedding IS NOT NULL
+        \\  AND d2.embedding IS NOT NULL
+        \\ORDER BY vector_distance_cos(d1.embedding, d2.embedding)
+        \\LIMIT ?
+    , &.{ uri, limit_str }) catch {
+        try output.writer.writeAll("[]");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| try jw.write(Doc.fromRow(row).toJson());
+    try jw.endArray();
+
+    const results = try output.toOwnedSlice();
+
+    // cache to LOCAL db (instant)
+    if (db.getLocalDb()) |local| {
+        cacheSimilarResultsLocal(local, uri, results, doc_count);
+    }
+
+    // cache to Turso (fire and forget - still useful for durability)
+    cacheSimilarResults(c, uri, results, doc_count);
+
+    return results;
+}
+
+fn getEmbeddedDocCount(c: *db.Client) ?i64 {
+    var res = c.query("SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL", &.{}) catch return null;
+    defer res.deinit();
+    if (res.rows.len == 0) return null;
+    return res.rows[0].int(0);
+}
+
+fn getEmbeddedDocCountCached(c: *db.Client) ?i64 {
+    const now = std.time.timestamp();
+    const last_update = doc_count_updated_at.load(.acquire);
+
+    // use cached value if fresh enough
+    if (now - last_update < DOC_COUNT_CACHE_SECS) {
+        const cached = cached_doc_count.load(.acquire);
+        if (cached > 0) return cached;
+    }
+
+    // refresh from Turso
+    const count = getEmbeddedDocCount(c) orelse return null;
+    cached_doc_count.store(count, .release);
+    doc_count_updated_at.store(now, .release);
+    return count;
+}
+
+fn getCachedSimilar(alloc: Allocator, c: *db.Client, uri: []const u8, current_doc_count: i64) ?[]const u8 {
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{current_doc_count}) catch return null;
+
+    var res = c.query(
+        "SELECT results FROM similarity_cache WHERE source_uri = ? AND doc_count = ?",
+        &.{ uri, count_str },
+    ) catch return null;
+    defer res.deinit();
+
+    if (res.rows.len == 0) return null;
+    return alloc.dupe(u8, res.rows[0].text(0)) catch null;
+}
+
+fn cacheSimilarResults(c: *db.Client, uri: []const u8, results: []const u8, doc_count: i64) void {
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{doc_count}) catch return;
+
+    var ts_buf: [20]u8 = undefined;
+    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch return;
+
+    c.exec(
+        "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
+        &.{ uri, results, count_str, ts_str },
+    ) catch {};
+}
+
+fn getCachedSimilarLocal(alloc: Allocator, local: *db.LocalDb, uri: []const u8, current_doc_count: i64) ?[]const u8 {
+    var rows = local.query(
+        "SELECT results, doc_count FROM similarity_cache WHERE source_uri = ?",
+        .{uri},
+    ) catch return null;
+    defer rows.deinit();
+
+    const row = rows.next() orelse return null;
+    // check doc_count matches for cache validity
+    if (row.int(1) != current_doc_count) return null;
+    return alloc.dupe(u8, row.text(0)) catch null;
+}
+
+fn cacheSimilarResultsLocal(local: *db.LocalDb, uri: []const u8, results: []const u8, doc_count: i64) void {
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{doc_count}) catch return;
+
+    var ts_buf: [20]u8 = undefined;
+    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch return;
+
+    local.exec(
+        "INSERT OR REPLACE INTO similarity_cache (source_uri, results, doc_count, computed_at) VALUES (?, ?, ?, ?)",
+        .{ uri, results, count_str, ts_str },
+    ) catch {};
+}
 
 /// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
 /// Uses OR for better recall with BM25 ranking (more matches = higher score)
