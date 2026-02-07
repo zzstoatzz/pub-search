@@ -81,9 +81,6 @@ fn initServices(allocator: std.mem.Allocator) void {
     // start stats buffer (background sync to Turso)
     metrics.buffer.init();
 
-    // start embedder (generates embeddings for new docs)
-    ingest.embedder.start(allocator);
-
     // start tap consumer
     ingest.tap.consumer(allocator);
 }
