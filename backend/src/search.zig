@@ -880,9 +880,13 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         alloc.free(results);
     }
 
-    // serialize results, filtering by distance + platform, capped at 20
+    // serialize results, filtering by distance + platform + dedup, capped at 20
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
+
+    // track seen URIs to deduplicate
+    var seen: [20][]const u8 = undefined;
+    var seen_count: usize = 0;
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
@@ -895,6 +899,19 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         if (r.title.len == 0) continue;
         if (platform_filter) |pf| {
             if (!std.mem.eql(u8, r.platform, pf)) continue;
+        }
+        // deduplicate by URI
+        var is_dup = false;
+        for (seen[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, r.uri)) {
+                is_dup = true;
+                break;
+            }
+        }
+        if (is_dup) continue;
+        if (seen_count < 20) {
+            seen[seen_count] = r.uri;
+            seen_count += 1;
         }
         count += 1;
         try jw.write(SearchResultJson{
