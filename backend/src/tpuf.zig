@@ -296,8 +296,10 @@ fn buildGetVectorBody(allocator: Allocator, id: []const u8) ![]const u8 {
     try jw.objectField("top_k");
     try jw.write(1);
 
-    try jw.objectField("include_vectors");
-    try jw.write(true);
+    try jw.objectField("include_attributes");
+    try jw.beginArray();
+    try jw.write("vector");
+    try jw.endArray();
 
     try jw.endObject();
 
