@@ -388,28 +388,9 @@ fn handleDashboard(request: *http.Server.Request) !void {
 }
 
 fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = std.time.microTimestamp();
-    defer metrics.timing.record(.similar, start_time);
-
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-
-    const uri = parseQueryParam(alloc, target, "uri") catch {
-        try sendJson(request, "{\"error\":\"missing uri parameter\"}");
-        return;
-    };
-
-    // span attributes are copied internally, safe to use arena strings
-    const span = logfire.span("http.similar", .{ .uri = uri });
-    defer span.end();
-
-    const results = search.findSimilar(alloc, uri, 5) catch {
-        try sendJson(request, "[]");
-        return;
-    };
-
-    try sendJson(request, results);
+    _ = target;
+    // disabled: vector similarity search was saturating Turso with brute-force cosine queries
+    try sendJson(request, "[]");
 }
 
 fn handleActivity(request: *http.Server.Request) !void {
