@@ -10,7 +10,9 @@ const mem = std.mem;
 const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
+const zql = @import("zql");
 const db = @import("../db/mod.zig");
+const tpuf = @import("../tpuf.zig");
 
 // voyage-3-lite limits
 const MAX_BATCH_SIZE = 20; // conservative batch size for reliability
@@ -18,6 +20,14 @@ const MAX_CONTENT_CHARS = 8000; // ~2000 tokens, well under 32K limit
 const EMBEDDING_DIM = 512;
 const POLL_INTERVAL_SECS: u64 = 60; // check for new docs every minute
 const ERROR_BACKOFF_SECS: u64 = 300; // 5 min backoff on errors
+
+// columns: uri(0) title(1) content(2) did(3) created_at(4) rkey(5)
+//          base_path(6) has_publication(7) platform(8) path(9)
+const DocsNeedingEmbeddings = zql.Query(
+    \\SELECT uri, title, content, did, created_at, rkey,
+    \\  base_path, has_publication, platform, COALESCE(path, '') as path
+    \\FROM documents WHERE embedding IS NULL LIMIT :limit
+);
 
 /// Start the embedder background worker
 pub fn start(allocator: Allocator) void {
@@ -64,7 +74,32 @@ fn worker(allocator: Allocator, api_key: []const u8) void {
 
 const DocToEmbed = struct {
     uri: []const u8,
-    text: []const u8, // title + " " + content (truncated)
+    text: []const u8, // title + " " + content (truncated, owned by caller)
+    // metadata for tpuf — valid while DocsNeedingEmbeddings result rows are alive
+    title: []const u8,
+    did: []const u8,
+    created_at: []const u8,
+    rkey: []const u8,
+    base_path: []const u8,
+    platform: []const u8,
+    path: []const u8,
+    has_publication: bool,
+
+    /// Map from DocsNeedingEmbeddings row. Caller must separately build `text`.
+    fn fromRow(row: db.Row) DocToEmbed {
+        return .{
+            .uri = row.text(0),
+            .text = "", // set by caller after buildEmbeddingText
+            .title = row.text(1),
+            .did = row.text(3),
+            .created_at = row.text(4),
+            .rkey = row.text(5),
+            .base_path = row.text(6),
+            .has_publication = row.int(7) != 0,
+            .platform = row.text(8),
+            .path = row.text(9),
+        };
+    }
 };
 
 fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
@@ -73,9 +108,8 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
 
     const client = db.getClient() orelse return error.NoClient;
 
-    // query for documents needing embeddings
     var result = try client.query(
-        "SELECT uri, title, content FROM documents WHERE embedding IS NULL LIMIT ?",
+        DocsNeedingEmbeddings.positional,
         &.{std.fmt.comptimePrint("{}", .{MAX_BATCH_SIZE})},
     );
     defer result.deinit();
@@ -83,20 +117,14 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     // collect documents
     var docs: std.ArrayList(DocToEmbed) = .empty;
     defer {
-        for (docs.items) |doc| {
-            allocator.free(doc.text);
-        }
+        for (docs.items) |doc| allocator.free(doc.text);
         docs.deinit(allocator);
     }
 
     for (result.rows) |row| {
-        const uri = row.text(0);
-        const title = row.text(1);
-        const content = row.text(2);
-
-        // build text for embedding: title + content, truncated
-        const text = try buildEmbeddingText(allocator, title, content);
-        try docs.append(allocator, .{ .uri = uri, .text = text });
+        var doc = DocToEmbed.fromRow(row);
+        doc.text = try buildEmbeddingText(allocator, row.text(1), row.text(2));
+        try docs.append(allocator, doc);
     }
 
     if (docs.items.len == 0) return 0;
@@ -112,6 +140,34 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     for (docs.items, embeddings) |doc, embedding| {
         updateDocumentEmbedding(client, doc.uri, embedding) catch |err| {
             logfire.err("embedder: failed to update {s}: {}", .{ doc.uri, err });
+        };
+    }
+
+    // sync to turbopuffer (fire-and-forget — search works without it)
+    if (tpuf.isEnabled()) {
+        var tpuf_docs = allocator.alloc(tpuf.VectorDoc, docs.items.len) catch {
+            logfire.warn("embedder: failed to alloc tpuf batch", .{});
+            return docs.items.len;
+        };
+        defer allocator.free(tpuf_docs);
+
+        for (docs.items, embeddings, 0..) |doc, embedding, i| {
+            tpuf_docs[i] = .{
+                .id = doc.uri,
+                .vector = embedding,
+                .title = doc.title,
+                .did = doc.did,
+                .created_at = doc.created_at,
+                .rkey = doc.rkey,
+                .base_path = doc.base_path,
+                .platform = doc.platform,
+                .path = doc.path,
+                .has_publication = doc.has_publication,
+            };
+        }
+
+        tpuf.upsert(allocator, tpuf_docs) catch |err| {
+            logfire.warn("embedder: tpuf upsert failed: {}, continuing", .{err});
         };
     }
 

@@ -1,0 +1,368 @@
+//! Turbopuffer vector store client.
+//!
+//! Manages vector upserts and ANN queries against a turbopuffer namespace.
+//! Used by:
+//!   - ingest/embedder.zig: upsert document vectors after embedding
+//!   - search.zig: ANN query for semantic search + /similar replacement
+//!
+//! All operations are fire-and-forget safe — callers should handle errors
+//! gracefully since the system works without vector search.
+
+const std = @import("std");
+const json = std.json;
+const http = std.http;
+const mem = std.mem;
+const posix = std.posix;
+const Allocator = mem.Allocator;
+const logfire = @import("logfire");
+
+const API_BASE = "https://api.turbopuffer.com/v2/namespaces/";
+
+var api_key: ?[]const u8 = null;
+var namespace: []const u8 = "leaflet-search";
+
+// pre-formatted URL paths (built at init)
+var upsert_url_buf: [256]u8 = undefined;
+var upsert_url: []const u8 = "";
+var query_url_buf: [256]u8 = undefined;
+var query_url: []const u8 = "";
+
+/// Document metadata stored alongside vectors in turbopuffer.
+/// Fields mirror the SearchResultJson output so query results
+/// can be returned directly without a DB roundtrip.
+pub const VectorDoc = struct {
+    id: []const u8, // AT-URI (used as turbopuffer document ID)
+    vector: []const f32, // embedding (voyage-3-lite, 512 dims)
+    title: []const u8,
+    did: []const u8,
+    created_at: []const u8,
+    rkey: []const u8,
+    base_path: []const u8,
+    platform: []const u8,
+    path: []const u8,
+    has_publication: bool,
+};
+
+/// Result from an ANN query.
+pub const QueryResult = struct {
+    id: []const u8,
+    dist: f64,
+    title: []const u8,
+    did: []const u8,
+    created_at: []const u8,
+    rkey: []const u8,
+    base_path: []const u8,
+    platform: []const u8,
+    path: []const u8,
+    has_publication: bool,
+};
+
+/// Read config from environment. Call once at startup.
+pub fn init() void {
+    api_key = posix.getenv("TURBOPUFFER_API_KEY");
+    if (posix.getenv("TURBOPUFFER_NAMESPACE")) |ns| {
+        namespace = ns;
+    }
+
+    if (api_key != null) {
+        // pre-format URL paths
+        upsert_url = std.fmt.bufPrint(&upsert_url_buf, "{s}{s}", .{ API_BASE, namespace }) catch {
+            logfire.err("tpuf: namespace too long", .{});
+            api_key = null;
+            return;
+        };
+        query_url = std.fmt.bufPrint(&query_url_buf, "{s}{s}/query", .{ API_BASE, namespace }) catch {
+            logfire.err("tpuf: namespace too long", .{});
+            api_key = null;
+            return;
+        };
+        logfire.info("tpuf: initialized (namespace={s})", .{namespace});
+    } else {
+        logfire.info("tpuf: TURBOPUFFER_API_KEY not set, vector store disabled", .{});
+    }
+}
+
+pub fn isEnabled() bool {
+    return api_key != null;
+}
+
+/// Upsert document vectors with metadata. Creates the namespace on first write.
+/// Errors are logged but should not be fatal — the system works without vector search.
+pub fn upsert(allocator: Allocator, docs: []const VectorDoc) !void {
+    const key = api_key orelse return error.NotConfigured;
+    if (docs.len == 0) return;
+
+    const span = logfire.span("tpuf.upsert", .{
+        .count = @as(i64, @intCast(docs.len)),
+    });
+    defer span.end();
+
+    const body = try buildUpsertBody(allocator, docs);
+    defer allocator.free(body);
+
+    const response = try doRequest(allocator, key, upsert_url, body);
+    defer allocator.free(response);
+}
+
+/// ANN query: find the top_k most similar vectors to the given query vector.
+/// Returns results with full document metadata for direct use in search responses.
+pub fn query(allocator: Allocator, vector: []const f32, top_k: usize) ![]QueryResult {
+    const key = api_key orelse return error.NotConfigured;
+
+    const span = logfire.span("tpuf.query", .{
+        .top_k = @as(i64, @intCast(top_k)),
+    });
+    defer span.end();
+
+    const body = try buildQueryBody(allocator, vector, top_k);
+    defer allocator.free(body);
+
+    const response = try doRequest(allocator, key, query_url, body);
+    defer allocator.free(response);
+
+    return parseQueryResponse(allocator, response);
+}
+
+/// Delete vectors by ID. Can be batched into a single write call.
+pub fn delete(allocator: Allocator, ids: []const []const u8) !void {
+    const key = api_key orelse return error.NotConfigured;
+    if (ids.len == 0) return;
+
+    const span = logfire.span("tpuf.delete", .{
+        .count = @as(i64, @intCast(ids.len)),
+    });
+    defer span.end();
+
+    const body = try buildDeleteBody(allocator, ids);
+    defer allocator.free(body);
+
+    const response = try doRequest(allocator, key, upsert_url, body);
+    defer allocator.free(response);
+}
+
+// --- request builders ---
+
+fn buildUpsertBody(allocator: Allocator, docs: []const VectorDoc) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
+
+    try jw.objectField("distance_metric");
+    try jw.write("cosine_distance");
+
+    try jw.objectField("upsert_rows");
+    try jw.beginArray();
+
+    for (docs) |doc| {
+        try jw.beginObject();
+
+        try jw.objectField("id");
+        try jw.write(doc.id);
+
+        try jw.objectField("vector");
+        try jw.beginArray();
+        for (doc.vector) |v| try jw.write(v);
+        try jw.endArray();
+
+        try jw.objectField("title");
+        try jw.write(doc.title);
+        try jw.objectField("did");
+        try jw.write(doc.did);
+        try jw.objectField("created_at");
+        try jw.write(doc.created_at);
+        try jw.objectField("rkey");
+        try jw.write(doc.rkey);
+        try jw.objectField("base_path");
+        try jw.write(doc.base_path);
+        try jw.objectField("platform");
+        try jw.write(doc.platform);
+        try jw.objectField("path");
+        try jw.write(doc.path);
+        try jw.objectField("has_publication");
+        try jw.write(@as(u64, if (doc.has_publication) 1 else 0));
+
+        try jw.endObject();
+    }
+
+    try jw.endArray();
+    try jw.endObject();
+
+    return try output.toOwnedSlice();
+}
+
+fn buildQueryBody(allocator: Allocator, vector: []const f32, top_k: usize) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
+
+    // rank_by: ["vector", "ANN", [0.1, 0.2, ...]]
+    try jw.objectField("rank_by");
+    try jw.beginArray();
+    try jw.write("vector");
+    try jw.write("ANN");
+    try jw.beginArray();
+    for (vector) |v| try jw.write(v);
+    try jw.endArray();
+    try jw.endArray();
+
+    try jw.objectField("top_k");
+    try jw.write(top_k);
+
+    try jw.objectField("include_attributes");
+    try jw.beginArray();
+    for ([_][]const u8{
+        "title",
+        "did",
+        "created_at",
+        "rkey",
+        "base_path",
+        "platform",
+        "path",
+        "has_publication",
+    }) |attr| {
+        try jw.write(attr);
+    }
+    try jw.endArray();
+
+    try jw.endObject();
+
+    return try output.toOwnedSlice();
+}
+
+fn buildDeleteBody(allocator: Allocator, ids: []const []const u8) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
+
+    try jw.objectField("deletes");
+    try jw.beginArray();
+    for (ids) |id| try jw.write(id);
+    try jw.endArray();
+
+    try jw.endObject();
+
+    return try output.toOwnedSlice();
+}
+
+// --- response parsing ---
+
+fn parseQueryResponse(allocator: Allocator, response: []const u8) ![]QueryResult {
+    const parsed = json.parseFromSlice(json.Value, allocator, response, .{}) catch {
+        logfire.err("tpuf: failed to parse query response", .{});
+        return error.ParseError;
+    };
+    defer parsed.deinit();
+
+    const rows = switch (parsed.value) {
+        .object => |obj| obj.get("rows") orelse return &.{},
+        else => return &.{},
+    };
+
+    const items = switch (rows) {
+        .array => |arr| arr.items,
+        else => return &.{},
+    };
+
+    if (items.len == 0) return &.{};
+
+    var results = try allocator.alloc(QueryResult, items.len);
+    var count: usize = 0;
+
+    for (items) |item| {
+        const obj = switch (item) {
+            .object => |o| o,
+            else => continue,
+        };
+
+        results[count] = .{
+            .id = try allocator.dupe(u8, jsonStr(obj, "id")),
+            .dist = jsonFloat(obj, "$dist"),
+            .title = try allocator.dupe(u8, jsonStr(obj, "title")),
+            .did = try allocator.dupe(u8, jsonStr(obj, "did")),
+            .created_at = try allocator.dupe(u8, jsonStr(obj, "created_at")),
+            .rkey = try allocator.dupe(u8, jsonStr(obj, "rkey")),
+            .base_path = try allocator.dupe(u8, jsonStr(obj, "base_path")),
+            .platform = try allocator.dupe(u8, jsonStr(obj, "platform")),
+            .path = try allocator.dupe(u8, jsonStr(obj, "path")),
+            .has_publication = jsonUint(obj, "has_publication") != 0,
+        };
+        count += 1;
+    }
+
+    // shrink to actual count if any rows were skipped
+    if (count < items.len) {
+        return allocator.realloc(results, count) catch results[0..count];
+    }
+    return results;
+}
+
+// --- JSON helpers ---
+
+fn jsonStr(obj: json.ObjectMap, key: []const u8) []const u8 {
+    const val = obj.get(key) orelse return "";
+    return switch (val) {
+        .string => |s| s,
+        else => "",
+    };
+}
+
+fn jsonFloat(obj: json.ObjectMap, key: []const u8) f64 {
+    const val = obj.get(key) orelse return 0;
+    return switch (val) {
+        .float => |f| f,
+        .integer => |i| @floatFromInt(i),
+        else => 0,
+    };
+}
+
+fn jsonUint(obj: json.ObjectMap, key: []const u8) u64 {
+    const val = obj.get(key) orelse return 0;
+    return switch (val) {
+        .integer => |i| @intCast(i),
+        .float => |f| @intFromFloat(f),
+        else => 0,
+    };
+}
+
+// --- HTTP ---
+
+fn doRequest(allocator: Allocator, key: []const u8, url: []const u8, body: []const u8) ![]const u8 {
+    var client: http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    var auth_buf: [256]u8 = undefined;
+    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{key}) catch
+        return error.AuthTooLong;
+
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
+    errdefer response_body.deinit();
+
+    const res = client.fetch(.{
+        .location = .{ .url = url },
+        .method = .POST,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+            .authorization = .{ .override = auth },
+        },
+        .payload = body,
+        .response_writer = &response_body.writer,
+    }) catch |err| {
+        logfire.err("tpuf: request failed: {}", .{err});
+        return error.RequestFailed;
+    };
+
+    if (res.status != .ok) {
+        const resp_text = response_body.toOwnedSlice() catch "";
+        defer if (resp_text.len > 0) allocator.free(resp_text);
+        logfire.err("tpuf: API error {}: {s}", .{ res.status, resp_text[0..@min(resp_text.len, 200)] });
+        return error.ApiError;
+    }
+
+    return try response_body.toOwnedSlice();
+}

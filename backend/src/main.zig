@@ -4,6 +4,7 @@ const posix = std.posix;
 const Thread = std.Thread;
 const logfire = @import("logfire");
 const db = @import("db/mod.zig");
+const tpuf = @import("tpuf.zig");
 const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
@@ -81,6 +82,9 @@ fn initServices(allocator: std.mem.Allocator) void {
 
     // start stats buffer (background sync to Turso)
     metrics.buffer.init();
+
+    // init vector store (reads TURBOPUFFER_API_KEY from env)
+    tpuf.init();
 
     // start embedder (voyage-3-lite, 512 dims, 1 worker)
     ingest.embedder.start(allocator);
