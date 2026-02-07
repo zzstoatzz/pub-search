@@ -172,10 +172,18 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     };
     defer allocator.free(stmts);
 
+    // allocate args arrays so they survive until queryBatch executes
+    var args_ptrs = allocator.alloc([1][]const u8, docs.items.len) catch {
+        logfire.warn("embedder: failed to alloc args for embedded_at update", .{});
+        return docs.items.len;
+    };
+    defer allocator.free(args_ptrs);
+
     for (docs.items, 0..) |doc, i| {
+        args_ptrs[i] = .{doc.uri};
         stmts[i] = .{
             .sql = "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
-            .args = &.{doc.uri},
+            .args = &args_ptrs[i],
         };
     }
 
