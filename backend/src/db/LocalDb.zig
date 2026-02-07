@@ -10,10 +10,11 @@ const logfire = @import("logfire");
 const LocalDb = @This();
 
 conn: ?zqlite.Conn = null,
+read_conn: ?zqlite.Conn = null, // separate read connection — never blocked by writes in WAL mode
 allocator: Allocator,
 is_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 needs_resync: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-mutex: std.Thread.Mutex = .{},
+mutex: std.Thread.Mutex = .{}, // protects write conn only
 path: []const u8 = "",
 consecutive_errors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
@@ -70,13 +71,20 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
 
     const flags = zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite;
     self.conn = zqlite.open(path, flags) catch |err| {
-        std.debug.print("local db: failed to open: {}\n", .{err});
+        std.debug.print("local db: failed to open write conn: {}\n", .{err});
         return err;
     };
 
     // enable WAL for better concurrency
     _ = self.conn.?.exec("PRAGMA journal_mode=WAL", .{}) catch {};
     _ = self.conn.?.exec("PRAGMA busy_timeout=5000", .{}) catch {};
+
+    // open separate read connection — WAL mode allows concurrent reads + writes
+    self.read_conn = zqlite.open(path, zqlite.OpenFlags.ReadOnly) catch |err| {
+        std.debug.print("local db: failed to open read conn: {}\n", .{err});
+        return err;
+    };
+    _ = self.read_conn.?.exec("PRAGMA busy_timeout=1000", .{}) catch {};
 
     // check integrity - if corrupt, delete and recreate
     if (!self.checkIntegrity()) {
@@ -96,6 +104,8 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
 }
 
 pub fn deinit(self: *LocalDb) void {
+    if (self.read_conn) |c| c.close();
+    self.read_conn = null;
     if (self.conn) |c| c.close();
     self.conn = null;
 }
@@ -269,17 +279,14 @@ pub const Rows = struct {
     }
 };
 
-/// Execute a SELECT query with comptime SQL, returns row iterator
+/// Execute a SELECT query using the read connection (never blocked by writes)
 pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
     const span = logfire.span("db.local.query", .{
         .sql = truncateSql(sql),
     });
     defer span.end();
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
-    const c = self.conn orelse return error.NotOpen;
+    const c = self.read_conn orelse return error.NotOpen;
     const rows = c.rows(sql, args) catch |e| {
         logfire.err("db.local.query failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
