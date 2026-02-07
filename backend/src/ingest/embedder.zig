@@ -165,15 +165,25 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
         return error.TpufUpsertFailed;
     };
 
-    // mark docs as embedded in turso (so they won't be re-processed)
-    for (docs.items) |doc| {
-        client.exec(
-            "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
-            &.{doc.uri},
-        ) catch |err| {
-            logfire.err("embedder: failed to mark {s} as embedded: {}", .{ doc.uri, err });
+    // mark docs as embedded in turso (single batch call)
+    var stmts = allocator.alloc(db.Client.Statement, docs.items.len) catch {
+        logfire.warn("embedder: failed to alloc stmts for embedded_at update", .{});
+        return docs.items.len;
+    };
+    defer allocator.free(stmts);
+
+    for (docs.items, 0..) |doc, i| {
+        stmts[i] = .{
+            .sql = "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
+            .args = &.{doc.uri},
         };
     }
+
+    var batch_result = client.queryBatch(stmts) catch |err| {
+        logfire.warn("embedder: embedded_at batch update failed: {}, docs still embedded in tpuf", .{err});
+        return docs.items.len;
+    };
+    batch_result.deinit();
 
     return docs.items.len;
 }
