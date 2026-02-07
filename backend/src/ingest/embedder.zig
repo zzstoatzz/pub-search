@@ -165,33 +165,15 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
         return error.TpufUpsertFailed;
     };
 
-    // mark docs as embedded in turso (single batch call)
-    var stmts = allocator.alloc(db.Client.Statement, docs.items.len) catch {
-        logfire.warn("embedder: failed to alloc stmts for embedded_at update", .{});
-        return docs.items.len;
-    };
-    defer allocator.free(stmts);
-
-    // allocate args arrays so they survive until queryBatch executes
-    var args_ptrs = allocator.alloc([1][]const u8, docs.items.len) catch {
-        logfire.warn("embedder: failed to alloc args for embedded_at update", .{});
-        return docs.items.len;
-    };
-    defer allocator.free(args_ptrs);
-
-    for (docs.items, 0..) |doc, i| {
-        args_ptrs[i] = .{doc.uri};
-        stmts[i] = .{
-            .sql = "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
-            .args = &args_ptrs[i],
+    // mark docs as embedded in turso (one exec per doc — simpler than batch)
+    for (docs.items) |doc| {
+        client.exec(
+            "UPDATE documents SET embedded_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE uri = ?",
+            &.{doc.uri},
+        ) catch |err| {
+            logfire.warn("embedder: failed to mark {s}: {}", .{ doc.uri, err });
         };
     }
-
-    var batch_result = client.queryBatch(stmts) catch |err| {
-        logfire.warn("embedder: embedded_at batch update failed: {}, docs still embedded in tpuf", .{err});
-        return docs.items.len;
-    };
-    batch_result.deinit();
 
     return docs.items.len;
 }
