@@ -21,6 +21,7 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 const API_BASE = "https://api.turbopuffer.com/v2/namespaces/";
 
 var api_key: ?[]const u8 = null;
+var voyage_api_key: ?[]const u8 = null;
 var namespace: []const u8 = "leaflet-search";
 
 // pre-formatted URL paths (built at init)
@@ -84,10 +85,109 @@ pub fn init() void {
     } else {
         logfire.info("tpuf: TURBOPUFFER_API_KEY not set, vector store disabled", .{});
     }
+
+    voyage_api_key = posix.getenv("VOYAGE_API_KEY");
+    if (voyage_api_key != null) {
+        logfire.info("tpuf: voyage query embedding enabled", .{});
+    }
 }
 
 pub fn isEnabled() bool {
     return api_key != null;
+}
+
+pub fn isSemanticEnabled() bool {
+    return api_key != null and voyage_api_key != null;
+}
+
+/// Embed a search query via Voyage API (input_type="query" for asymmetric search).
+/// Returns a 512-dim f32 vector. Caller owns the returned slice.
+pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
+    const vk = voyage_api_key orelse return error.NotConfigured;
+
+    const span = logfire.span("tpuf.embed_query", .{});
+    defer span.end();
+
+    // build request body
+    var body_buf: std.Io.Writer.Allocating = .init(allocator);
+    errdefer body_buf.deinit();
+
+    var jw: json.Stringify = .{ .writer = &body_buf.writer };
+    try jw.beginObject();
+    try jw.objectField("model");
+    try jw.write("voyage-3-lite");
+    try jw.objectField("input_type");
+    try jw.write("query");
+    try jw.objectField("input");
+    try jw.beginArray();
+    try jw.write(text);
+    try jw.endArray();
+    try jw.endObject();
+
+    const body = try body_buf.toOwnedSlice();
+    defer allocator.free(body);
+
+    // make request
+    var http_client: http.Client = .{ .allocator = allocator };
+    defer http_client.deinit();
+
+    var auth_buf: [256]u8 = undefined;
+    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{vk}) catch
+        return error.AuthTooLong;
+
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
+    errdefer response_body.deinit();
+
+    const res = http_client.fetch(.{
+        .location = .{ .url = "https://api.voyageai.com/v1/embeddings" },
+        .method = .POST,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+            .authorization = .{ .override = auth },
+        },
+        .payload = body,
+        .response_writer = &response_body.writer,
+    }) catch |err| {
+        logfire.err("tpuf: voyage embed_query failed: {}", .{err});
+        return error.RequestFailed;
+    };
+
+    if (res.status != .ok) {
+        const resp_text = response_body.toOwnedSlice() catch "";
+        defer if (resp_text.len > 0) allocator.free(resp_text);
+        logfire.err("tpuf: voyage embed_query error {}: {s}", .{ res.status, resp_text[0..@min(resp_text.len, 200)] });
+        return error.ApiError;
+    }
+
+    const response_text = try response_body.toOwnedSlice();
+    defer allocator.free(response_text);
+
+    // parse data[0].embedding
+    const parsed = json.parseFromSlice(json.Value, allocator, response_text, .{}) catch {
+        logfire.err("tpuf: failed to parse voyage response", .{});
+        return error.ParseError;
+    };
+    defer parsed.deinit();
+
+    const data = parsed.value.object.get("data") orelse return error.ParseError;
+    if (data != .array or data.array.items.len == 0) return error.ParseError;
+
+    const embedding_val = data.array.items[0].object.get("embedding") orelse return error.ParseError;
+    if (embedding_val != .array) return error.ParseError;
+
+    const dims = embedding_val.array.items;
+    const vector = try allocator.alloc(f32, dims.len);
+    errdefer allocator.free(vector);
+
+    for (dims, 0..) |val, i| {
+        vector[i] = switch (val) {
+            .float => @floatCast(val.float),
+            .integer => @floatFromInt(val.integer),
+            else => return error.ParseError,
+        };
+    }
+
+    return vector;
 }
 
 /// Hash a URI to a tpuf-safe ID (max 64 bytes).

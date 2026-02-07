@@ -103,12 +103,15 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
     const platform_filter = parseQueryParam(alloc, target, "platform") catch null;
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
+    const mode_str = parseQueryParam(alloc, target, "mode") catch null;
+    const mode = search.SearchMode.fromString(mode_str);
 
     // span attributes are now copied internally, safe to use arena strings
     const span = logfire.span("http.search", .{
         .query = query,
         .tag = tag_filter,
         .platform = platform_filter,
+        .mode = @tagName(mode),
     });
     defer span.end();
 
@@ -117,8 +120,8 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
         return;
     }
 
-    // perform FTS search - arena handles cleanup
-    const results = search.search(alloc, query, tag_filter, platform_filter, since_filter) catch |err| {
+    // perform search - arena handles cleanup
+    const results = search.search(alloc, query, tag_filter, platform_filter, since_filter, mode) catch |err| {
         logfire.err("search failed: {}", .{err});
         metrics.stats.recordError();
         return err;

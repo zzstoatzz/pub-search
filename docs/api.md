@@ -7,7 +7,7 @@ base URL: `https://leaflet-search-backend.fly.dev`
 ### search
 
 ```
-GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>
+GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>&mode=<mode>
 ```
 
 full-text search across documents and publications.
@@ -19,6 +19,7 @@ full-text search across documents and publications.
 | `tag` | string | no | filter by tag (documents only) |
 | `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `other` |
 | `since` | string | no | ISO date, filter to documents created after |
+| `mode` | string | no | `keyword` (default) or `semantic`. semantic uses vector similarity via voyage embeddings + turbopuffer ANN. ignores `tag` and `since` filters. |
 
 *at least one of `q` or `tag` required
 

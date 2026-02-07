@@ -6,6 +6,17 @@ const logfire = @import("logfire");
 const db = @import("db/mod.zig");
 const tpuf = @import("tpuf.zig");
 
+pub const SearchMode = enum {
+    keyword,
+    semantic,
+
+    pub fn fromString(s: ?[]const u8) SearchMode {
+        const str = s orelse return .keyword;
+        if (std.mem.eql(u8, str, "semantic")) return .semantic;
+        return .keyword;
+    }
+};
+
 // JSON output type for search results
 const SearchResultJson = struct {
     type: []const u8,
@@ -263,7 +274,9 @@ const PubSearch = zql.Query(
     \\ORDER BY rank + (julianday('now') - julianday(p.created_at)) / 30.0 LIMIT 10
 );
 
-pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
+pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, mode: SearchMode) ![]const u8 {
+    if (mode == .semantic) return searchSemantic(alloc, query, platform_filter);
+
     // try local SQLite first (faster for FTS queries)
     if (db.getLocalDb()) |local| {
         if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter)) |result| {
@@ -644,6 +657,72 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
             .path = r.path,
         });
         count += 1;
+    }
+    try jw.endArray();
+
+    return try output.toOwnedSlice();
+}
+
+/// Semantic search: embed query via Voyage, ANN search via turbopuffer.
+fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const u8) ![]const u8 {
+    if (query.len == 0) return try alloc.dupe(u8, "[]");
+
+    if (!tpuf.isSemanticEnabled()) {
+        return try alloc.dupe(u8, "{\"error\":\"semantic search not available\"}");
+    }
+
+    const span = logfire.span("search.semantic", .{});
+    defer span.end();
+
+    // embed query (input_type="query" for asymmetric search)
+    const vector = tpuf.embedQuery(alloc, query) catch |err| {
+        logfire.warn("search.semantic: embed failed: {}", .{err});
+        return try alloc.dupe(u8, "{\"error\":\"embedding failed\"}");
+    };
+    defer alloc.free(vector);
+
+    // ANN query
+    const results = tpuf.query(alloc, vector, 20) catch |err| {
+        logfire.warn("search.semantic: tpuf query failed: {}", .{err});
+        return try alloc.dupe(u8, "{\"error\":\"vector search failed\"}");
+    };
+    defer {
+        for (results) |r| {
+            alloc.free(r.id);
+            alloc.free(r.uri);
+            alloc.free(r.title);
+            alloc.free(r.did);
+            alloc.free(r.created_at);
+            alloc.free(r.rkey);
+            alloc.free(r.base_path);
+            alloc.free(r.platform);
+            alloc.free(r.path);
+        }
+        alloc.free(results);
+    }
+
+    // serialize results, post-filtering by platform if set
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (results) |r| {
+        if (platform_filter) |pf| {
+            if (!std.mem.eql(u8, r.platform, pf)) continue;
+        }
+        try jw.write(SearchResultJson{
+            .type = if (r.has_publication) "article" else "looseleaf",
+            .uri = r.uri,
+            .did = r.did,
+            .title = r.title,
+            .snippet = "",
+            .createdAt = r.created_at,
+            .rkey = r.rkey,
+            .basePath = r.base_path,
+            .platform = r.platform,
+            .path = r.path,
+        });
     }
     try jw.endArray();
 
