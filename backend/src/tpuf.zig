@@ -35,7 +35,7 @@ var query_url: []const u8 = "";
 /// can be returned directly without a DB roundtrip.
 pub const VectorDoc = struct {
     id: []const u8, // hashed ID for tpuf (via hashId)
-    vector: []const f32, // embedding (voyage-3-lite, 512 dims)
+    vector: []const f32, // embedding (voyage-4-lite, 1024 dims)
     uri: []const u8, // full AT-URI (stored as metadata)
     title: []const u8,
     did: []const u8,
@@ -101,7 +101,7 @@ pub fn isSemanticEnabled() bool {
 }
 
 /// Embed a search query via Voyage API (input_type="query" for asymmetric search).
-/// Returns a 512-dim f32 vector. Caller owns the returned slice.
+/// Returns a 1024-dim f32 vector. Caller owns the returned slice.
 pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     const vk = voyage_api_key orelse return error.NotConfigured;
 
@@ -115,9 +115,11 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     var jw: json.Stringify = .{ .writer = &body_buf.writer };
     try jw.beginObject();
     try jw.objectField("model");
-    try jw.write("voyage-3-lite");
+    try jw.write("voyage-4-lite");
     try jw.objectField("input_type");
     try jw.write("query");
+    try jw.objectField("output_dimension");
+    try jw.write(1024);
     try jw.objectField("input");
     try jw.beginArray();
     try jw.write(text);

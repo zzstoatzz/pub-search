@@ -86,7 +86,7 @@ fn initServices(allocator: std.mem.Allocator) void {
     // init vector store (reads TURBOPUFFER_API_KEY from env)
     tpuf.init();
 
-    // start embedder (voyage-3-lite, 512 dims, 1 worker)
+    // start embedder (voyage-4-lite, 1024 dims, 1 worker)
     ingest.embedder.start(allocator);
 
     // start tap consumer
