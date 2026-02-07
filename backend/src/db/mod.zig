@@ -15,11 +15,13 @@ pub const BatchResult = result.BatchResult;
 // global state
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var client: ?Client = null;
+var sync_client: ?Client = null;
 var local_db: ?LocalDb = null;
 
 /// Initialize Turso client only (fast, call synchronously at startup)
 pub fn initTurso() !void {
     client = try Client.init(gpa.allocator());
+    sync_client = try Client.init(gpa.allocator());
     try schema.init(&client.?);
 }
 
@@ -64,8 +66,8 @@ pub fn getLocalDbRaw() ?*LocalDb {
 
 /// Start background sync thread (call from main after db.init)
 pub fn startSync() void {
-    const c = getClient() orelse {
-        std.debug.print("sync: no turso client, skipping\n", .{});
+    const c = if (sync_client) |*sc| sc else {
+        std.debug.print("sync: no sync client, skipping\n", .{});
         return;
     };
     const local = getLocalDbRaw() orelse {
