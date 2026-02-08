@@ -2,6 +2,7 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const db = @import("db/mod.zig");
+const logfire = @import("logfire");
 const timing = @import("metrics.zig").timing;
 
 // JSON output types
@@ -73,7 +74,9 @@ pub fn fetch(alloc: Allocator) !Data {
     if (db.getLocalDb()) |local| {
         if (fetchLocal(alloc, local)) |result| {
             return result;
-        } else |_| {}
+        } else |err| {
+            logfire.warn("dashboard: fetchLocal failed: {s}, falling back to turso batch", .{@errorName(err)});
+        }
     }
 
     // fall back to Turso (slow)
@@ -91,6 +94,9 @@ pub fn fetch(alloc: Allocator) !Data {
 
     // extract stats (query 0)
     const stats_row = batch.getFirst(0);
+    if (stats_row == null) {
+        logfire.warn("dashboard: turso batch returned no stats row", .{});
+    }
     const started_at = if (stats_row) |r| r.int(4) else 0;
     const searches = if (stats_row) |r| r.int(2) else 0;
     const publications = if (stats_row) |r| r.int(1) else 0;

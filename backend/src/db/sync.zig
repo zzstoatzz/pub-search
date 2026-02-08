@@ -40,7 +40,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         // fetch from Turso (no lock held — search can use local DB)
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
-            \\  platform, source_collection, path, base_path, has_publication, indexed_at
+            \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at
             \\FROM documents
             \\ORDER BY uri
             \\LIMIT 500 OFFSET ?
@@ -236,7 +236,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
     {
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
-            \\  platform, source_collection, path, base_path, has_publication, indexed_at
+            \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at
             \\FROM documents
             \\WHERE indexed_at >= ?
             \\ORDER BY indexed_at
@@ -278,8 +278,8 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
     conn.exec(
         \\INSERT OR REPLACE INTO documents
         \\(uri, did, rkey, title, content, created_at, publication_uri,
-        \\ platform, source_collection, path, base_path, has_publication, indexed_at)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\ platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     , .{
         row.text(0),  // uri
         row.text(1),  // did
@@ -294,6 +294,7 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
         row.text(10), // base_path
         row.int(11),  // has_publication
         row.text(12), // indexed_at
+        row.text(13), // embedded_at
     }) catch |err| {
         return err;
     };
