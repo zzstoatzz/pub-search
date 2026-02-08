@@ -16,7 +16,7 @@ class SearchResult(BaseModel):
     createdAt: str = ""
     rkey: str
     basePath: str = ""
-    platform: Literal["leaflet", "pckt", "offprint", "greengale", "other"] = "leaflet"
+    platform: Literal["leaflet", "pckt", "offprint", "greengale", "whitewind", "other"] = "leaflet"
     path: str = ""
     source: str = ""
     score: float = 0.0

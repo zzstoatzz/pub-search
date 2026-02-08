@@ -23,7 +23,7 @@ def usage_guide() -> str:
     return """\
 # pub-search MCP
 
-search ATProto publishing platforms: leaflet, pckt, offprint, greengale.
+search ATProto publishing platforms: leaflet, pckt, offprint, greengale, whitewind.
 
 ## tools
 
@@ -79,7 +79,7 @@ def search_tips() -> str:
 # -----------------------------------------------------------------------------
 
 
-Platform = Literal["leaflet", "pckt", "offprint", "greengale", "other"]
+Platform = Literal["leaflet", "pckt", "offprint", "greengale", "whitewind", "other"]
 
 
 def _extract_results(data: Any) -> list[dict[str, Any]]:
@@ -104,7 +104,7 @@ async def search(
     args:
         query: search query (titles and content)
         tag: filter by tag
-        platform: filter by platform (leaflet, pckt, offprint, greengale, other)
+        platform: filter by platform (leaflet, pckt, offprint, greengale, whitewind, other)
         since: ISO date - only documents created after this date
         limit: max results (default 5, max 40)
 
@@ -147,7 +147,7 @@ async def search_semantic(
 
     args:
         query: natural language query
-        platform: filter by platform (leaflet, pckt, offprint, greengale, other)
+        platform: filter by platform (leaflet, pckt, offprint, greengale, whitewind, other)
         limit: max results (default 5, max 40)
 
     returns:
@@ -184,7 +184,7 @@ async def search_hybrid(
 
     args:
         query: search query
-        platform: filter by platform (leaflet, pckt, offprint, greengale, other)
+        platform: filter by platform (leaflet, pckt, offprint, greengale, whitewind, other)
         limit: max results (default 5, max 40)
 
     returns:
