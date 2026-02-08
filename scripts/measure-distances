@@ -1,0 +1,155 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Measure cosine distance distributions from tpuf for various queries.
+
+Embeds queries via Voyage, runs ANN search on tpuf, and prints the
+distance distribution so we can pick an empirical threshold.
+
+Usage:
+    ./scripts/measure-distances
+"""
+
+import os
+import subprocess
+import sys
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+TPUF_NAMESPACE = "leaflet-search"
+FLY_APP = "leaflet-search-backend"
+
+TEST_QUERIES = [
+    "community builders",
+    "consciousness",
+    "rust programming",
+    "atproto federation",
+    "machine learning",
+    "philosophy of mind",
+    "web development",
+    "decentralized social",
+]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    voyage_api_key: str
+
+
+def get_tpuf_key() -> str:
+    result = subprocess.run(
+        ["fly", "-a", FLY_APP, "ssh", "console", "-C", "printenv TURBOPUFFER_API_KEY"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise Exception(f"fly ssh failed: {result.stderr.strip()}")
+    key = result.stdout.strip().splitlines()[-1].strip()
+    if not key.startswith("tpuf_"):
+        raise Exception(f"unexpected key format: {key[:10]}...")
+    return key
+
+
+def embed_query(settings: Settings, text: str) -> list[float]:
+    resp = httpx.post(
+        "https://api.voyageai.com/v1/embeddings",
+        headers={
+            "Authorization": f"Bearer {settings.voyage_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "voyage-4-lite",
+            "input_type": "query",
+            "output_dimension": 1024,
+            "input": [text],
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["data"][0]["embedding"]
+
+
+def tpuf_query(tpuf_key: str, vector: list[float], top_k: int = 40) -> list[dict]:
+    resp = httpx.post(
+        f"https://api.turbopuffer.com/v2/namespaces/{TPUF_NAMESPACE}/query",
+        headers={
+            "Authorization": f"Bearer {tpuf_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "rank_by": ["vector", "ANN", vector],
+            "top_k": top_k,
+            "include_attributes": ["uri", "title"],
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json().get("rows", [])
+
+
+def main():
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        print("required: VOYAGE_API_KEY (or .env file)", file=sys.stderr)
+        sys.exit(1)
+
+    print("getting tpuf key from fly...", end="", flush=True)
+    tpuf_key = get_tpuf_key()
+    print(f" ok\n")
+
+    for query in TEST_QUERIES:
+        print(f"=== {query!r} ===")
+        vector = embed_query(settings, query)
+        rows = tpuf_query(tpuf_key, vector)
+
+        if not rows:
+            print("  (no results)")
+            print()
+            continue
+
+        dists = [r["$dist"] for r in rows]
+        titles = [r.get("title", "?") for r in rows]
+
+        # show distribution
+        print(f"  results: {len(dists)}")
+        print(f"  min dist: {min(dists):.4f}  (best match)")
+        print(f"  max dist: {max(dists):.4f}  (worst match)")
+        print(f"  median:   {sorted(dists)[len(dists)//2]:.4f}")
+
+        # histogram of distance buckets
+        buckets = {}
+        for d in dists:
+            b = round(d, 1)  # bucket to nearest 0.1
+            buckets[b] = buckets.get(b, 0) + 1
+        print(f"  buckets:  ", end="")
+        for b in sorted(buckets):
+            print(f"[{b:.1f}]={buckets[b]}", end=" ")
+        print()
+
+        # count at various thresholds
+        for t in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
+            n = sum(1 for d in dists if d <= t)
+            print(f"  dist<={t}: {n}/{len(dists)}")
+
+        # top 5 + bottom 5
+        print(f"  top 5:")
+        for r in rows[:5]:
+            title = r.get("title", "?")[:60]
+            print(f"    {r['$dist']:.4f}  {title}")
+        print(f"  bottom 5:")
+        for r in rows[-5:]:
+            title = r.get("title", "?")[:60]
+            print(f"    {r['$dist']:.4f}  {title}")
+        print()
+
+
+if __name__ == "__main__":
+    main()
