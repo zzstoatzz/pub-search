@@ -893,10 +893,6 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     var count: usize = 0;
     for (results) |r| {
         if (count >= 20) break;
-        // skip results with high cosine distance (low similarity)
-        // empirical: voyage-4-lite 1024d best matches range 0.32-0.51 across queries,
-        // 0.6 captures all relevant results while cutting noise (measured via scripts/measure-distances)
-        if (r.dist > 0.6) continue;
         // skip documents with empty/test titles
         if (r.title.len == 0) continue;
         if (platform_filter) |pf| {
