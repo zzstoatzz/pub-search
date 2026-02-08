@@ -55,9 +55,6 @@ pub fn getStats() Stats {
 }
 
 fn getStatsLocal(local: *db.LocalDb) !Stats {
-    // use cached stats from stats_buffer (instant, no Turso round-trip)
-    const cached = stats_buffer.getCachedStats() orelse return error.CacheNotInitialized;
-
     // get document counts from local (fast)
     var rows = try local.query(
         \\SELECT
@@ -68,15 +65,17 @@ fn getStatsLocal(local: *db.LocalDb) !Stats {
     defer rows.deinit();
     const row = rows.next() orelse return error.NoRows;
 
+    // use cached stats from stats_buffer if available (searches, errors, etc.)
+    const cached = stats_buffer.getCachedStats();
     return .{
         .documents = row.int(0),
         .publications = row.int(1),
         .embeddings = row.int(2),
-        .searches = cached.searches,
-        .errors = cached.errors,
-        .started_at = cached.started_at,
-        .cache_hits = cached.cache_hits,
-        .cache_misses = cached.cache_misses,
+        .searches = if (cached) |c| c.searches else 0,
+        .errors = if (cached) |c| c.errors else 0,
+        .started_at = if (cached) |c| c.started_at else 0,
+        .cache_hits = if (cached) |c| c.cache_hits else 0,
+        .cache_misses = if (cached) |c| c.cache_misses else 0,
     };
 }
 

@@ -145,9 +145,10 @@ fn syncToTurso() void {
     // sync stats if any changed
     if (searches != 0 or errors != 0 or cache_hits != 0 or cache_misses != 0) {
         syncStatsDelta(c, searches, errors, cache_hits, cache_misses);
-        // refresh cache after writing (base values changed)
-        refreshCachedStats(c);
     }
+
+    // always refresh cache (recovers from init failure, picks up external changes)
+    refreshCachedStats(c);
 
     // sync popular searches
     syncPopularSearches(c);
