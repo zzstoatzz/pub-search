@@ -67,12 +67,14 @@ const Handler = struct {
     allocator: Allocator,
     client: *websocket.Client,
     msg_count: usize = 0,
+    ack_count: usize = 0,
+    no_id_count: usize = 0,
     ack_buf: [64]u8 = undefined,
 
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
         self.msg_count += 1;
         if (self.msg_count % 1000 == 0) {
-            logfire.info("tap: processed {d} messages", .{self.msg_count});
+            logfire.info("tap: processed {d} messages, acks sent: {d}, no-id: {d}", .{ self.msg_count, self.ack_count, self.no_id_count });
         }
 
         // extract message ID for ACK
@@ -87,6 +89,11 @@ const Handler = struct {
         // send ACK if we have a message ID
         if (msg_id) |id| {
             self.sendAck(id);
+        } else {
+            self.no_id_count += 1;
+            if (self.no_id_count <= 5) {
+                logfire.warn("tap: message has no id, first {d} bytes: {s}", .{ @min(data.len, 100), data[0..@min(data.len, 100)] });
+            }
         }
     }
 
@@ -97,7 +104,12 @@ const Handler = struct {
         };
         self.client.write(@constCast(ack_json)) catch |err| {
             logfire.err("tap: failed to send ACK: {}", .{err});
+            return;
         };
+        self.ack_count += 1;
+        if (self.ack_count <= 3) {
+            logfire.info("tap: ACK sent for id={d}, ack_json={s}", .{ msg_id, ack_json });
+        }
     }
 
     pub fn close(_: *Handler) void {}
