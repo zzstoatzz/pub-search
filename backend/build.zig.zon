@@ -14,7 +14,7 @@
         },
         .zat = .{
             .url = "https://tangled.sh/zat.dev/zat/archive/main",
-            .hash = "zat-0.1.0-5PuC7tmRAQCPov0UFkeXFBgfytd6_P3GZPSlvy9OvvgW",
+            .hash = "zat-0.1.0-5PuC7jDWAQAVwiawLH5e6e9rRtDFb4N14s9yAbH4vkI0",
         },
         .zqlite = .{
             .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
