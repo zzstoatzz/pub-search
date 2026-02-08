@@ -351,6 +351,8 @@ fn handleStats(request: *http.Server.Request) !void {
     try jw.write(db_stats.searches);
     try jw.objectField("errors");
     try jw.write(db_stats.errors);
+    try jw.objectField("started_at");
+    try jw.write(db_stats.started_at);
     try jw.objectField("cache_hits");
     try jw.write(db_stats.cache_hits);
     try jw.objectField("cache_misses");

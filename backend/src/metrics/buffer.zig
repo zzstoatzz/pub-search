@@ -159,15 +159,28 @@ fn refreshCachedStats(c: *db.Client) void {
         \\SELECT total_searches, total_errors, service_started_at,
         \\       COALESCE(cache_hits, 0), COALESCE(cache_misses, 0)
         \\FROM stats WHERE id = 1
-    , &.{}) catch return;
+    , &.{}) catch |err| {
+        logfire.warn("stats_buffer: refresh query failed: {}", .{err});
+        return;
+    };
     defer res.deinit();
 
-    const row = res.first() orelse return;
-    cached_base_searches.store(row.int(0), .release);
-    cached_base_errors.store(row.int(1), .release);
-    cached_started_at.store(row.int(2), .release);
+    const row = res.first() orelse {
+        logfire.warn("stats_buffer: stats table has no row with id=1", .{});
+        return;
+    };
+    const searches = row.int(0);
+    const errors = row.int(1);
+    const started = row.int(2);
+    cached_base_searches.store(searches, .release);
+    cached_base_errors.store(errors, .release);
+    cached_started_at.store(started, .release);
     cached_base_cache_hits.store(row.int(3), .release);
     cached_base_cache_misses.store(row.int(4), .release);
+
+    if (!cache_initialized.load(.acquire)) {
+        logfire.info("stats_buffer: cache initialized (searches={d}, started_at={d})", .{ searches, started });
+    }
     cache_initialized.store(true, .release);
 }
 
