@@ -749,6 +749,10 @@
           // remove existing "load more" button and related section before appending
           const existingLoadMore = resultsDiv.querySelector('.load-more');
           if (existingLoadMore) existingLoadMore.remove();
+          const existingRelated = resultsDiv.querySelector('.related-section');
+          if (existingRelated) existingRelated.remove();
+          const existingRelatedLoading = resultsDiv.querySelector('.related-loading');
+          if (existingRelatedLoading) existingRelatedLoading.remove();
           resultsDiv.insertAdjacentHTML('beforeend', html);
         } else {
           resultsDiv.innerHTML = html;
