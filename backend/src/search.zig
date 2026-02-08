@@ -283,6 +283,19 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
     return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter);
 }
 
+/// Check if we've already seen a result from the same author with the same title.
+/// Used to collapse cross-platform duplicates (same content published to multiple ATProto apps).
+fn isDuplicateAuthorTitle(seen: *std.StringHashMap(void), alloc: Allocator, did: []const u8, title: []const u8) !bool {
+    if (did.len == 0 or title.len == 0) return false;
+    const key = try std.fmt.allocPrint(alloc, "{s}\x00{s}", .{ did, title });
+    const result = try seen.getOrPut(key);
+    if (result.found_existing) {
+        alloc.free(key);
+        return true;
+    }
+    return false;
+}
+
 /// Keyword search: FTS5 via local SQLite or Turso fallback.
 fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
     // try local SQLite first (faster for FTS queries)
@@ -316,6 +329,10 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     // track seen URIs for deduplication (content match + base_path match)
     var seen_uris = std.StringHashMap(void).init(alloc);
     defer seen_uris.deinit();
+
+    // track seen (did, title) pairs for cross-platform dedup
+    var seen_authors = std.StringHashMap(void).init(alloc);
+    defer seen_authors.deinit();
 
     // build batch of queries to execute in single HTTP request
     var statements: [3]db.Client.Statement = undefined;
@@ -364,6 +381,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     if (doc_sql != null) {
         for (batch.get(query_idx)) |row| {
             const doc = Doc.fromRow(row);
+            if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
             try jw.write(doc.toJson());
@@ -375,7 +393,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     if (run_basepath) {
         for (batch.get(query_idx)) |row| {
             const doc = Doc.fromRow(row);
-            if (!seen_uris.contains(doc.uri)) {
+            if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                 try jw.write(doc.toJson());
             }
         }
@@ -414,6 +432,10 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
     var seen_uris = std.StringHashMap(void).init(alloc);
     defer seen_uris.deinit();
 
+    // track seen (did, title) pairs for cross-platform dedup
+    var seen_authors = std.StringHashMap(void).init(alloc);
+    defer seen_authors.deinit();
+
     // document content search
     if (platform_filter) |platform| {
         var rows = try local.query(
@@ -430,6 +452,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
         while (rows.next()) |row| {
             const doc = Doc.fromLocalRow(row);
+            if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
             try jw.write(doc.toJson());
@@ -450,7 +473,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
         while (bp_rows.next()) |row| {
             const doc = Doc.fromLocalRow(row);
-            if (!seen_uris.contains(doc.uri)) {
+            if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                 try jw.write(doc.toJson());
             }
         }
@@ -474,6 +497,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             var doc_count: u32 = 0;
             while (rows.next()) |row| {
                 const doc = Doc.fromLocalRow(row);
+                if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 const uri_dupe = try alloc.dupe(u8, doc.uri);
                 try seen_uris.put(uri_dupe, {});
                 try jw.write(doc.toJson());
@@ -501,7 +525,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             var bp_count: u32 = 0;
             while (bp_rows.next()) |row| {
                 const doc = Doc.fromLocalRow(row);
-                if (!seen_uris.contains(doc.uri)) {
+                if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                     try jw.write(doc.toJson());
                 }
                 bp_count += 1;
@@ -658,12 +682,17 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
+    // track seen (did, title) pairs for cross-platform dedup
+    var seen_authors = std.StringHashMap(void).init(alloc);
+    defer seen_authors.deinit();
+
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     var count: usize = 0;
     for (results) |r| {
         if (std.mem.eql(u8, r.uri, uri)) continue;
         if (count >= limit) break;
+        if (try isDuplicateAuthorTitle(&seen_authors, alloc, r.did, r.title)) continue;
         try jw.write(SearchResultJson{
             .type = if (r.has_publication) "article" else "looseleaf",
             .uri = r.uri,
@@ -841,10 +870,17 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
 
+    // track seen (did, title) pairs for cross-platform dedup
+    var seen_authors = std.StringHashMap(void).init(alloc);
+    defer seen_authors.deinit();
+
     for (scored.items[0..limit]) |entry| {
         const bits = source_bits.get(entry.uri) orelse 0;
         // prefer keyword version (has FTS snippet)
         const obj = kw_objects.get(entry.uri) orelse sem_objects.get(entry.uri) orelse continue;
+
+        // cross-platform dedup: skip if same author+title already emitted
+        if (try isDuplicateAuthorTitle(&seen_authors, alloc, jsonStr(obj, "did"), jsonStr(obj, "title"))) continue;
 
         const source_label: []const u8 = switch (bits) {
             0b01 => "keyword",
@@ -932,6 +968,10 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     var seen: [20][]const u8 = undefined;
     var seen_count: usize = 0;
 
+    // track seen (did, title) pairs for cross-platform dedup
+    var seen_authors = std.StringHashMap(void).init(alloc);
+    defer seen_authors.deinit();
+
     for (results, 0..) |r, idx| {
         if (filtered_count >= 20) break;
         if (r.title.len == 0) continue;
@@ -946,6 +986,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
             }
         }
         if (is_dup) continue;
+        if (try isDuplicateAuthorTitle(&seen_authors, alloc, r.did, r.title)) continue;
         if (seen_count < 20) {
             seen[seen_count] = r.uri;
             seen_count += 1;

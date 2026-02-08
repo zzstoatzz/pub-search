@@ -408,6 +408,43 @@
       color: #d4956a;
     }
 
+    .date-filter {
+      margin-bottom: 1rem;
+    }
+
+    .date-filter-label {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 0.5rem;
+    }
+
+    .date-filter-list {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .date-option {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #151515;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #777;
+    }
+
+    .date-option:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
+    }
+
+    .date-option.active {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: #60a5fa;
+      color: #60a5fa;
+    }
+
     .active-filter {
       display: flex;
       align-items: center;
@@ -502,7 +539,7 @@
       }
 
       /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .mode-option, .suggestion, input.tag-input {
+      .tag, .platform-option, .mode-option, .date-option, .suggestion, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -561,7 +598,7 @@
       }
 
       /* tags wrap better on mobile */
-      .tags-list, .platform-filter-list {
+      .tags-list, .platform-filter-list, .date-filter-list {
         gap: 0.5rem;
       }
 
@@ -580,7 +617,7 @@
 
     /* ensure touch targets on tablets too */
     @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .mode-option, .suggestion, .related-item, input.tag-input {
+      .tag, .platform-option, .mode-option, .date-option, .suggestion, .related-item, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -607,6 +644,8 @@
 
     <div id="platform-filter" class="platform-filter"></div>
 
+    <div id="date-filter" class="date-filter"></div>
+
     <div id="results" class="results">
       <div class="empty-state">
         <p>search atproto publishing platforms</p>
@@ -630,9 +669,11 @@
     const activeFilterDiv = document.getElementById('active-filter');
     const suggestionsDiv = document.getElementById('suggestions');
     const platformFilterDiv = document.getElementById('platform-filter');
+    const dateFilterDiv = document.getElementById('date-filter');
     const modeToggleDiv = document.getElementById('mode-toggle');
     let currentTag = null;
     let currentPlatform = null;
+    let currentSince = null;
     let currentMode = 'keyword';
     let allTags = [];
     let popularSearches = [];
@@ -665,6 +706,8 @@
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
       if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
+      const sinceDate = getSinceDate();
+      if (sinceDate) searchUrl += `&since=${encodeURIComponent(sinceDate)}`;
 
       try {
         const res = await fetch(searchUrl);
@@ -759,7 +802,9 @@
 
         // add "load more" button if there are more results
         if (currentHasMore) {
-          const loadMoreHtml = `<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadMore()" style="font-size:12px">load more</button></div>`;
+          const remaining = extracted.total - totalShown;
+          const remainingText = remaining > 0 ? ` (${remaining} remaining)` : '';
+          const loadMoreHtml = `<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadMore()" style="font-size:12px">load more${remainingText}</button></div>`;
           resultsDiv.insertAdjacentHTML('beforeend', loadMoreHtml);
         }
 
@@ -957,6 +1002,7 @@
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
+      if (currentSince) params.set('since', currentSince);
       if (currentMode !== 'keyword') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
@@ -1025,6 +1071,39 @@
         <span class="platform-option${currentPlatform === p.id ? ' active' : ''}" onclick="setPlatform('${p.id}')">${p.label}</span>
       `).join('');
       platformFilterDiv.innerHTML = `<div class="platform-filter-label">filter by platform:</div><div class="platform-filter-list">${html}</div>`;
+    }
+
+    function renderDateFilter() {
+      const options = [
+        { id: null, label: 'any' },
+        { id: 'week', label: 'week' },
+        { id: 'month', label: 'month' },
+        { id: 'year', label: 'year' },
+      ];
+      const html = options.map(o => {
+        const active = currentSince === o.id;
+        return `<span class="date-option${active ? ' active' : ''}" onclick="setDateFilter(${o.id ? `'${o.id}'` : 'null'})">${o.label}</span>`;
+      }).join('');
+      dateFilterDiv.innerHTML = `<div class="date-filter-label">date:</div><div class="date-filter-list">${html}</div>`;
+    }
+
+    function setDateFilter(period) {
+      currentSince = currentSince === period ? null : period;
+      renderDateFilter();
+      if (queryInput.value.trim() || currentTag || currentPlatform) {
+        doSearch();
+      }
+    }
+
+    function getSinceDate() {
+      if (!currentSince) return null;
+      const now = new Date();
+      switch (currentSince) {
+        case 'week': now.setDate(now.getDate() - 7); break;
+        case 'month': now.setMonth(now.getMonth() - 1); break;
+        case 'year': now.setFullYear(now.getFullYear() - 1); break;
+      }
+      return now.toISOString();
     }
 
     function renderModeToggle() {
@@ -1164,10 +1243,12 @@
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
+      currentSince = params.get('since') || null;
       currentMode = params.get('mode') || 'keyword';
       renderActiveFilter();
       renderTags();
       renderPlatformFilter();
+      renderDateFilter();
       renderModeToggle();
       tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
       if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
@@ -1178,13 +1259,16 @@
     const initialQuery = initialParams.get('q');
     const initialTag = initialParams.get('tag');
     const initialPlatform = initialParams.get('platform');
+    const initialSince = initialParams.get('since');
     const initialMode = initialParams.get('mode');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
     if (initialPlatform) currentPlatform = initialPlatform;
+    if (initialSince) currentSince = initialSince;
     if (initialMode) currentMode = initialMode;
     renderActiveFilter();
     renderPlatformFilter();
+    renderDateFilter();
     renderModeToggle();
     tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
 
