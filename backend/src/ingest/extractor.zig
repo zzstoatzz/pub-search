@@ -11,12 +11,14 @@ const zat = @import("zat");
 /// from publication basePath. Documents that don't match any known platform are "other".
 pub const Platform = enum {
     leaflet,
+    whitewind,
     other, // site.standard.* documents not matching a known platform
     unknown,
 
     pub fn fromCollection(collection: []const u8) Platform {
         if (mem.startsWith(u8, collection, "pub.leaflet.")) return .leaflet;
         if (mem.startsWith(u8, collection, "site.standard.")) return .other;
+        if (mem.startsWith(u8, collection, "com.whtwnd.")) return .whitewind;
         return .unknown;
     }
 
@@ -149,6 +151,12 @@ fn extractContent(allocator: Allocator, record: json.Value) ![]u8 {
         return try buf.toOwnedSlice(allocator);
     }
 
+    // try content as plain string (e.g., com.whtwnd.blog.entry stores markdown here)
+    if (zat.json.getString(record, "content")) |text| {
+        try buf.appendSlice(allocator, text);
+        return try buf.toOwnedSlice(allocator);
+    }
+
     // fall back to leaflet-style block parsing
     if (zat.json.getString(record, "description")) |desc| {
         try buf.appendSlice(allocator, desc);
@@ -255,6 +263,10 @@ test "Platform.fromCollection: other (site.standard.*)" {
     try std.testing.expectEqual(Platform.other, Platform.fromCollection("site.standard.publication"));
 }
 
+test "Platform.fromCollection: whitewind" {
+    try std.testing.expectEqual(Platform.whitewind, Platform.fromCollection("com.whtwnd.blog.entry"));
+}
+
 test "Platform.fromCollection: unknown" {
     try std.testing.expectEqual(Platform.unknown, Platform.fromCollection("something.else"));
     try std.testing.expectEqual(Platform.unknown, Platform.fromCollection(""));
@@ -262,6 +274,7 @@ test "Platform.fromCollection: unknown" {
 
 test "Platform.name" {
     try std.testing.expectEqualStrings("leaflet", Platform.leaflet.name());
+    try std.testing.expectEqualStrings("whitewind", Platform.whitewind.name());
     try std.testing.expectEqualStrings("other", Platform.other.name());
     try std.testing.expectEqualStrings("unknown", Platform.unknown.name());
 }
@@ -284,4 +297,25 @@ test "extractDocument: site.standard.document with pub.leaflet.content" {
     try std.testing.expectEqualStrings("Hello world", doc.content);
     // content_type should be extracted for platform detection (custom domain support)
     try std.testing.expectEqualStrings("pub.leaflet.content", doc.content_type.?);
+}
+
+test "extractDocument: com.whtwnd.blog.entry (whitewind)" {
+    const allocator = std.testing.allocator;
+
+    const test_json =
+        \\{"title":"Love Across Discontinuity","content":"I've been thinking about what it means to love...","createdAt":"2026-02-08T08:01:41.776Z","visibility":"public"}
+    ;
+
+    const parsed = try json.parseFromSlice(json.Value, allocator, test_json, .{});
+    defer parsed.deinit();
+
+    var doc = try extractDocument(allocator, parsed.value.object, "com.whtwnd.blog.entry");
+    defer doc.deinit();
+
+    try std.testing.expectEqualStrings("Love Across Discontinuity", doc.title);
+    try std.testing.expectEqualStrings("I've been thinking about what it means to love...", doc.content);
+    try std.testing.expectEqualStrings("2026-02-08T08:01:41.776Z", doc.created_at.?);
+    try std.testing.expectEqual(Platform.whitewind, doc.platform);
+    try std.testing.expect(doc.publication_uri == null);
+    try std.testing.expect(doc.content_type == null);
 }

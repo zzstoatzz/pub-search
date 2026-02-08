@@ -17,9 +17,13 @@ const LEAFLET_PUBLICATION = "pub.leaflet.publication";
 const STANDARD_DOCUMENT = "site.standard.document";
 const STANDARD_PUBLICATION = "site.standard.publication";
 
+// whitewind blog entries
+const WHITEWIND_ENTRY = "com.whtwnd.blog.entry";
+
 fn isDocumentCollection(collection: []const u8) bool {
     return mem.eql(u8, collection, LEAFLET_DOCUMENT) or
-        mem.eql(u8, collection, STANDARD_DOCUMENT);
+        mem.eql(u8, collection, STANDARD_DOCUMENT) or
+        mem.eql(u8, collection, WHITEWIND_ENTRY);
 }
 
 fn isPublicationCollection(collection: []const u8) bool {
@@ -211,6 +215,16 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
         };
 
         if (isDocumentCollection(rec.collection)) {
+            // skip non-public whitewind entries
+            if (mem.eql(u8, rec.collection, WHITEWIND_ENTRY)) {
+                const record_val: json.Value = .{ .object = inner_record };
+                const visibility = zat.json.getString(record_val, "visibility") orelse "public";
+                if (!mem.eql(u8, visibility, "public")) {
+                    logfire.span("tap.dropped", .{ .reason = "not_public", .collection = rec.collection, .uri = uri }).end();
+                    return;
+                }
+            }
+
             processDocument(allocator, uri, did.raw, rec.rkey, inner_record, rec.collection) catch |err| {
                 logfire.err("document processing error: {}", .{err});
             };
