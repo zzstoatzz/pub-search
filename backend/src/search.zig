@@ -219,6 +219,32 @@ const DocsByPubBasePathAndPlatform = zql.Query(
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
 
+const DocsByPubBasePathAndSince = zql.Query(
+    \\SELECT d.uri, d.did, d.title, '' as snippet,
+    \\  d.created_at, d.rkey,
+    \\  p.base_path,
+    \\  1 as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents d
+    \\JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN publications_fts pf ON p.uri = pf.uri
+    \\WHERE publications_fts MATCH :query AND d.created_at >= :since
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+);
+
+const DocsByPubBasePathAndPlatformAndSince = zql.Query(
+    \\SELECT d.uri, d.did, d.title, '' as snippet,
+    \\  d.created_at, d.rkey,
+    \\  p.base_path,
+    \\  1 as has_publication,
+    \\  d.platform, COALESCE(d.path, '') as path
+    \\FROM documents d
+    \\JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN publications_fts pf ON p.uri = pf.uri
+    \\WHERE publications_fts MATCH :query AND d.platform = :platform AND d.created_at >= :since
+    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+);
+
 /// Publication search result (internal)
 const Pub = struct {
     uri: []const u8,
@@ -349,8 +375,12 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     // query 1: documents by publication base_path (subdomain search)
     const run_basepath = has_query and !has_tag;
     if (run_basepath) {
-        if (has_platform) {
+        if (has_platform and has_since) {
+            statements[stmt_count] = .{ .sql = DocsByPubBasePathAndPlatformAndSince.positional, .args = &.{ fts_query, platform_filter.?, since_filter.? } };
+        } else if (has_platform) {
             statements[stmt_count] = .{ .sql = DocsByPubBasePathAndPlatform.positional, .args = &.{ fts_query, platform_filter.? } };
+        } else if (has_since) {
+            statements[stmt_count] = .{ .sql = DocsByPubBasePathAndSince.positional, .args = &.{ fts_query, since_filter.? } };
         } else {
             statements[stmt_count] = .{ .sql = DocsByPubBasePath.positional, .args = &.{fts_query} };
         }
@@ -416,7 +446,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
 fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8) ![]const u8 {
     // only handle basic FTS queries for now (most common case)
     // fall back to Turso for complex filter combinations
-    if (query.len == 0 or tag_filter != null or since_filter != null) {
+    if (query.len == 0 or tag_filter != null) {
         return error.UnsupportedQuery;
     }
 
@@ -452,6 +482,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
         while (rows.next()) |row| {
             const doc = Doc.fromLocalRow(row);
+            if (since_filter) |since| {
+                if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
+            }
             if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
@@ -473,6 +506,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
         while (bp_rows.next()) |row| {
             const doc = Doc.fromLocalRow(row);
+            if (since_filter) |since| {
+                if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
+            }
             if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                 try jw.write(doc.toJson());
             }
@@ -497,6 +533,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             var doc_count: u32 = 0;
             while (rows.next()) |row| {
                 const doc = Doc.fromLocalRow(row);
+                if (since_filter) |since| {
+                    if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
+                }
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 const uri_dupe = try alloc.dupe(u8, doc.uri);
                 try seen_uris.put(uri_dupe, {});
@@ -525,6 +564,12 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             var bp_count: u32 = 0;
             while (bp_rows.next()) |row| {
                 const doc = Doc.fromLocalRow(row);
+                if (since_filter) |since| {
+                    if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) {
+                        bp_count += 1;
+                        continue;
+                    }
+                }
                 if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                     try jw.write(doc.toJson());
                 }
