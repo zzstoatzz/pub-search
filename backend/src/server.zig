@@ -68,23 +68,26 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
         return;
     }
 
-    if (mem.startsWith(u8, target, "/search")) {
+    // extract path (before query string) for routing
+    const path = if (mem.indexOf(u8, target, "?")) |qi| target[0..qi] else target;
+
+    if (mem.startsWith(u8, path, "/search")) {
         try handleSearch(request, target);
-    } else if (mem.eql(u8, target, "/tags")) {
-        try handleTags(request);
-    } else if (mem.eql(u8, target, "/stats")) {
+    } else if (mem.eql(u8, path, "/tags")) {
+        try handleTags(request, target);
+    } else if (mem.eql(u8, path, "/stats")) {
         try handleStats(request);
-    } else if (mem.eql(u8, target, "/health")) {
+    } else if (mem.eql(u8, path, "/health")) {
         try sendJson(request, "{\"status\":\"ok\"}");
-    } else if (mem.eql(u8, target, "/popular")) {
-        try handlePopular(request);
-    } else if (mem.eql(u8, target, "/dashboard")) {
+    } else if (mem.eql(u8, path, "/popular")) {
+        try handlePopular(request, target);
+    } else if (mem.eql(u8, path, "/dashboard")) {
         try handleDashboard(request);
-    } else if (mem.eql(u8, target, "/api/dashboard")) {
+    } else if (mem.eql(u8, path, "/api/dashboard")) {
         try handleDashboardApi(request);
-    } else if (mem.startsWith(u8, target, "/similar")) {
+    } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target);
-    } else if (mem.eql(u8, target, "/activity")) {
+    } else if (mem.eql(u8, path, "/activity")) {
         try handleActivity(request);
     } else {
         try sendNotFound(request);
@@ -104,6 +107,11 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
     const mode_str = parseQueryParam(alloc, target, "mode") catch null;
     const mode = search.SearchMode.fromString(mode_str);
+    const format = parseQueryParam(alloc, target, "format") catch "v1";
+    const limit_str = parseQueryParam(alloc, target, "limit") catch null;
+    const offset_str = parseQueryParam(alloc, target, "offset") catch null;
+    const limit = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
+    const offset = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
 
     // record per-mode latency
     const timing_endpoint: metrics.timing.Endpoint = switch (mode) {
@@ -135,10 +143,22 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     };
     metrics.stats.recordSearch(query);
     logfire.counter("search.requests", 1);
-    try sendJson(request, results);
+
+    if (mem.eql(u8, format, "v2")) {
+        const wrapped = try wrapResponse(alloc, results, query, @tagName(mode), limit, offset);
+        try sendJson(request, wrapped);
+    } else {
+        // v1: apply pagination by slicing the JSON array
+        if (offset > 0 or limit < 40) {
+            const paginated = try paginateJsonArray(alloc, results, limit, offset);
+            try sendJson(request, paginated);
+        } else {
+            try sendJson(request, results);
+        }
+    }
 }
 
-fn handleTags(request: *http.Server.Request) !void {
+fn handleTags(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
     defer metrics.timing.record(.tags, start_time);
 
@@ -149,11 +169,18 @@ fn handleTags(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    const format = parseQueryParam(alloc, target, "format") catch "v1";
     const tags = try getTags(alloc);
-    try sendJson(request, tags);
+
+    if (mem.eql(u8, format, "v2")) {
+        const wrapped = try wrapResponse(alloc, tags, "", "tags", 100, 0);
+        try sendJson(request, wrapped);
+    } else {
+        try sendJson(request, tags);
+    }
 }
 
-fn handlePopular(request: *http.Server.Request) !void {
+fn handlePopular(request: *http.Server.Request, target: []const u8) !void {
     const start_time = std.time.microTimestamp();
     defer metrics.timing.record(.popular, start_time);
 
@@ -164,8 +191,15 @@ fn handlePopular(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    const format = parseQueryParam(alloc, target, "format") catch "v1";
     const popular = try getPopular(alloc, 5);
-    try sendJson(request, popular);
+
+    if (mem.eql(u8, format, "v2")) {
+        const wrapped = try wrapResponse(alloc, popular, "", "popular", 100, 0);
+        try sendJson(request, wrapped);
+    } else {
+        try sendJson(request, popular);
+    }
 }
 
 // --- tags/popular query logic ---
@@ -428,16 +462,106 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
         return;
     };
 
+    const format = parseQueryParam(alloc, target, "format") catch "v1";
+
     // span attributes are copied internally, safe to use arena strings
     const span = logfire.span("http.similar", .{ .uri = uri });
     defer span.end();
 
     const results = search.findSimilar(alloc, uri, 5) catch {
-        try sendJson(request, "[]");
+        if (mem.eql(u8, format, "v2")) {
+            try sendJson(request, "{\"results\":[],\"total\":0,\"hasMore\":false}");
+        } else {
+            try sendJson(request, "[]");
+        }
         return;
     };
 
-    try sendJson(request, results);
+    if (mem.eql(u8, format, "v2")) {
+        const wrapped = try wrapResponse(alloc, results, "", "similar", 20, 0);
+        try sendJson(request, wrapped);
+    } else {
+        try sendJson(request, results);
+    }
+}
+
+/// Wrap a JSON array response in v2 envelope: {"results": [...], "total": N, "hasMore": bool}
+fn wrapResponse(alloc: Allocator, array_json: []const u8, query: []const u8, mode: []const u8, limit: usize, offset: usize) ![]const u8 {
+    // parse the array to count items and apply pagination
+    const parsed = json.parseFromSlice(json.Value, alloc, array_json, .{}) catch {
+        return array_json; // fallback to raw if parse fails
+    };
+    defer parsed.deinit();
+
+    const items = switch (parsed.value) {
+        .array => |arr| arr.items,
+        else => return array_json,
+    };
+
+    const total = items.len;
+    const start = @min(offset, total);
+    const end = @min(start + limit, total);
+    const has_more = end < total;
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginObject();
+
+    try jw.objectField("results");
+    try jw.beginArray();
+    for (items[start..end]) |item| {
+        try jw.write(item);
+    }
+    try jw.endArray();
+
+    try jw.objectField("total");
+    try jw.write(total);
+
+    try jw.objectField("hasMore");
+    try jw.write(has_more);
+
+    if (query.len > 0) {
+        try jw.objectField("query");
+        try jw.write(query);
+    }
+
+    if (mode.len > 0) {
+        try jw.objectField("mode");
+        try jw.write(mode);
+    }
+
+    try jw.endObject();
+    return try output.toOwnedSlice();
+}
+
+/// Apply pagination to a JSON array (for v1 format with limit/offset)
+fn paginateJsonArray(alloc: Allocator, array_json: []const u8, limit: usize, offset: usize) ![]const u8 {
+    const parsed = json.parseFromSlice(json.Value, alloc, array_json, .{}) catch {
+        return array_json;
+    };
+    defer parsed.deinit();
+
+    const items = switch (parsed.value) {
+        .array => |arr| arr.items,
+        else => return array_json,
+    };
+
+    const total = items.len;
+    const start = @min(offset, total);
+    const end = @min(start + limit, total);
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (items[start..end]) |item| {
+        try jw.write(item);
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }
 
 fn handleActivity(request: *http.Server.Request) !void {

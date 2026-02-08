@@ -642,6 +642,18 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
         alloc.free(results);
     }
 
+    // collect filtered URIs for snippet lookup
+    var uri_buf: [21][]const u8 = undefined; // limit+1
+    var uri_count: usize = 0;
+    for (results) |r| {
+        if (std.mem.eql(u8, r.uri, uri)) continue;
+        if (uri_count >= limit) break;
+        uri_buf[uri_count] = r.uri;
+        uri_count += 1;
+    }
+
+    const snippets = fetchSnippets(alloc, uri_buf[0..uri_count]);
+
     // serialize, filtering out the source URI
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
@@ -657,7 +669,7 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
             .uri = r.uri,
             .did = r.did,
             .title = r.title,
-            .snippet = "",
+            .snippet = snippets.get(r.uri) orelse "",
             .createdAt = r.created_at,
             .rkey = r.rkey,
             .basePath = r.base_path,
@@ -805,14 +817,30 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
         }
     }.lessThan);
 
-    // 6. serialize top 20 with source annotation
+    // 6. fetch content previews for semantic-only results (they have no FTS snippet)
+    const limit = @min(scored.items.len, 20);
+    var sem_uri_buf: [20][]const u8 = undefined;
+    var sem_uri_count: usize = 0;
+    for (scored.items[0..limit]) |entry| {
+        const bits = source_bits.get(entry.uri) orelse 0;
+        if (bits == 0b10) { // semantic-only
+            const obj = sem_objects.get(entry.uri) orelse continue;
+            const existing_snippet = jsonStr(obj, "snippet");
+            if (existing_snippet.len == 0 and sem_uri_count < 20) {
+                sem_uri_buf[sem_uri_count] = entry.uri;
+                sem_uri_count += 1;
+            }
+        }
+    }
+    const hybrid_snippets = fetchSnippets(alloc, sem_uri_buf[0..sem_uri_count]);
+
+    // 7. serialize top 20 with source annotation
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
 
-    const limit = @min(scored.items.len, 20);
     for (scored.items[0..limit]) |entry| {
         const bits = source_bits.get(entry.uri) orelse 0;
         // prefer keyword version (has FTS snippet)
@@ -825,9 +853,25 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
             else => "",
         };
 
+        // for semantic-only results with empty snippet, use fetched preview
+        const snippet = blk: {
+            const existing = jsonStr(obj, "snippet");
+            if (existing.len > 0) break :blk existing;
+            if (bits == 0b10) {
+                break :blk hybrid_snippets.get(entry.uri) orelse "";
+            }
+            break :blk existing;
+        };
+
         try jw.beginObject();
         // write all standard fields from the source object
-        inline for (.{ "type", "uri", "did", "title", "snippet", "rkey", "basePath", "platform", "path" }) |field| {
+        inline for (.{ "type", "uri", "did", "title" }) |field| {
+            try jw.objectField(field);
+            try jw.write(jsonStr(obj, field));
+        }
+        try jw.objectField("snippet");
+        try jw.write(snippet);
+        inline for (.{ "rkey", "basePath", "platform", "path" }) |field| {
             try jw.objectField(field);
             try jw.write(jsonStr(obj, field));
         }
@@ -835,6 +879,8 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
         try jw.write(jsonStr(obj, "createdAt"));
         try jw.objectField("source");
         try jw.write(source_label);
+        try jw.objectField("score");
+        try jw.write(entry.score);
         try jw.endObject();
     }
 
@@ -880,25 +926,18 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         alloc.free(results);
     }
 
-    // serialize results, filtering by distance + platform + dedup, capped at 20
-    var output: std.Io.Writer.Allocating = .init(alloc);
-    errdefer output.deinit();
-
-    // track seen URIs to deduplicate
+    // first pass: filter and collect URIs for snippet lookup
+    var filtered_indices: [20]usize = undefined;
+    var filtered_count: usize = 0;
     var seen: [20][]const u8 = undefined;
     var seen_count: usize = 0;
 
-    var jw: json.Stringify = .{ .writer = &output.writer };
-    try jw.beginArray();
-    var count: usize = 0;
-    for (results) |r| {
-        if (count >= 20) break;
-        // skip documents with empty/test titles
+    for (results, 0..) |r, idx| {
+        if (filtered_count >= 20) break;
         if (r.title.len == 0) continue;
         if (platform_filter) |pf| {
             if (!std.mem.eql(u8, r.platform, pf)) continue;
         }
-        // deduplicate by URI
         var is_dup = false;
         for (seen[0..seen_count]) |s| {
             if (std.mem.eql(u8, s, r.uri)) {
@@ -911,13 +950,27 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
             seen[seen_count] = r.uri;
             seen_count += 1;
         }
-        count += 1;
+        filtered_indices[filtered_count] = idx;
+        filtered_count += 1;
+    }
+
+    // fetch content previews from local SQLite (arena-allocated, no explicit cleanup)
+    const snippets = fetchSnippets(alloc, seen[0..seen_count]);
+
+    // serialize results with snippets
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (filtered_indices[0..filtered_count]) |idx| {
+        const r = results[idx];
         try jw.write(SearchResultJson{
             .type = if (r.has_publication) "article" else "looseleaf",
             .uri = r.uri,
             .did = r.did,
             .title = r.title,
-            .snippet = "",
+            .snippet = snippets.get(r.uri) orelse "",
             .createdAt = r.created_at,
             .rkey = r.rkey,
             .basePath = r.base_path,
@@ -928,6 +981,30 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     try jw.endArray();
 
     return try output.toOwnedSlice();
+}
+
+// --- snippet helpers (for semantic/similar results) ---
+
+/// Fetch content previews from local SQLite for a list of URIs.
+/// Returns a map of URI -> preview text (first 200 chars of content).
+/// Gracefully returns empty map if local db is unavailable.
+fn fetchSnippets(alloc: Allocator, uris: []const []const u8) std.StringHashMap([]const u8) {
+    var map = std.StringHashMap([]const u8).init(alloc);
+    const local = db.getLocalDb() orelse return map;
+    for (uris) |uri| {
+        var rows = local.query(
+            "SELECT substr(content, 1, 200) FROM documents WHERE uri = ?",
+            .{uri},
+        ) catch continue;
+        defer rows.deinit();
+        if (rows.next()) |row| {
+            const preview = row.text(0);
+            if (preview.len > 0) {
+                map.put(uri, preview) catch continue;
+            }
+        }
+    }
+    return map;
 }
 
 // --- JSON helpers (for hybrid search parsing) ---

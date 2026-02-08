@@ -637,13 +637,31 @@
     let allTags = [];
     let popularSearches = [];
     const authorCache = new Map();
-    async function search(query, tag = null, platform = null) {
+    let currentOffset = 0;
+    let currentHasMore = false;
+    const PAGE_SIZE = 20;
+
+    // extract results array from API response (handles both v1 and v2 formats)
+    function extractResults(parsed) {
+      if (parsed.results && Array.isArray(parsed.results)) {
+        return { results: parsed.results, total: parsed.total || parsed.results.length, hasMore: parsed.hasMore || false };
+      }
+      if (Array.isArray(parsed)) {
+        return { results: parsed, total: parsed.length, hasMore: false };
+      }
+      return null;
+    }
+
+    async function search(query, tag = null, platform = null, append = false) {
       if (!query.trim() && !tag && !platform) return;
 
-      searchBtn.disabled = true;
-      resultsDiv.innerHTML = `<div class="status">searching...</div>`;
+      if (!append) {
+        searchBtn.disabled = true;
+        resultsDiv.innerHTML = `<div class="status">searching...</div>`;
+        currentOffset = 0;
+      }
 
-      let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}`;
+      let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}&format=v2&limit=${PAGE_SIZE}&offset=${currentOffset}`;
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
       if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
@@ -651,21 +669,30 @@
       try {
         const res = await fetch(searchUrl);
         const rawText = await res.text();
-        let results;
+        let parsed;
 
         try {
-          results = JSON.parse(rawText);
+          parsed = JSON.parse(rawText);
         } catch (parseErr) {
           resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
           return;
         }
 
-        if (results.error) {
-          resultsDiv.innerHTML = `<div class="status error">${results.error}</div>`;
+        if (parsed.error) {
+          resultsDiv.innerHTML = `<div class="status error">${parsed.error}</div>`;
           return;
         }
 
-        if (results.length === 0) {
+        const extracted = extractResults(parsed);
+        if (!extracted) {
+          resultsDiv.innerHTML = `<div class="status error">unexpected response format</div>`;
+          return;
+        }
+
+        const results = extracted.results;
+        currentHasMore = extracted.hasMore;
+
+        if (results.length === 0 && !append) {
           resultsDiv.innerHTML = `
             <div class="empty-state">
               <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
@@ -717,11 +744,26 @@
           `;
         }
 
-        resultsDiv.innerHTML = html;
-        statsDiv.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
+        if (append) {
+          // remove existing "load more" button and related section before appending
+          const existingLoadMore = resultsDiv.querySelector('.load-more');
+          if (existingLoadMore) existingLoadMore.remove();
+          resultsDiv.insertAdjacentHTML('beforeend', html);
+        } else {
+          resultsDiv.innerHTML = html;
+        }
+
+        const totalShown = resultsDiv.querySelectorAll('.result').length;
+        statsDiv.textContent = `${totalShown} result${totalShown === 1 ? '' : 's'}${extracted.total > totalShown ? ` of ${extracted.total}` : ''}`;
         resolveAuthors(results);
 
-        if (results.length > 0 && results[0].uri) {
+        // add "load more" button if there are more results
+        if (currentHasMore) {
+          const loadMoreHtml = `<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadMore()" style="font-size:12px">load more</button></div>`;
+          resultsDiv.insertAdjacentHTML('beforeend', loadMoreHtml);
+        }
+
+        if (!append && results.length > 0 && results[0].uri) {
           loadRelated(results[0]);
         }
 
@@ -730,6 +772,11 @@
       } finally {
         searchBtn.disabled = false;
       }
+    }
+
+    function loadMore() {
+      currentOffset += PAGE_SIZE;
+      search(queryInput.value, currentTag, currentPlatform, true);
     }
 
     async function resolveAuthors(results) {
@@ -1049,13 +1096,14 @@
 
     async function loadTags() {
       try {
-        const res = await fetch(`${API_URL}/tags`);
+        const res = await fetch(`${API_URL}/tags?format=v2`);
         const data = await res.json();
         if (data.error) {
           console.error('failed to load tags:', data.error);
           return;
         }
-        allTags = data;
+        const extracted = extractResults(data);
+        allTags = extracted ? extracted.results : (Array.isArray(data) ? data : []);
         renderTags();
       } catch (e) {
         console.error('failed to load tags', e);
@@ -1064,10 +1112,12 @@
 
     async function loadPopular() {
       try {
-        const res = await fetch(`${API_URL}/popular`);
+        const res = await fetch(`${API_URL}/popular?format=v2`);
         const data = await res.json();
         if (!data.error) {
-          popularSearches = data.slice(0, 5);
+          const extracted = extractResults(data);
+          const items = extracted ? extracted.results : (Array.isArray(data) ? data : []);
+          popularSearches = items.slice(0, 5);
           renderSuggestions();
         }
       } catch (e) {
@@ -1150,10 +1200,13 @@
       resultsDiv.appendChild(loadingEl);
 
       try {
-        const res = await fetch(`${API_URL}/similar?uri=${encodeURIComponent(topResult.uri)}`);
-        const related = await res.json();
+        const res = await fetch(`${API_URL}/similar?uri=${encodeURIComponent(topResult.uri)}&format=v2`);
+        const data = await res.json();
 
         loadingEl.remove();
+
+        const extracted = extractResults(data);
+        const related = extracted ? extracted.results : (Array.isArray(data) ? data : []);
 
         if (!related || related.length === 0) return;
 

@@ -27,18 +27,26 @@ search ATProto publishing platforms: leaflet, pckt, offprint, greengale.
 
 ## tools
 
-- `search(query, tag, platform, since)` - full-text search with filters
+- `search(query, tag, platform, since)` - keyword search with filters
+- `search_semantic(query)` - meaning-based search (natural language queries)
+- `search_hybrid(query)` - combined keyword + semantic with source annotations
 - `get_document(uri)` - fetch full content by AT-URI
-- `find_similar(uri)` - semantic similarity search
+- `find_similar(uri)` - find related documents
 - `get_tags()` - available tags
 - `get_stats()` - index statistics
 - `get_popular()` - popular queries
 
 ## workflow
 
-1. `search("topic")` or `search("topic", platform="leaflet")`
+1. `search("topic")` for keyword search, `search_hybrid("topic")` for best results
 2. `get_document(uri)` for full text
 3. `find_similar(uri)` for related content
+
+## search modes
+
+- **keyword**: fast exact match (~100ms), supports tag/since filters
+- **semantic**: meaning-based (~500ms), good for natural language queries
+- **hybrid**: both combined with rank fusion, `source` field shows how each result was found
 
 ## result types
 
@@ -59,7 +67,9 @@ def search_tips() -> str:
 - prefix matching on last word: "cat dog" matches "cat dogs"
 - combine filters: `search("python", tag="tutorial", platform="leaflet")`
 - use `since="2025-01-01"` for recent content
-- `find_similar(uri)` for semantic similarity (voyage-3-lite embeddings)
+- `search_semantic("natural language query")` for meaning-based search
+- `search_hybrid("query")` for best of both — results show `source` field
+- `find_similar(uri)` to discover related documents
 - `get_tags()` to discover available tags
 """
 
@@ -70,6 +80,15 @@ def search_tips() -> str:
 
 
 Platform = Literal["leaflet", "pckt", "offprint", "greengale", "other"]
+
+
+def _extract_results(data: Any) -> list[dict[str, Any]]:
+    """extract results array from API response (handles both v1 and v2 formats)."""
+    if isinstance(data, dict) and "results" in data:
+        return data["results"]
+    if isinstance(data, list):
+        return data
+    return []
 
 
 @mcp.tool
@@ -95,7 +114,7 @@ async def search(
     if not query and not tag:
         return []
 
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"format": "v2", "limit": str(limit)}
     if query:
         params["q"] = query
     if tag:
@@ -108,8 +127,82 @@ async def search(
     async with get_http_client() as client:
         response = await client.get("/search", params=params)
         response.raise_for_status()
-        results = response.json()
+        data = response.json()
 
+    results = _extract_results(data)
+    return [SearchResult(**r) for r in results[:limit]]
+
+
+@mcp.tool
+async def search_semantic(
+    query: str,
+    platform: Platform | None = None,
+    limit: int = 5,
+) -> list[SearchResult]:
+    """semantic search using vector embeddings.
+
+    finds documents by meaning rather than exact keyword match.
+    good for natural language queries like "essays about loneliness"
+    or oblique descriptions like "guy from south africa with lots of kids".
+
+    args:
+        query: natural language query
+        platform: filter by platform (leaflet, pckt, offprint, greengale, other)
+        limit: max results (default 5, max 40)
+
+    returns:
+        list of results ranked by semantic similarity
+    """
+    params: dict[str, Any] = {"q": query, "mode": "semantic", "format": "v2", "limit": str(limit)}
+    if platform:
+        params["platform"] = platform
+
+    async with get_http_client() as client:
+        response = await client.get("/search", params=params)
+        response.raise_for_status()
+        data = response.json()
+
+    if isinstance(data, dict) and "error" in data:
+        return []
+
+    results = _extract_results(data)
+    return [SearchResult(**r) for r in results[:limit]]
+
+
+@mcp.tool
+async def search_hybrid(
+    query: str,
+    platform: Platform | None = None,
+    limit: int = 5,
+) -> list[SearchResult]:
+    """hybrid search combining keyword and semantic results.
+
+    runs both keyword (exact match) and semantic (meaning-based) search,
+    then merges results using Reciprocal Rank Fusion. documents found by
+    both methods rank highest. results include a `source` field indicating
+    how each result was found: "keyword", "semantic", or "keyword+semantic".
+
+    args:
+        query: search query
+        platform: filter by platform (leaflet, pckt, offprint, greengale, other)
+        limit: max results (default 5, max 40)
+
+    returns:
+        list of results with source annotations, ranked by combined relevance
+    """
+    params: dict[str, Any] = {"q": query, "mode": "hybrid", "format": "v2", "limit": str(limit)}
+    if platform:
+        params["platform"] = platform
+
+    async with get_http_client() as client:
+        response = await client.get("/search", params=params)
+        response.raise_for_status()
+        data = response.json()
+
+    if isinstance(data, dict) and "error" in data:
+        return []
+
+    results = _extract_results(data)
     return [SearchResult(**r) for r in results[:limit]]
 
 
@@ -189,8 +282,8 @@ async def get_document(uri: str) -> Document:
 async def find_similar(uri: str, limit: int = 5) -> list[SearchResult]:
     """find documents similar to a given document.
 
-    uses vector similarity (voyage-3-lite embeddings) to find semantically
-    related documents. great for discovering related content after finding
+    uses vector similarity to find semantically related documents.
+    great for discovering related content after finding
     an interesting document.
 
     args:
@@ -201,10 +294,11 @@ async def find_similar(uri: str, limit: int = 5) -> list[SearchResult]:
         list of similar documents with uri, title, and metadata
     """
     async with get_http_client() as client:
-        response = await client.get("/similar", params={"uri": uri})
+        response = await client.get("/similar", params={"uri": uri, "format": "v2"})
         response.raise_for_status()
-        results = response.json()
+        data = response.json()
 
+    results = _extract_results(data)
     return [SearchResult(**r) for r in results[:limit]]
 
 
@@ -219,10 +313,11 @@ async def get_tags() -> list[Tag]:
         list of tags with their document counts
     """
     async with get_http_client() as client:
-        response = await client.get("/tags")
+        response = await client.get("/tags", params={"format": "v2"})
         response.raise_for_status()
-        results = response.json()
+        data = response.json()
 
+    results = _extract_results(data)
     return [Tag(**t) for t in results]
 
 
@@ -253,10 +348,11 @@ async def get_popular(limit: int = 5) -> list[PopularSearch]:
         list of popular queries with search counts
     """
     async with get_http_client() as client:
-        response = await client.get("/popular")
+        response = await client.get("/popular", params={"format": "v2"})
         response.raise_for_status()
-        results = response.json()
+        data = response.json()
 
+    results = _extract_results(data)
     return [PopularSearch(**p) for p in results[:limit]]
 
 

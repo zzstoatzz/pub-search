@@ -17,13 +17,25 @@ class SearchResult(BaseModel):
     rkey: str
     basePath: str = ""
     platform: Literal["leaflet", "pckt", "offprint", "greengale", "other"] = "leaflet"
+    path: str = ""
+    source: str = ""
+    score: float = 0.0
 
     @computed_field
     @property
     def url(self) -> str:
         """web URL for this document."""
-        if self.basePath:
+        if self.type == "publication" and self.basePath:
+            return f"https://{self.basePath}"
+        if self.platform == "leaflet" and self.basePath and self.rkey:
             return f"https://{self.basePath}/{self.rkey}"
+        if self.basePath and self.path:
+            sep = "" if self.path.startswith("/") else "/"
+            return f"https://{self.basePath}{sep}{self.path}"
+        if self.platform == "leaflet" and self.did and self.rkey:
+            return f"https://leaflet.pub/p/{self.did}/{self.rkey}"
+        if self.uri:
+            return f"https://pdsls.dev/{self.uri}"
         return ""
 
 
