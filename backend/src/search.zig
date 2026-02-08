@@ -1000,7 +1000,9 @@ fn fetchSnippets(alloc: Allocator, uris: []const []const u8) std.StringHashMap([
         if (rows.next()) |row| {
             const preview = row.text(0);
             if (preview.len > 0) {
-                map.put(uri, preview) catch continue;
+                // dupe before rows.deinit() frees the backing memory
+                const duped = alloc.dupe(u8, preview) catch continue;
+                map.put(uri, duped) catch continue;
             }
         }
     }
