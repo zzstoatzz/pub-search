@@ -44,6 +44,96 @@ fn useTls() bool {
     return getTapPort() == 443;
 }
 
+/// Bounded queue for decoupling websocket readLoop from turso writes.
+/// ACKs are sent immediately in the readLoop; processing happens in a worker thread.
+/// If the queue is full (turso is slow), new messages are dropped (already ACK'd).
+const QUEUE_CAPACITY = 256;
+
+const ProcessQueue = struct {
+    mutex: std.Thread.Mutex = .{},
+    cond: std.Thread.Condition = .{},
+    items: [QUEUE_CAPACITY]?[]u8 = .{null} ** QUEUE_CAPACITY,
+    head: usize = 0,
+    tail: usize = 0,
+    len: usize = 0,
+    stopped: bool = false,
+    allocator: Allocator,
+    dropped: usize = 0,
+    processed: usize = 0,
+
+    fn push(self: *ProcessQueue, data: []u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.len == QUEUE_CAPACITY) {
+            // queue full — drop oldest (already ACK'd)
+            if (self.items[self.head]) |old| {
+                self.allocator.free(old);
+            }
+            self.head = (self.head + 1) % QUEUE_CAPACITY;
+            self.len -= 1;
+            self.dropped += 1;
+            if (self.dropped <= 5 or self.dropped % 100 == 0) {
+                logfire.warn("tap: queue full, dropped {d} messages total", .{self.dropped});
+            }
+        }
+
+        self.items[self.tail] = data;
+        self.tail = (self.tail + 1) % QUEUE_CAPACITY;
+        self.len += 1;
+        self.cond.signal();
+    }
+
+    fn pop(self: *ProcessQueue) ?[]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        while (self.len == 0 and !self.stopped) {
+            self.cond.wait(&self.mutex);
+        }
+
+        if (self.len == 0) return null; // stopped with empty queue
+
+        const data = self.items[self.head].?;
+        self.items[self.head] = null;
+        self.head = (self.head + 1) % QUEUE_CAPACITY;
+        self.len -= 1;
+        return data;
+    }
+
+    fn stop(self: *ProcessQueue) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.stopped = true;
+        self.cond.signal();
+    }
+
+    fn drain(self: *ProcessQueue) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (&self.items) |*item| {
+            if (item.*) |data| {
+                self.allocator.free(data);
+                item.* = null;
+            }
+        }
+    }
+};
+
+fn processWorker(queue: *ProcessQueue) void {
+    logfire.info("tap: process worker started", .{});
+    while (queue.pop()) |data| {
+        defer queue.allocator.free(data);
+        processMessage(queue.allocator, data) catch |err| {
+            logfire.err("message processing error: {}", .{err});
+        };
+        queue.mutex.lock();
+        queue.processed += 1;
+        queue.mutex.unlock();
+    }
+    logfire.info("tap: process worker stopped (processed {d}, dropped {d})", .{ queue.processed, queue.dropped });
+}
+
 pub fn consumer(allocator: Allocator) void {
     var backoff: u64 = 1;
     const max_backoff: u64 = 30;
@@ -66,6 +156,7 @@ pub fn consumer(allocator: Allocator) void {
 const Handler = struct {
     allocator: Allocator,
     client: *websocket.Client,
+    queue: *ProcessQueue,
     msg_count: usize = 0,
     ack_count: usize = 0,
     no_id_count: usize = 0,
@@ -74,19 +165,16 @@ const Handler = struct {
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
         self.msg_count += 1;
         if (self.msg_count % 1000 == 0) {
-            logfire.info("tap: processed {d} messages, acks sent: {d}, no-id: {d}", .{ self.msg_count, self.ack_count, self.no_id_count });
+            logfire.info("tap: recv {d}, acks {d}, processed {d}, dropped {d}, queued {d}", .{
+                self.msg_count, self.ack_count, self.queue.processed, self.queue.dropped, self.queue.len,
+            });
         }
 
         // extract message ID for ACK
         const msg_id = extractMessageId(self.allocator, data);
 
-        // process the message
-        processMessage(self.allocator, data) catch |err| {
-            logfire.err("message processing error: {}", .{err});
-            // still ACK even on error to avoid infinite retries
-        };
-
-        // send ACK if we have a message ID
+        // ACK immediately — before processing — to keep TAP outbox draining.
+        // processing happens asynchronously in the worker thread.
         if (msg_id) |id| {
             self.sendAck(id);
         } else {
@@ -95,6 +183,13 @@ const Handler = struct {
                 logfire.warn("tap: message has no id, first {d} bytes: {s}", .{ @min(data.len, 100), data[0..@min(data.len, 100)] });
             }
         }
+
+        // dupe message data (websocket reuses the buffer) and push to processing queue
+        const data_copy = self.allocator.dupe(u8, data) catch |err| {
+            logfire.err("tap: failed to dupe message: {}", .{err});
+            return;
+        };
+        self.queue.push(data_copy);
     }
 
     fn sendAck(self: *Handler, msg_id: i64) void {
@@ -102,14 +197,15 @@ const Handler = struct {
             logfire.err("tap: ACK format error: {}", .{err});
             return;
         };
+        // log before write — websocket.zig masks the buffer in-place
+        if (self.ack_count < 3) {
+            logfire.info("tap: sending ACK for id={d}", .{msg_id});
+        }
         self.client.write(@constCast(ack_json)) catch |err| {
             logfire.err("tap: failed to send ACK: {}", .{err});
             return;
         };
         self.ack_count += 1;
-        if (self.ack_count <= 3) {
-            logfire.info("tap: ACK sent for id={d}, ack_json={s}", .{ msg_id, ack_json });
-        }
     }
 
     pub fn close(_: *Handler) void {}
@@ -150,7 +246,20 @@ fn connect(allocator: Allocator) !void {
 
     logfire.info("tap connected", .{});
 
-    var handler = Handler{ .allocator = allocator, .client = &client };
+    // processing queue + worker thread: decouples readLoop from turso writes
+    // so a slow/hung turso request never blocks ACKs
+    var queue = ProcessQueue{ .allocator = allocator };
+    const worker = std.Thread.spawn(.{}, processWorker, .{&queue}) catch |err| {
+        logfire.err("tap: failed to spawn process worker: {}", .{err});
+        return err;
+    };
+    defer {
+        queue.stop();
+        worker.join();
+        queue.drain();
+    }
+
+    var handler = Handler{ .allocator = allocator, .client = &client, .queue = &queue };
     client.readLoop(&handler) catch |err| {
         logfire.err("websocket read loop error: {}", .{err});
         return err;
