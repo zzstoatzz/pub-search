@@ -894,7 +894,8 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     for (results) |r| {
         if (count >= 20) break;
         // skip results with high cosine distance (low similarity)
-        if (r.dist > 0.5) continue;
+        // voyage-4-lite 1024d produces tighter distance ranges than voyage-3-lite 512d
+        if (r.dist > 0.75) continue;
         // skip documents with empty/test titles
         if (r.title.len == 0) continue;
         if (platform_filter) |pf| {
