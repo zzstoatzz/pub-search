@@ -161,23 +161,30 @@ def extract_document(record: dict, collection: str) -> dict | None:
     if not title:
         return None
 
-    # Get content - try textContent (site.standard), then leaflet blocks
+    # Skip author-only whitewind entries
+    if collection == "com.whtwnd.blog.entry":
+        if value.get("visibility") == "author":
+            return None
+
+    # Get content - try textContent (site.standard), then content as string
+    # (whitewind stores markdown), then leaflet blocks
     content = value.get("textContent") or ""
+    if not content:
+        content_obj = value.get("content")
+        if isinstance(content_obj, str):
+            content = content_obj
+        elif isinstance(content_obj, dict):
+            pages = content_obj.get("pages", [])
+            if pages:
+                content = extract_leaflet_blocks(pages)
     if not content:
         # Try leaflet-style pages/blocks at top level (pub.leaflet.document)
         pages = value.get("pages", [])
         if pages:
             content = extract_leaflet_blocks(pages)
-    if not content:
-        # Try content.pages (site.standard.document with pub.leaflet.content)
-        content_obj = value.get("content")
-        if isinstance(content_obj, dict):
-            pages = content_obj.get("pages", [])
-            if pages:
-                content = extract_leaflet_blocks(pages)
 
-    # Get created_at
-    created_at = value.get("createdAt", "")
+    # Get created_at (prefer publishedAt for leaflet/standard, createdAt for whitewind)
+    created_at = value.get("publishedAt") or value.get("createdAt", "")
 
     # Get publication reference - try "publication" (leaflet) then "site" (site.standard)
     publication = value.get("publication") or value.get("site")
@@ -196,11 +203,13 @@ def extract_document(record: dict, collection: str) -> dict | None:
     if not isinstance(tags, list):
         tags = []
 
-    # Determine platform from collection (site.standard is a lexicon, not a platform)
+    # Determine platform from collection
     if collection.startswith("pub.leaflet"):
         platform = "leaflet"
     elif collection.startswith("blog.pckt"):
         platform = "pckt"
+    elif collection.startswith("com.whtwnd"):
+        platform = "whitewind"
     else:
         # site.standard.* and others - platform will be detected from publication basePath
         platform = "unknown"
@@ -250,6 +259,7 @@ def main():
         "pub.leaflet.publication",
         "site.standard.document",
         "site.standard.publication",
+        "com.whtwnd.blog.entry",
     ]
 
     total_docs = 0
@@ -277,7 +287,7 @@ def main():
             parts = uri.split("/")
             rkey = parts[-1]
 
-            if collection.endswith(".document"):
+            if collection.endswith(".document") or collection == "com.whtwnd.blog.entry":
                 doc = extract_document(record, collection)
                 if not doc:
                     print(f"  skip {uri} (no title)")

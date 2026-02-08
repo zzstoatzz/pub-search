@@ -13,7 +13,7 @@
             .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
         },
         .zat = .{
-            .url = "https://tangled.sh/zat.dev/zat/archive/main",
+            .url = "https://tangled.org/zat.dev/zat/archive/main",
             .hash = "zat-0.1.0-5PuC7s8BAwDFmyYbkyZ8w4azed6eR_cqmHbh8f00NBSB",
         },
         .zqlite = .{
@@ -21,7 +21,7 @@
             .hash = "zqlite-0.0.1-RWLaYz6bmAAT7E_jxopXf-j5Ea8VQldnxsd6TU8sa0Bb",
         },
         .logfire = .{
-            .url = "https://tangled.sh/zzstoatzz.io/logfire-zig/archive/main",
+            .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/main",
             .hash = "logfire_zig-0.1.0-x2yDLgdwAADOXAZLNQJ8FUH5v1vfFwe5CApJtQ7c_pZd",
         },
     },
