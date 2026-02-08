@@ -336,12 +336,12 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
         };
 
         if (isDocumentCollection(rec.collection)) {
-            // skip non-public whitewind entries
+            // skip author-only whitewind entries (public + url are both publicly accessible)
             if (mem.eql(u8, rec.collection, WHITEWIND_ENTRY)) {
                 const record_val: json.Value = .{ .object = inner_record };
                 const visibility = zat.json.getString(record_val, "visibility") orelse "public";
-                if (!mem.eql(u8, visibility, "public")) {
-                    logfire.span("tap.dropped", .{ .reason = "not_public", .collection = rec.collection, .uri = uri }).end();
+                if (mem.eql(u8, visibility, "author")) {
+                    logfire.span("tap.dropped", .{ .reason = "author_only", .collection = rec.collection, .uri = uri }).end();
                     return;
                 }
             }

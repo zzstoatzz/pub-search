@@ -303,7 +303,7 @@ test "extractDocument: com.whtwnd.blog.entry (whitewind)" {
     const allocator = std.testing.allocator;
 
     const test_json =
-        \\{"title":"Love Across Discontinuity","content":"I've been thinking about what it means to love...","createdAt":"2026-02-08T08:01:41.776Z","visibility":"public"}
+        \\{"title":"Love Across Discontinuity","content":"I've been thinking about what it means to love...","createdAt":"2026-02-08T08:01:41.776Z","visibility":"url"}
     ;
 
     const parsed = try json.parseFromSlice(json.Value, allocator, test_json, .{});
