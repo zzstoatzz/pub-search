@@ -17,9 +17,12 @@ full-text search across documents and publications.
 |-------|------|----------|-------------|
 | `q` | string | no* | search query (titles and content) |
 | `tag` | string | no | filter by tag (documents only) |
-| `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `other` |
+| `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `whitewind`, `other` |
 | `since` | string | no | ISO date, filter to documents created after |
-| `mode` | string | no | `keyword` (default) or `semantic`. semantic uses vector similarity via voyage embeddings + turbopuffer ANN. ignores `tag` and `since` filters. |
+| `mode` | string | no | `keyword` (default), `semantic`, or `hybrid`. semantic uses voyage-4-lite embeddings + turbopuffer ANN. hybrid merges keyword + semantic via reciprocal rank fusion. semantic/hybrid ignore `tag` and `since` filters. |
+| `format` | string | no | `v2` wraps response in `{"results": [...], "total": N, "offset": N}` |
+| `limit` | int | no | max results to return (default 20) |
+| `offset` | int | no | pagination offset |
 
 *at least one of `q` or `tag` required
 
@@ -36,9 +39,20 @@ full-text search across documents and publications.
     "rkey": "abc123",
     "basePath": "gyst.leaflet.pub",
     "platform": "leaflet",
-    "path": "/001"
+    "path": "/001",
+    "source": "keyword",
+    "score": 0.85
   }
 ]
+```
+
+with `format=v2`:
+```json
+{
+  "results": [ /* same as above */ ],
+  "total": 89,
+  "offset": 0
+}
 ```
 
 **result types:**
@@ -54,7 +68,7 @@ full-text search across documents and publications.
 GET /similar?uri=<at-uri>
 ```
 
-find semantically similar documents using vector similarity (voyage-3-lite embeddings).
+find semantically similar documents using vector similarity (voyage-4-lite embeddings + turbopuffer ANN).
 
 **parameters:**
 | param | type | required | description |

@@ -8,11 +8,11 @@ we use SQLite's built-in full-text search (FTS5) via Turso.
 
 ### why FTS5 works for now
 
-- **scale**: ~3500 documents. FTS5 handles this trivially.
-- **latency**: 10-50ms for search queries. fine for our use case.
+- **scale**: ~25k documents. FTS5 handles this trivially.
+- **latency**: keyword p50 ~9ms (local SQLite replica), semantic p50 ~345ms (voyage + turbopuffer), hybrid p50 ~360ms.
 - **cost**: $0. included with Turso free tier.
 - **ops**: zero. no separate service to run.
-- **simplicity**: one database for everything (docs, FTS, vectors, cache).
+- **simplicity**: Turso as source of truth, local SQLite read replica for FTS queries.
 
 ### how it works
 
@@ -45,7 +45,10 @@ all in `backend/src/search.zig`:
 ### what's already decoupled
 
 - result types (`SearchResultJson`, `Doc`, `Pub`)
-- similarity search (uses `vector_distance_cos`, not FTS5)
+- similarity search (uses voyage-4-lite embeddings + turbopuffer ANN, not FTS5)
+- hybrid mode (merges keyword + semantic via reciprocal rank fusion, k=60)
+- search-time dedup by `(did, title)` — collapses cross-platform duplicates
+- ingestion-time dedup by content hash — prevents duplicates at write time
 - caching logic
 - HTTP layer (server.zig just calls `search()`)
 
@@ -104,13 +107,13 @@ estimated effort: 1-2 days to swap search backend.
 
 ### vector search scaling
 
-similarity search currently uses brute-force `vector_distance_cos` with caching. at scale:
+similarity search currently uses voyage-4-lite embeddings (1024 dims) with turbopuffer ANN index. this handles ~25k docs well. at larger scale:
 
 - **Elasticsearch**: has vector search (dense_vector + kNN)
 - **dedicated vector DB**: Qdrant, Pinecone, Weaviate
 - **pgvector**: if on Postgres
 
-could consolidate text + vector in Elasticsearch, or keep them separate.
+could consolidate text + vector in Elasticsearch, or keep them separate. turbopuffer scales well so may not need to change.
 
 ## summary
 

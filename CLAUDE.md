@@ -17,7 +17,8 @@
 - **db**: Turso (source of truth) + local SQLite read replica (FTS queries)
 
 ## platforms
-- leaflet, pckt, offprint, greengale: known platforms (detected via basePath)
+- leaflet, pckt, offprint, greengale, whitewind: known platforms
+- leaflet/pckt/offprint/greengale detected via basePath; whitewind via `com.whtwnd.*` collection
 - other: site.standard.* documents not from a known platform
 
 ## search ranking
@@ -31,6 +32,11 @@
 
 ## zig dependencies
 - update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)
+
+## MCP server
+- hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
+- local dev: `cd mcp && uv run pytest` for tests
+- deployed on fastmcp.app
 
 ## common tasks
 - check indexing: `curl -s https://leaflet-search-backend.fly.dev/api/dashboard | jq`

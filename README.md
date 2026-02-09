@@ -10,9 +10,10 @@ search ATProto publishing platforms ([leaflet](https://leaflet.pub), [pckt](http
 
 ## how it works
 
-1. **[tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap)** syncs content from ATProto firehose (signals on `site.standard.document`, filters `pub.leaflet.*` + `site.standard.*`)
-2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API
+1. **[tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap)** syncs content from ATProto firehose (`pub.leaflet.*`, `site.standard.*`, `com.whtwnd.*`)
+2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API with keyword, semantic, and hybrid modes
 3. **site** static frontend on Cloudflare Pages
+4. **mcp** server for AI agents (Claude Code, etc.)
 
 ## MCP server
 
@@ -27,19 +28,21 @@ see [mcp/README.md](mcp/README.md) for local setup and usage details.
 ## api
 
 ```
-GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>  # full-text search
-GET /similar?uri=<at-uri>                                          # find similar documents
-GET /tags                                                          # list all tags with counts
-GET /popular                                                       # popular search queries
-GET /stats                                                         # counts + request latency (p50/p95)
-GET /health                                                        # health check
+GET /search?q=<query>&mode=keyword|semantic|hybrid&platform=<platform>&tag=<tag>&since=<date>&format=v2
+GET /similar?uri=<at-uri>&format=v2
+GET /tags
+GET /popular
+GET /stats
+GET /health
 ```
 
-search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, offprint, greengale, or other). tag and platform filtering apply to documents only.
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, offprint, greengale, whitewind, or other). use `format=v2` for a wrapped response with `total`, `offset`, and `results` fields.
 
-**ranking**: results use hybrid BM25 + recency scoring. text relevance is primary, but recent documents get a boost (~1 point per 30 days). the `since` parameter filters to documents created after the given ISO date (e.g., `since=2025-01-01`).
+**modes**: `keyword` (default) uses FTS5 with BM25 + recency scoring. `semantic` uses voyage embeddings + [turbopuffer](https://turbopuffer.com) ANN. `hybrid` merges both via reciprocal rank fusion.
 
-`/similar` uses [Voyage AI](https://voyageai.com) embeddings with brute-force cosine similarity (~0.15s for 3500 docs).
+**ranking**: keyword results use hybrid BM25 + recency scoring. text relevance is primary, but recent documents get a boost (~1 point per 30 days). the `since` parameter filters to documents created after the given ISO date (e.g., `since=2025-01-01`).
+
+`/similar` uses [Voyage AI](https://voyageai.com) embeddings with [turbopuffer](https://turbopuffer.com) ANN search.
 
 ## configuration
 
@@ -61,12 +64,12 @@ the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `
 ## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 
 - [Fly.io](https://fly.io) hosts [Zig](https://ziglang.org) search API and content indexing
-- [Turso](https://turso.tech) cloud SQLite with [Voyage AI](https://voyageai.com) vector support
+- [Turso](https://turso.tech) cloud SQLite (source of truth) + local read replica (FTS queries)
+- [turbopuffer](https://turbopuffer.com) ANN vector search
+- [Voyage AI](https://voyageai.com) embeddings (voyage-4-lite, 1024 dims)
 - [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs content from ATProto firehose
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend
 
 ## embeddings
 
-documents are embedded using Voyage AI's `voyage-3-lite` model (512 dimensions). the backend automatically generates embeddings for new documents via a background worker - no manual backfill needed.
-
-**note:** we use brute-force cosine similarity instead of a vector index. Turso's DiskANN index has ~60s write latency per row, making it impractical for incremental updates. brute-force on 3500 vectors runs in ~0.15s which is fine for this scale.
+documents are embedded using Voyage AI's `voyage-4-lite` model (1024 dimensions). the backend automatically generates embeddings for new documents via a background worker — no manual backfill needed. similarity search uses turbopuffer's ANN index for fast nearest-neighbor queries across ~25k documents.

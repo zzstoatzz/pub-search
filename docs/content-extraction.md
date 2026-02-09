@@ -86,14 +86,26 @@ collection name doesn't indicate platform for `site.standard.*` records. detecti
 
 3. if neither matches → `other`
 
+## whitewind
+
+[WhiteWind](https://whtwnd.com) (`com.whtwnd.blog.entry`) stores content as markdown in the `content` field (a string, not a blocks structure). extraction is trivial — just use the string directly. author-only posts (`visibility: "author"`) are skipped.
+
+## deduplication
+
+two layers prevent duplicate results:
+
+1. **ingestion-time**: content hash (wyhash of `title + \x00 + content`) per author. if the same author publishes identical content across platforms (different rkeys), only the first is indexed.
+2. **search-time**: `(did, title)` dedup collapses any remaining duplicates in results (e.g. records indexed before content hash was added).
+
 ## summary
 
 - **pckt/offprint/greengale**: use `textContent` directly
 - **leaflet**: extract from `content.pages[].blocks[].block.plaintext`
-- **deduplication**: `ON CONFLICT` on `(did, rkey)` or `uri`
+- **whitewind**: use `content` string directly (markdown)
+- **deduplication**: content hash at ingestion + `(did, title)` at search time
 - **platform**: infer from basePath, fallback to content.$type for custom domains
 
 ## code references
 
-- `backend/src/extractor.zig` - content extraction logic, content_type field
-- `backend/src/indexer.zig:99-118` - platform detection from basePath + content_type
+- `backend/src/ingest/extractor.zig` - content extraction logic, content_type field
+- `backend/src/ingest/indexer.zig` - platform detection from basePath + content_type, content hash dedup
