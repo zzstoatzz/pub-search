@@ -1,5 +1,17 @@
 const std = @import("std");
+const logfire = @import("logfire");
 const db = @import("../db/mod.zig");
+
+/// Hash title+content for cross-platform dedup.
+/// Returns a 16-char hex string (wyhash of "title\x00content").
+fn computeContentHash(title: []const u8, content: []const u8) [16]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(title);
+    hasher.update("\x00");
+    hasher.update(content);
+    const hash = hasher.final();
+    return std.fmt.bytesToHex(std.mem.asBytes(&hash), .lower);
+}
 
 pub fn insertDocument(
     uri: []const u8,
@@ -28,6 +40,21 @@ pub fn insertDocument(
                 c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{old_uri}) catch {};
                 c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{old_uri}) catch {};
                 c.exec("DELETE FROM documents WHERE uri = ?", &.{old_uri}) catch {};
+            }
+        }
+    } else |_| {}
+
+    // cross-platform content dedup: if same author already has a document with
+    // identical title+content (different rkey from a different platform), skip it.
+    const content_hash: [16]u8 = computeContentHash(title, content);
+    if (c.query("SELECT uri FROM documents WHERE did = ? AND content_hash = ?", &.{ did, &content_hash })) |res| {
+        var result = res;
+        defer result.deinit();
+        if (result.first()) |row| {
+            const existing_uri = row.text(0);
+            if (!std.mem.eql(u8, existing_uri, uri)) {
+                logfire.debug("indexer: skipping dupe for {s} (existing: {s})", .{ uri, existing_uri });
+                return;
             }
         }
     } else |_| {}
@@ -122,8 +149,8 @@ pub fn insertDocument(
     // indexed_at uses strftime to record when this row was inserted/updated in Turso
     // (created_at is the document's publication date, which can be old for resynced docs)
     try c.exec(
-        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, indexed_at)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         \\ON CONFLICT(uri) DO UPDATE SET
         \\  did = excluded.did,
         \\  rkey = excluded.rkey,
@@ -136,10 +163,11 @@ pub fn insertDocument(
         \\  path = excluded.path,
         \\  base_path = excluded.base_path,
         \\  has_publication = excluded.has_publication,
+        \\  content_hash = excluded.content_hash,
         \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
         \\  embedded_at = documents.embedded_at
     ,
-        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub },
+        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash },
     );
 
     // update FTS index

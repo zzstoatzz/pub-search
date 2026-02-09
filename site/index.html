@@ -417,6 +417,43 @@
       color: #d4956a;
     }
 
+    .date-filter {
+      margin-bottom: 1rem;
+    }
+
+    .date-filter-label {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 0.5rem;
+    }
+
+    .date-filter-list {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .date-option {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #151515;
+      border: 1px solid #252525;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #777;
+    }
+
+    .date-option:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      color: #aaa;
+    }
+
+    .date-option.active {
+      background: rgba(14, 165, 233, 0.2);
+      border-color: #0ea5e9;
+      color: #38bdf8;
+    }
+
 
     .active-filter {
       display: flex;
@@ -512,7 +549,7 @@
       }
 
       /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .mode-option, .suggestion, input.tag-input {
+      .tag, .platform-option, .mode-option, .date-option, .suggestion, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -571,7 +608,7 @@
       }
 
       /* tags wrap better on mobile */
-      .tags-list, .platform-filter-list {
+      .tags-list, .platform-filter-list, .date-filter-list {
         gap: 0.5rem;
       }
 
@@ -590,7 +627,7 @@
 
     /* ensure touch targets on tablets too */
     @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .mode-option, .suggestion, .related-item, input.tag-input {
+      .tag, .platform-option, .mode-option, .date-option, .suggestion, .related-item, input.tag-input {
         min-height: 44px;
         display: inline-flex;
         align-items: center;
@@ -617,6 +654,8 @@
 
     <div id="platform-filter" class="platform-filter"></div>
 
+    <div id="date-filter" class="date-filter"></div>
+
     <div id="results" class="results">
       <div class="empty-state">
         <p>search atproto publishing platforms</p>
@@ -640,9 +679,11 @@
     const activeFilterDiv = document.getElementById('active-filter');
     const suggestionsDiv = document.getElementById('suggestions');
     const platformFilterDiv = document.getElementById('platform-filter');
+    const dateFilterDiv = document.getElementById('date-filter');
     const modeToggleDiv = document.getElementById('mode-toggle');
     let currentTag = null;
     let currentPlatform = null;
+    let currentSince = null;
     let currentMode = 'keyword';
     let allTags = [];
     let popularSearches = [];
@@ -674,6 +715,7 @@
       let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}&format=v2&limit=${PAGE_SIZE}&offset=${currentOffset}`;
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
+      if (currentSince) searchUrl += `&since=${encodeURIComponent(currentSince)}`;
       if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
 
       try {
@@ -978,6 +1020,7 @@
       if (q) params.set('q', q);
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
+      if (currentSince) params.set('since', currentSince);
       if (currentMode !== 'keyword') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
@@ -1049,6 +1092,53 @@
       platformFilterDiv.innerHTML = `<div class="platform-filter-label">filter by platform:</div><div class="platform-filter-list">${html}</div>`;
     }
 
+    function sinceFromPreset(preset) {
+      const d = new Date();
+      if (preset === 'week') d.setDate(d.getDate() - 7);
+      else if (preset === 'month') d.setMonth(d.getMonth() - 1);
+      else if (preset === 'year') d.setFullYear(d.getFullYear() - 1);
+      else return null;
+      return d.toISOString().slice(0, 10);
+    }
+
+    // reverse: given a since ISO date, find the closest preset
+    function presetFromSince(since) {
+      if (!since) return null;
+      const now = new Date();
+      const d = new Date(since);
+      const days = Math.round((now - d) / (1000 * 60 * 60 * 24));
+      if (days <= 8) return 'week';
+      if (days <= 32) return 'month';
+      if (days <= 370) return 'year';
+      return null;
+    }
+
+    let currentDatePreset = null;
+
+    function renderDateFilter() {
+      const presets = [
+        { id: null, label: 'any' },
+        { id: 'week', label: 'week' },
+        { id: 'month', label: 'month' },
+        { id: 'year', label: 'year' },
+      ];
+      const html = presets.map(p => `
+        <span class="date-option${currentDatePreset === p.id ? ' active' : ''}" onclick="setDateFilter(${p.id === null ? 'null' : `'${p.id}'`})">${p.label}</span>
+      `).join('');
+      dateFilterDiv.innerHTML = `<div class="date-filter-label">date:</div><div class="date-filter-list">${html}</div>`;
+    }
+
+    function setDateFilter(preset) {
+      if (currentDatePreset === preset) return;
+      currentDatePreset = preset;
+      currentSince = sinceFromPreset(preset);
+      renderDateFilter();
+      renderActiveFilter();
+      if (queryInput.value.trim() || currentTag || currentPlatform || currentSince) {
+        doSearch();
+      }
+    }
+
     function renderModeToggle() {
       const modes = [
         { id: 'keyword', label: 'keyword' },
@@ -1065,10 +1155,17 @@
       if (currentMode === mode) return;
       currentMode = mode;
       renderModeToggle();
-      // hide tags/since for non-keyword modes (tpuf doesn't support them)
+      // hide tags for semantic mode (tpuf doesn't support them); date works for keyword+hybrid
       tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
+      dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
       if (currentMode !== 'keyword') {
         currentTag = null;
+        renderActiveFilter();
+      }
+      if (currentMode === 'semantic') {
+        currentSince = null;
+        currentDatePreset = null;
+        renderDateFilter();
         renderActiveFilter();
       }
       // trigger search if there's a query
@@ -1078,16 +1175,18 @@
     }
 
     function renderActiveFilter() {
-      if (!currentTag && !currentPlatform) {
+      if (!currentTag && !currentPlatform && !currentSince) {
         activeFilterDiv.innerHTML = '';
         return;
       }
       let parts = [];
       if (currentTag) parts.push(`tag: <strong>#${escapeHtml(currentTag)}</strong>`);
       if (currentPlatform) parts.push(`platform: <strong>${escapeHtml(currentPlatform)}</strong>`);
+      if (currentSince) parts.push(`since: <strong>${escapeHtml(currentSince)}</strong>`);
       const clearActions = [];
       if (currentTag) clearActions.push(`<span class="clear" onclick="clearTag()">× tag</span>`);
       if (currentPlatform) clearActions.push(`<span class="clear" onclick="clearPlatform()">× platform</span>`);
+      if (currentSince) clearActions.push(`<span class="clear" onclick="setDateFilter(null)">× date</span>`);
       activeFilterDiv.innerHTML = `
         <div class="active-filter">
           <span>filtering by ${parts.join(', ')} <span style="color:#666;font-size:10px">(documents only)</span></span>
@@ -1186,12 +1285,16 @@
       queryInput.value = params.get('q') || '';
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
+      currentSince = params.get('since') || null;
+      currentDatePreset = presetFromSince(currentSince);
       currentMode = params.get('mode') || 'keyword';
       renderActiveFilter();
       renderTags();
       renderPlatformFilter();
+      renderDateFilter();
       renderModeToggle();
       tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
+      dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
       if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
     });
 
@@ -1200,15 +1303,19 @@
     const initialQuery = initialParams.get('q');
     const initialTag = initialParams.get('tag');
     const initialPlatform = initialParams.get('platform');
+    const initialSince = initialParams.get('since');
     const initialMode = initialParams.get('mode');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
     if (initialPlatform) currentPlatform = initialPlatform;
+    if (initialSince) { currentSince = initialSince; currentDatePreset = presetFromSince(initialSince); }
     if (initialMode) currentMode = initialMode;
     renderActiveFilter();
     renderPlatformFilter();
+    renderDateFilter();
     renderModeToggle();
     tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
+    dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
 
     if (initialQuery || initialTag || initialPlatform) {
       search(initialQuery || '', initialTag, initialPlatform);

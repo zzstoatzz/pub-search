@@ -141,6 +141,10 @@ fn runMigrations(client: *Client) !void {
     // documents using site.standard.* that don't match a known platform are simply "other"
     client.exec("UPDATE documents SET platform = 'other' WHERE platform = 'standardsite'", &.{}) catch {};
 
+    // content_hash: used for cross-platform dedup (same author + same content = skip)
+    client.exec("ALTER TABLE documents ADD COLUMN content_hash TEXT", &.{}) catch {};
+    client.exec("CREATE INDEX IF NOT EXISTS idx_documents_did_content_hash ON documents(did, content_hash)", &.{}) catch {};
+
     // detect platform from publication basePath (site.standard.* is a lexicon, not a platform)
     // known platforms (pckt, leaflet, offprint) use site.standard.* but have distinct basePaths
     client.exec(
