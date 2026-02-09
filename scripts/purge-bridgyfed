@@ -1,0 +1,212 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Purge bridgy fed content from turso.
+
+Finds all DIDs with platform='other', resolves their PDS via plc.directory,
+and deletes documents/tags/FTS entries for any DID hosted on brid.gy.
+
+Usage:
+    ./scripts/purge-bridgyfed          # dry run (default)
+    ./scripts/purge-bridgyfed --apply  # actually delete
+"""
+
+import argparse
+import os
+import sys
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+def turso_query(settings: Settings, sql: str, args: list | None = None) -> list[dict]:
+    """Execute a query against Turso and return rows."""
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = []
+        for a in args:
+            if a is None:
+                stmt["args"].append({"type": "null"})
+            else:
+                stmt["args"].append({"type": "text", "value": str(a)})
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
+        timeout=60,
+    )
+    if response.status_code != 200:
+        print(f"turso error: {response.text}", file=sys.stderr)
+    response.raise_for_status()
+
+    data = response.json()
+    result = data["results"][0]["response"]["result"]
+    cols = [c["name"] for c in result["cols"]]
+    rows = []
+    for row in result["rows"]:
+        rows.append({col: cell["value"] for col, cell in zip(cols, row)})
+    return rows
+
+
+def turso_exec(settings: Settings, sql: str, args: list | None = None) -> int:
+    """Execute a statement against Turso, return affected rows."""
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = []
+        for a in args:
+            if a is None:
+                stmt["args"].append({"type": "null"})
+            else:
+                stmt["args"].append({"type": "text", "value": str(a)})
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
+        timeout=60,
+    )
+    if response.status_code != 200:
+        print(f"turso error: {response.text}", file=sys.stderr)
+    response.raise_for_status()
+
+    data = response.json()
+    return data["results"][0]["response"]["result"]["affected_row_count"]
+
+
+def get_pds_endpoint(did: str) -> str | None:
+    """Get PDS endpoint from PLC directory. Returns None on error."""
+    try:
+        resp = httpx.get(f"https://plc.directory/{did}", timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        for service in data.get("service", []):
+            if service.get("type") == "AtprotoPersonalDataServer":
+                return service["serviceEndpoint"]
+    except Exception as e:
+        print(f"  plc lookup failed for {did}: {e}", file=sys.stderr)
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Purge bridgy fed content from turso")
+    parser.add_argument(
+        "--apply", action="store_true", help="Actually delete (default is dry run)"
+    )
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.apply:
+        print("=== DRY RUN (pass --apply to delete) ===\n")
+
+    # step 1: get distinct DIDs with platform='other'
+    print("querying distinct DIDs with platform='other'...")
+    rows = turso_query(
+        settings, "SELECT DISTINCT did FROM documents WHERE platform = 'other'"
+    )
+    dids = [r["did"] for r in rows]
+    print(f"  found {len(dids)} distinct DIDs\n")
+
+    # step 2: resolve each DID's PDS, identify bridgy fed ones
+    bridgy_dids = []
+    non_bridgy_dids = []
+    for i, did in enumerate(dids):
+        pds = get_pds_endpoint(did)
+        if pds and "brid.gy" in pds:
+            bridgy_dids.append(did)
+            if len(bridgy_dids) <= 5:
+                print(f"  [{i+1}/{len(dids)}] {did} -> {pds} (BRIDGY)")
+        else:
+            non_bridgy_dids.append(did)
+            if len(non_bridgy_dids) <= 5:
+                print(f"  [{i+1}/{len(dids)}] {did} -> {pds or '???'}")
+
+        if (i + 1) % 50 == 0:
+            print(f"  ... resolved {i+1}/{len(dids)} DIDs")
+
+    print(f"\n  bridgy fed: {len(bridgy_dids)}")
+    print(f"  non-bridgy: {len(non_bridgy_dids)}\n")
+
+    if not bridgy_dids:
+        print("nothing to purge!")
+        return
+
+    # step 3: count docs to be deleted
+    total_deleted = 0
+    for did in bridgy_dids:
+        count_rows = turso_query(
+            settings,
+            "SELECT COUNT(*) as cnt FROM documents WHERE did = ?",
+            [did],
+        )
+        count = int(count_rows[0]["cnt"]) if count_rows else 0
+        total_deleted += count
+
+    print(f"total documents to delete: {total_deleted}")
+
+    if not args.apply:
+        print("\npass --apply to actually delete these documents")
+        return
+
+    # step 4: delete in batches per DID
+    print("\ndeleting...")
+    deleted_docs = 0
+    for i, did in enumerate(bridgy_dids):
+        tags = turso_exec(
+            settings,
+            "DELETE FROM document_tags WHERE document_uri IN (SELECT uri FROM documents WHERE did = ?)",
+            [did],
+        )
+        fts = turso_exec(
+            settings,
+            "DELETE FROM documents_fts WHERE uri IN (SELECT uri FROM documents WHERE did = ?)",
+            [did],
+        )
+        docs = turso_exec(
+            settings,
+            "DELETE FROM documents WHERE did = ?",
+            [did],
+        )
+        deleted_docs += docs
+
+        if (i + 1) % 10 == 0 or (i + 1) == len(bridgy_dids):
+            print(
+                f"  [{i+1}/{len(bridgy_dids)}] deleted {deleted_docs} docs so far"
+            )
+
+    print(f"\ndone! deleted {deleted_docs} documents from {len(bridgy_dids)} bridgy fed DIDs")
+
+
+if __name__ == "__main__":
+    main()
