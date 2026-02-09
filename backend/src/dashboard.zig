@@ -52,10 +52,11 @@ pub const TAGS_SQL =
 ;
 
 const TIMELINE_SQL =
-    \\SELECT DATE(created_at) as date, COUNT(*) as count
+    \\SELECT DATE(indexed_at) as date, COUNT(*) as count
     \\FROM documents
-    \\WHERE created_at IS NOT NULL AND created_at != ''
-    \\GROUP BY DATE(created_at)
+    \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
+    \\AND DATE(indexed_at) <= DATE('now')
+    \\GROUP BY DATE(indexed_at)
     \\ORDER BY date DESC
     \\LIMIT 30
 ;
