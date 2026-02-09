@@ -303,11 +303,14 @@ async def find_similar(uri: str, limit: int = 5) -> list[SearchResult]:
 
 
 @mcp.tool
-async def get_tags() -> list[Tag]:
+async def get_tags(limit: int = 10) -> list[Tag]:
     """list all available tags with document counts.
 
     returns tags sorted by document count (most popular first).
     useful for discovering topics and filtering searches.
+
+    args:
+        limit: max tags to return (default 10)
 
     returns:
         list of tags with their document counts
@@ -318,7 +321,7 @@ async def get_tags() -> list[Tag]:
         data = response.json()
 
     results = _extract_results(data)
-    return [Tag(**t) for t in results]
+    return [Tag(**t) for t in results[:limit]]
 
 
 @mcp.tool
@@ -331,7 +334,9 @@ async def get_stats() -> Stats:
     async with get_http_client() as client:
         response = await client.get("/stats")
         response.raise_for_status()
-        return Stats(**response.json())
+        data = response.json()
+        data.pop("timing", None)
+        return Stats(**data)
 
 
 @mcp.tool
