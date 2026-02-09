@@ -128,7 +128,8 @@ def voyage_embed(settings: Settings, texts: list[str]) -> list[list[float]]:
         },
         json={
             "input": texts,
-            "model": "voyage-3-lite",
+            "model": "voyage-4-lite",
+            "output_dimension": 1024,
             "input_type": "document",
         },
         timeout=60,
@@ -158,7 +159,7 @@ def main():
     except Exception as e:
         if "no such column" in str(e).lower():
             print("adding embedding column...")
-            turso_exec(settings, "ALTER TABLE documents ADD COLUMN embedding F32_BLOB(512)")
+            turso_exec(settings, "ALTER TABLE documents ADD COLUMN embedding F32_BLOB(1024)")
             print("done")
         else:
             raise

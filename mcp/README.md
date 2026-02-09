@@ -33,7 +33,7 @@ claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leafle
 | `find_similar` | find semantically similar documents |
 | `get_tags` | list all tags with document counts |
 | `get_popular` | see popular search queries |
-| `get_stats` | index statistics (document/publication counts) |
+| `get_stats` | index statistics and performance metrics |
 
 ## workflow
 

@@ -6,7 +6,7 @@ from mcp.types import TextContent
 from fastmcp.client import Client
 from fastmcp.client.transports import FastMCPTransport
 
-from pub_search._types import Document, PopularSearch, SearchResult, Stats, Tag
+from pub_search._types import Document, EndpointTiming, PopularSearch, SearchResult, Stats, Tag
 from pub_search.server import mcp
 
 
@@ -70,11 +70,34 @@ class TestTypes:
         assert p.query == "rust async"
         assert p.count == 100
 
-    def test_stats(self):
-        """Stats can be constructed."""
+    def test_stats_minimal(self):
+        """Stats can be constructed with just documents/publications."""
         s = Stats(documents=1000, publications=50)
         assert s.documents == 1000
         assert s.publications == 50
+        assert s.embeddings == 0
+        assert s.timing == {}
+
+    def test_stats_full(self):
+        """Stats can be constructed with all fields from API."""
+        s = Stats(
+            documents=6527,
+            publications=2335,
+            embeddings=6527,
+            searches=5321,
+            errors=0,
+            started_at=1767333441,
+            cache_hits=978,
+            cache_misses=627,
+            timing={
+                "search_keyword": EndpointTiming(
+                    count=320, avg_ms=140.1, p50_ms=7.7, p95_ms=616.2, p99_ms=1090.1, max_ms=7294.9
+                ),
+            },
+        )
+        assert s.embeddings == 6527
+        assert s.cache_hits == 978
+        assert s.timing["search_keyword"].p50_ms == 7.7
 
     def test_document(self):
         """Document can be constructed with full content."""
