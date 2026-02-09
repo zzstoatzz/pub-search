@@ -5,6 +5,9 @@
     "dev": "wrangler pages dev --port 8788",
     "deploy": "wrangler pages deploy"
   },
+  "dependencies": {
+    "workers-og": "^0.0.20"
+  },
   "devDependencies": {
     "wrangler": "^4.0.0"
   }
