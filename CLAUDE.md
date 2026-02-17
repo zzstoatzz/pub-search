@@ -2,7 +2,7 @@
 
 ## deployment
 - **backend**: push to `main` touching `backend/**` → auto-deploys via GitHub Actions
-- **frontend**: manual deploy only (`wrangler pages deploy site --project-name leaflet-search`)
+- **frontend**: manual deploy from `site/` directory (`cd site && wrangler pages deploy . --project-name leaflet-search`)
 - **tap**: manual deploy from `tap/` directory (`fly deploy --app leaflet-search-tap`)
 
 ## remotes
