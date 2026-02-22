@@ -276,6 +276,17 @@ async function fetchDashboard() {
     document.getElementById('publications').textContent = data.publications;
     document.getElementById('embeddings').textContent = data.embeddings ?? '--';
 
+    if (data.relayUrl) {
+      const relayEl = document.getElementById('relay');
+      try {
+        const host = new URL(data.relayUrl).hostname;
+        relayEl.textContent = host;
+        relayEl.title = data.relayUrl;
+      } catch {
+        relayEl.textContent = data.relayUrl;
+      }
+    }
+
     renderPlatforms(data.platforms);
     renderTiming(data.timing);
     renderTimeline(data.timeline);
