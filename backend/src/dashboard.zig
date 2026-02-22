@@ -18,12 +18,17 @@ pub const Data = struct {
     publications: i64,
     documents: i64,
     embeddings: i64,
+    relay_url: []const u8,
     tags_json: []const u8,
     timeline_json: []const u8,
     top_pubs_json: []const u8,
     platforms_json: []const u8,
     timing_json: []const u8,
 };
+
+fn getRelayUrl() []const u8 {
+    return std.posix.getenv("TAP_RELAY_URL") orelse "unknown";
+}
 
 // all dashboard queries batched into one request
 const STATS_SQL =
@@ -110,6 +115,7 @@ pub fn fetch(alloc: Allocator) !Data {
         .publications = publications,
         .documents = documents,
         .embeddings = embeddings,
+        .relay_url = getRelayUrl(),
         .tags_json = try formatTagsJson(alloc, batch.get(2)),
         .timeline_json = try formatTimelineJson(alloc, batch.get(3)),
         .top_pubs_json = try formatPubsJson(alloc, batch.get(4)),
@@ -168,6 +174,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         .publications = publications,
         .documents = documents,
         .embeddings = embeddings,
+        .relay_url = getRelayUrl(),
         .tags_json = tags_json,
         .timeline_json = timeline_json,
         .top_pubs_json = top_pubs_json,
@@ -335,6 +342,9 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
 
     try jw.objectField("embeddings");
     try jw.write(data.embeddings);
+
+    try jw.objectField("relayUrl");
+    try jw.write(data.relay_url);
 
     try jw.objectField("platforms");
     try jw.beginWriteRaw();

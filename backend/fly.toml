@@ -6,6 +6,7 @@ primary_region = 'ewr'
 [env]
   TAP_HOST = 'leaflet-search-tap.internal'
   TAP_PORT = '2480'
+  TAP_RELAY_URL = 'https://relay.waow.tech'
 
 [http_service]
   internal_port = 3000
