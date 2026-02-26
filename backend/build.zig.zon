@@ -13,8 +13,8 @@
             .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
         },
         .zat = .{
-            .url = "https://tangled.org/zat.dev/zat/archive/main",
-            .hash = "zat-0.1.0-5PuC7s8BAwDFmyYbkyZ8w4azed6eR_cqmHbh8f00NBSB",
+            .url = "https://tangled.sh/zat.dev/zat/archive/v0.1.9",
+            .hash = "zat-0.1.9-5PuC7tL5AwAgHHJXdOHTCy373NtwQW7cE2nfB7rq4yx_",
         },
         .zqlite = .{
             .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
