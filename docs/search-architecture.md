@@ -4,11 +4,11 @@ current state, rationale, and future options.
 
 ## current: SQLite FTS5
 
-we use SQLite's built-in full-text search (FTS5) via Turso.
+keyword search uses SQLite's FTS5 on a local read replica, synced from Turso (the source of truth).
 
 ### why FTS5 works for now
 
-- **scale**: ~25k documents. FTS5 handles this trivially.
+- **scale**: ~11k documents. FTS5 handles this trivially.
 - **latency**: keyword p50 ~9ms (local SQLite replica), semantic p50 ~345ms (voyage + turbopuffer), hybrid p50 ~360ms.
 - **cost**: $0. included with Turso free tier.
 - **ops**: zero. no separate service to run.
@@ -21,7 +21,7 @@ user query: "crypto-casino"
      ↓
 buildFtsQuery(): "crypto OR casino*"
      ↓
-FTS5 MATCH query with BM25 + recency decay
+FTS5 MATCH query with BM25 + recency decay (on local SQLite replica)
      ↓
 results with snippet()
 ```
@@ -38,7 +38,7 @@ all in `backend/src/search.zig`:
 
 | component | FTS5-specific |
 |-----------|---------------|
-| 10 query definitions | `MATCH`, `snippet()`, `ORDER BY rank` |
+| 14 query definitions | `MATCH`, `snippet()`, `ORDER BY rank` |
 | `buildFtsQuery()` | constructs FTS5 syntax |
 | schema | `documents_fts`, `publications_fts` virtual tables |
 
@@ -99,7 +99,7 @@ trade-offs:
 2. add Elasticsearch as search index
 3. sync documents to ES on write (async)
 4. point `/search` at Elasticsearch
-5. keep `/similar` on Turso (vector search)
+5. keep `/similar` on turbopuffer (vector search)
 
 the `search()` function would change from SQL queries to ES client calls. result types stay the same. HTTP layer unchanged.
 
@@ -107,7 +107,7 @@ estimated effort: 1-2 days to swap search backend.
 
 ### vector search scaling
 
-similarity search currently uses voyage-4-lite embeddings (1024 dims) with turbopuffer ANN index. this handles ~25k docs well. at larger scale:
+similarity search currently uses voyage-4-lite embeddings (1024 dims) with turbopuffer ANN index. this handles ~11k docs well. at larger scale:
 
 - **Elasticsearch**: has vector search (dense_vector + kNN)
 - **dedicated vector DB**: Qdrant, Pinecone, Weaviate

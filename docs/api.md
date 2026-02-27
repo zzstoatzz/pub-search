@@ -19,12 +19,17 @@ full-text search across documents and publications.
 | `tag` | string | no | filter by tag (documents only) |
 | `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `whitewind`, `other` |
 | `since` | string | no | ISO date, filter to documents created after |
-| `mode` | string | no | `keyword` (default), `semantic`, or `hybrid`. semantic uses voyage-4-lite embeddings + turbopuffer ANN. hybrid merges keyword + semantic via reciprocal rank fusion. semantic/hybrid ignore `tag` and `since` filters. |
-| `format` | string | no | `v2` wraps response in `{"results": [...], "total": N, "offset": N}` |
+| `mode` | string | no | `keyword` (default), `semantic`, or `hybrid`. semantic uses voyage-4-lite embeddings + turbopuffer ANN. hybrid merges keyword + semantic via reciprocal rank fusion. |
+| `format` | string | no | `v2` wraps response in `{"results": [...], "total": N, "hasMore": bool}` |
 | `limit` | int | no | max results to return (default 20) |
 | `offset` | int | no | pagination offset |
 
 *at least one of `q` or `tag` required
+
+**filter behavior by mode:**
+- **keyword**: respects all filters (`tag`, `platform`, `since`)
+- **semantic**: respects `platform` only. ignores `tag` and `since`.
+- **hybrid**: keyword half respects all filters, semantic half respects `platform` only. results merged via RRF.
 
 **response:**
 ```json
@@ -40,8 +45,8 @@ full-text search across documents and publications.
     "basePath": "gyst.leaflet.pub",
     "platform": "leaflet",
     "path": "/001",
-    "source": "keyword",
-    "score": 0.85
+    "coverImage": "",
+    "handle": "@user.bsky.social"
   }
 ]
 ```
@@ -51,7 +56,15 @@ with `format=v2`:
 {
   "results": [ /* same as above */ ],
   "total": 89,
-  "offset": 0
+  "hasMore": false
+}
+```
+
+hybrid mode adds `source` and `score` fields:
+```json
+{
+  "source": "keyword+semantic",
+  "score": 0.85
 }
 ```
 
@@ -109,25 +122,6 @@ popular search queries.
 ]
 ```
 
-### platforms
-
-```
-GET /platforms
-```
-
-document counts by platform.
-
-**response:**
-```json
-[
-  {"platform": "leaflet", "count": 2500},
-  {"platform": "pckt", "count": 800},
-  {"platform": "greengale", "count": 150},
-  {"platform": "offprint", "count": 50},
-  {"platform": "other", "count": 100}
-]
-```
-
 ### stats
 
 ```
@@ -139,18 +133,20 @@ index statistics and request timing.
 **response:**
 ```json
 {
-  "documents": 3500,
-  "publications": 120,
-  "embeddings": 3200,
+  "documents": 11445,
+  "publications": 2603,
+  "embeddings": 10900,
   "searches": 5000,
   "errors": 5,
   "cache_hits": 1200,
   "cache_misses": 800,
   "timing": {
-    "search": {"count": 1000, "avg_ms": 25, "p50_ms": 20, "p95_ms": 50, "p99_ms": 80, "max_ms": 150},
-    "similar": {"count": 200, "avg_ms": 150, "p50_ms": 140, "p95_ms": 200, "p99_ms": 250, "max_ms": 300},
-    "tags": {"count": 500, "avg_ms": 5, "p50_ms": 4, "p95_ms": 10, "p99_ms": 15, "max_ms": 25},
-    "popular": {"count": 300, "avg_ms": 3, "p50_ms": 2, "p95_ms": 5, "p99_ms": 8, "max_ms": 12}
+    "search_keyword": {"count": 1000, "avg_ms": 25, "p50_ms": 20, "p95_ms": 50, "p99_ms": 80, "max_ms": 150},
+    "search_semantic": {"count": 100, "avg_ms": 350, "p50_ms": 340, ...},
+    "search_hybrid": {"count": 50, "avg_ms": 380, ...},
+    "similar": {"count": 200, "avg_ms": 150, ...},
+    "tags": {"count": 500, "avg_ms": 5, ...},
+    "popular": {"count": 300, "avg_ms": 3, ...}
   }
 }
 ```
@@ -174,16 +170,16 @@ hourly activity counts (last 24 hours).
 GET /api/dashboard
 ```
 
-rich dashboard data for analytics UI.
+rich dashboard data for analytics UI. includes platform counts (no separate `/platforms` endpoint).
 
 **response:**
 ```json
 {
   "startedAt": 1705000000,
   "searches": 5000,
-  "publications": 120,
-  "documents": 3500,
-  "platforms": [{"platform": "leaflet", "count": 2500}],
+  "publications": 2603,
+  "documents": 11445,
+  "platforms": [{"platform": "leaflet", "count": 5399}],
   "tags": [{"tag": "programming", "count": 42}],
   "timeline": [{"date": "2025-01-15", "count": 25}],
   "topPubs": [{"name": "gyst", "basePath": "gyst.leaflet.pub", "count": 150}],
@@ -204,10 +200,13 @@ GET /health
 
 ## building URLs
 
-documents can be accessed on the web via their `basePath` and `rkey`:
-- articles: `https://{basePath}/{rkey}` or `https://{basePath}{path}` if path is set
-- publications: `https://{basePath}`
+documents can be accessed on the web via their `basePath` and platform-specific patterns:
 
-examples:
-- `https://gyst.leaflet.pub/3ldasifz7bs2l`
-- `https://greengale.app/3fz.org/001`
+| platform | URL pattern | example |
+|----------|-------------|---------|
+| leaflet | `https://{basePath}/{rkey}` | `https://gyst.leaflet.pub/3ldasifz7bs2l` |
+| pckt | `https://{basePath}{path}` | `https://devlog.pckt.blog/some-slug` |
+| offprint | `https://{basePath}{path}` | `https://dalisay.offprint.app/a/3me5ucj7vxf23-title-slug` |
+| greengale | `https://{basePath}{path}` | `https://3fz.greengale.app/001` |
+| whitewind | `https://whtwnd.com/{did}/{rkey}` | `https://whtwnd.com/did:plc:.../3abc123` |
+| publications | `https://{basePath}` | `https://gyst.leaflet.pub` |

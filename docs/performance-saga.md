@@ -2,7 +2,7 @@
 
 ## what happened
 
-attempted to add a vector similarity search feature using voyage-3 embeddings (1024 dims) stored in turso with a DiskANN index. the embedding model change had a different shape than what was stored, turso performance degraded badly, and multiple attempts to back out the changes failed to restore performance.
+attempted to add a vector similarity search feature using voyage-3-lite embeddings (512 dims) stored in turso with a DiskANN index. the embedding model change had a different shape than what was stored, turso performance degraded badly, and multiple attempts to back out the changes failed to restore performance.
 
 ## the problems we found and fixed
 
@@ -91,8 +91,9 @@ client → fly proxy (TLS termination) → app (port 3000)
                                          ├── HTTP thread pool (16 workers)
                                          ├── local SQLite (read_conn for search, conn+mutex for writes)
                                          ├── turso client (fallback for unsupported queries)
-                                         ├── sync thread (turso → local, periodic)
+                                         ├── sync thread (turso → local, full on startup + periodic incremental)
                                          ├── tap consumer (firehose → turso)
+                                         ├── embedder (voyage-4-lite → turbopuffer, background)
                                          ├── stats buffer (periodic flush to turso)
                                          └── activity tracker
 ```

@@ -74,10 +74,13 @@ tap loads **entire repo CARs into memory** during resync. some bsky users have r
   memory = '2gb'  # 1gb is not enough
 
 [env]
-  TAP_RESYNC_PARALLELISM = '1'      # only one repo CAR in memory at a time (default: 5)
-  TAP_FIREHOSE_PARALLELISM = '5'    # concurrent event processors (default: 10)
-  TAP_OUTBOX_CAPACITY = '10000'     # event buffer size (default: 100000)
-  TAP_IDENT_CACHE_SIZE = '10000'    # identity cache entries (default: 2000000)
+  TAP_RELAY_URL = 'https://relay.waow.tech'  # custom relay (not default bsky.network)
+  TAP_RESYNC_PARALLELISM = '1'               # only one repo CAR in memory at a time (default: 5)
+  TAP_FIREHOSE_PARALLELISM = '5'             # concurrent event processors (default: 10)
+  TAP_OUTBOX_CAPACITY = '10000'              # event buffer size (default: 100000)
+  TAP_IDENT_CACHE_SIZE = '10000'             # identity cache entries (default: 2000000)
+  TAP_CURSOR_SAVE_INTERVAL = '5s'            # how often to persist firehose cursor
+  TAP_REPO_FETCH_TIMEOUT = '600s'            # timeout for repo CAR fetches
 ```
 
 ### why these values?
@@ -184,14 +187,16 @@ tap exposes HTTP endpoints for monitoring and control:
 | `/repos/add` | POST with `{"dids":["did:plc:..."]}` to add repos |
 | `/repos/remove` | POST with `{"dids":["did:plc:..."]}` to remove repos |
 
+**note:** the tap container has no `curl` — use `wget` instead.
+
 example: check repo status
 ```bash
-fly ssh console -a leaflet-search-tap -C "curl -s localhost:2480/info/did:plc:abc123"
+fly ssh console -a leaflet-search-tap -C "wget -qO- http://localhost:2480/info/did:plc:abc123"
 ```
 
 example: manually add a repo for backfill
 ```bash
-fly ssh console -a leaflet-search-tap -C 'curl -X POST -H "Content-Type: application/json" -d "{\"dids\":[\"did:plc:abc123\"]}" localhost:2480/repos/add'
+fly ssh console -a leaflet-search-tap -C 'wget -qO- --post-data="{\"dids\":[\"did:plc:abc123\"]}" --header="Content-Type: application/json" http://localhost:2480/repos/add'
 ```
 
 ## fly.io deployment
