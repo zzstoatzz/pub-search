@@ -99,12 +99,16 @@
       document.documentElement.setAttribute('data-theme', resolved);
       renderThemeToggle();
     }
+    var THEME_ICONS = { dark: '\u263E', light: '\u263C', system: '\u25D1' };
+    var THEME_CYCLE = ['dark', 'light', 'system'];
+    function cycleTheme() {
+      var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3];
+      applyTheme(next);
+    }
     function renderThemeToggle() {
       var el = document.getElementById('theme-toggle');
       if (!el) return;
-      el.innerHTML = ['dark', 'light', 'system'].map(function(t) {
-        return '<span class="theme-option' + (currentTheme === t ? ' active' : '') + '" onclick="applyTheme(\'' + t + '\')">' + t + '</span>';
-      }).join('');
+      el.innerHTML = '<span onclick="cycleTheme()" title="' + currentTheme + '">' + THEME_ICONS[currentTheme] + '</span>';
     }
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
       if (currentTheme === 'system') applyTheme('system');

@@ -1,0 +1,300 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Backfill cover_image column for existing documents.
+
+Fetches records from their PDS and extracts coverImage blob CIDs.
+For leaflet documents, falls back to the first image block CID.
+
+Usage:
+    ./scripts/backfill-cover-images                    # all platforms
+    ./scripts/backfill-cover-images --platform pckt    # specific platform
+    ./scripts/backfill-cover-images --dry-run           # preview only
+    ./scripts/backfill-cover-images --limit 50          # limit batch size
+"""
+
+import argparse
+import os
+import sys
+import time
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://"):]
+        return url
+
+
+def turso_query(settings: Settings, sql: str, args: list | None = None) -> list[dict]:
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = []
+        for a in args:
+            if a is None:
+                stmt["args"].append({"type": "null"})
+            else:
+                stmt["args"].append({"type": "text", "value": str(a)})
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    result = data["results"][0]
+    if result.get("type") == "error":
+        raise RuntimeError(f"turso error: {result['error']}")
+
+    resp = result["response"]["result"]
+    cols = [c["name"] for c in resp["cols"]]
+    rows = []
+    for row in resp["rows"]:
+        rows.append({cols[i]: cell["value"] if cell["type"] != "null" else None for i, cell in enumerate(row)})
+    return rows
+
+
+def turso_exec(settings: Settings, sql: str, args: list | None = None) -> None:
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = []
+        for a in args:
+            if a is None:
+                stmt["args"].append({"type": "null"})
+            else:
+                stmt["args"].append({"type": "text", "value": str(a)})
+
+    response = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"turso error: {response.text}", file=sys.stderr)
+    response.raise_for_status()
+
+
+# --- PDS helpers ---
+
+_pds_cache: dict[str, str] = {}
+
+
+def get_pds_endpoint(did: str) -> str | None:
+    if did in _pds_cache:
+        return _pds_cache[did]
+    try:
+        resp = httpx.get(f"https://plc.directory/{did}", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        for service in data.get("service", []):
+            if service.get("type") == "AtprotoPersonalDataServer":
+                _pds_cache[did] = service["serviceEndpoint"]
+                return _pds_cache[did]
+    except Exception as e:
+        print(f"  warning: failed to resolve PDS for {did}: {e}", file=sys.stderr)
+    return None
+
+
+def get_record(pds: str, did: str, collection: str, rkey: str) -> dict | None:
+    try:
+        resp = httpx.get(
+            f"{pds}/xrpc/com.atproto.repo.getRecord",
+            params={"repo": did, "collection": collection, "rkey": rkey},
+            timeout=10,
+        )
+        if resp.status_code in (400, 404):
+            return None
+        resp.raise_for_status()
+        return resp.json().get("value")
+    except Exception as e:
+        print(f"  warning: failed to fetch {collection}/{rkey}: {e}", file=sys.stderr)
+        return None
+
+
+# platform-native collections to try when source_collection fails
+FALLBACK_COLLECTIONS: dict[str, list[str]] = {
+    "pckt": ["blog.pckt.document"],
+    "offprint": ["app.offprint.document.article"],
+    "greengale": ["app.greengale.document"],
+    "leaflet": ["pub.leaflet.document"],
+}
+
+
+def get_record_with_fallbacks(pds: str, did: str, collection: str, rkey: str, platform: str) -> dict | None:
+    """Try source_collection first, then platform-native collections."""
+    value = get_record(pds, did, collection, rkey)
+    if value:
+        return value
+    for alt in FALLBACK_COLLECTIONS.get(platform, []):
+        if alt != collection:
+            value = get_record(pds, did, alt, rkey)
+            if value:
+                return value
+    return None
+
+
+# --- cover image extraction (mirrors extractor.zig logic) ---
+
+def extract_cover_image(value: dict) -> str | None:
+    """Extract cover image CID from a record value."""
+    # try coverImage.ref.$link (site.standard/pckt/offprint/greengale)
+    cover = value.get("coverImage")
+    if isinstance(cover, dict):
+        ref = cover.get("ref")
+        if isinstance(ref, dict):
+            link = ref.get("$link")
+            if link:
+                return link
+
+    # fallback: first image block in leaflet pages
+    return extract_first_image_cid(value)
+
+
+def extract_first_image_cid(value: dict) -> str | None:
+    """Extract first image blob CID from leaflet page blocks."""
+    # pages at top level or nested in content
+    pages = value.get("pages")
+    if not isinstance(pages, list):
+        content = value.get("content")
+        if isinstance(content, dict):
+            pages = content.get("pages")
+    if not isinstance(pages, list):
+        return None
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        blocks = page.get("blocks", [])
+        for wrapper in blocks:
+            if not isinstance(wrapper, dict):
+                continue
+            block = wrapper.get("block", {})
+            if not isinstance(block, dict):
+                continue
+            if block.get("$type") == "pub.leaflet.blocks.image":
+                image = block.get("image")
+                if isinstance(image, dict):
+                    ref = image.get("ref")
+                    if isinstance(ref, dict):
+                        link = ref.get("$link")
+                        if link:
+                            return link
+    return None
+
+
+def collection_for_platform(platform: str) -> str:
+    return {
+        "leaflet": "pub.leaflet.document",
+        "pckt": "site.standard.document",
+        "offprint": "site.standard.document",
+        "greengale": "site.standard.document",
+        "other": "site.standard.document",
+        "whitewind": "com.whtwnd.blog.entry",
+    }.get(platform, "site.standard.document")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Backfill cover_image for existing documents")
+    parser.add_argument("--platform", help="Only backfill this platform")
+    parser.add_argument("--limit", type=int, default=500, help="Max documents to process (default 500)")
+    parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        sys.exit(1)
+
+    # query docs missing cover_image
+    where = "WHERE (cover_image IS NULL OR cover_image = '')"
+    sql_args: list = []
+    if args.platform:
+        where += " AND platform = ?"
+        sql_args.append(args.platform)
+
+    sql = f"SELECT uri, did, rkey, platform, source_collection, title FROM documents {where} LIMIT ?"
+    sql_args.append(args.limit)
+
+    print(f"querying documents missing cover_image...")
+    docs = turso_query(settings, sql, sql_args)
+    print(f"found {len(docs)} documents to check")
+
+    if not docs:
+        return
+
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    for i, doc in enumerate(docs):
+        did = doc["did"]
+        rkey = doc["rkey"]
+        platform = doc["platform"]
+        collection = doc.get("source_collection") or collection_for_platform(platform)
+        title = (doc.get("title") or "")[:50]
+
+        # resolve PDS
+        pds = get_pds_endpoint(did)
+        if not pds:
+            errors += 1
+            continue
+
+        # fetch record (try source_collection, then platform-native fallbacks)
+        value = get_record_with_fallbacks(pds, did, collection, rkey, platform)
+        if not value:
+            skipped += 1
+            continue
+
+        # extract cover image
+        cid = extract_cover_image(value)
+        if not cid:
+            skipped += 1
+            continue
+
+        if args.dry_run:
+            print(f"  [{i+1}/{len(docs)}] would set cover_image={cid[:20]}... for {title}...")
+        else:
+            turso_exec(
+                settings,
+                "UPDATE documents SET cover_image = ? WHERE uri = ?",
+                [cid, doc["uri"]],
+            )
+            print(f"  [{i+1}/{len(docs)}] {title}... -> {cid[:20]}...")
+
+        updated += 1
+
+        # be nice to PDS servers
+        if (i + 1) % 50 == 0:
+            time.sleep(1)
+
+    print(f"\ndone! {updated} updated, {skipped} skipped (no image), {errors} errors")
+
+
+if __name__ == "__main__":
+    main()

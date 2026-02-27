@@ -140,7 +140,8 @@ fn createSchema(self: *LocalDb) !void {
         \\  path TEXT,
         \\  base_path TEXT DEFAULT '',
         \\  has_publication INTEGER DEFAULT 0,
-        \\  indexed_at TEXT
+        \\  indexed_at TEXT,
+        \\  cover_image TEXT DEFAULT ''
         \\)
     , .{}) catch |err| {
         std.debug.print("local db: failed to create documents table: {}\n", .{err});

@@ -229,30 +229,12 @@ a.pub-name:hover { color: #2a9d5c; }
 .live span { color: #4ade80; }
 
 .theme-toggle {
-  display: inline-flex;
-  gap: 0.25rem;
-}
-
-.theme-option {
-  font-size: 10px;
-  padding: 1px 5px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border-subtle);
-  border-radius: 3px;
   cursor: pointer;
   color: var(--text-dim);
+  font-size: 16px;
+  user-select: none;
 }
-
-.theme-option:hover {
-  border-color: var(--border-focus);
-  color: var(--text);
-}
-
-.theme-option.active {
-  background: rgba(100, 100, 100, 0.3);
-  border-color: var(--text-dim);
-  color: var(--text-secondary);
-}
+.theme-toggle:hover { color: var(--text); }
 
 footer {
   margin-top: 2rem;
