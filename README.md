@@ -36,7 +36,7 @@ GET /stats
 GET /health
 ```
 
-search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, offprint, greengale, whitewind, or other). use `format=v2` for a wrapped response with `total`, `offset`, and `results` fields.
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, offprint, greengale, whitewind, or other). use `format=v2` for a wrapped response with `total`, `hasMore`, and `results` fields.
 
 **modes**: `keyword` (default) uses FTS5 with BM25 + recency scoring. `semantic` uses voyage embeddings + [turbopuffer](https://turbopuffer.com) ANN. `hybrid` merges both via reciprocal rank fusion.
 
@@ -72,4 +72,4 @@ the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `
 
 ## embeddings
 
-documents are embedded using Voyage AI's `voyage-4-lite` model (1024 dimensions). the backend automatically generates embeddings for new documents via a background worker — no manual backfill needed. similarity search uses turbopuffer's ANN index for fast nearest-neighbor queries across ~25k documents.
+documents are embedded using Voyage AI's `voyage-4-lite` model (1024 dimensions). the backend automatically generates embeddings for new documents via a background worker — no manual backfill needed. similarity search uses turbopuffer's ANN index for fast nearest-neighbor queries.
