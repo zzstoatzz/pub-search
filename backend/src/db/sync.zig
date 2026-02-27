@@ -9,18 +9,31 @@ const LocalDb = @import("LocalDb.zig");
 
 const BATCH_SIZE = 500;
 
-/// Full sync: fetch all data from Turso and populate local SQLite
-/// Local stays not-ready during sync — search goes to Turso (no mutex there).
-/// When sync completes, local becomes ready and search uses the fast local path.
+/// Full sync: fetch all data from Turso and populate local SQLite.
+/// Uses INSERT OR REPLACE so existing data stays queryable during sync.
+/// Only marks not-ready on first-ever sync (empty DB).
 pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     std.debug.print("sync: starting full sync...\n", .{});
 
-    local.setReady(false);
-
     const conn = local.getConn() orelse return error.LocalNotOpen;
 
-    // clear existing data
-    {
+    // check if we have existing data — if so, keep serving while syncing
+    const has_data = blk: {
+        local.lock();
+        defer local.unlock();
+        const row = conn.row("SELECT COUNT(*) FROM documents", .{}) catch break :blk false;
+        if (row) |r| {
+            defer r.deinit();
+            break :blk r.int(0) > 0;
+        }
+        break :blk false;
+    };
+
+    if (!has_data) {
+        // first-ever sync: nothing to serve, mark not-ready
+        local.setReady(false);
+
+        // clear tables for clean initial sync
         local.lock();
         defer local.unlock();
         conn.exec("DELETE FROM documents_fts", .{}) catch {};
@@ -28,6 +41,10 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         conn.exec("DELETE FROM publications_fts", .{}) catch {};
         conn.exec("DELETE FROM publications", .{}) catch {};
         conn.exec("DELETE FROM document_tags", .{}) catch {};
+    } else {
+        // re-sync: keep serving existing data while we refresh in-place
+        // INSERT OR REPLACE will update rows; stale data is acceptable
+        std.debug.print("sync: local has data, keeping ready during re-sync\n", .{});
     }
 
     // sync documents in batches — fetch from Turso unlocked, write to local with brief lock
