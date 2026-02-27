@@ -496,6 +496,14 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
     const base_path = zat.json.getString(record_val, "base_path") orelse
         stripUrlScheme(zat.json.getString(record_val, "url"));
 
+    // skip .test domains (dev/staging data)
+    if (base_path) |bp| {
+        if (mem.endsWith(u8, bp, ".test")) {
+            logfire.span("tap.dropped", .{ .reason = "test_domain", .uri = uri }).end();
+            return;
+        }
+    }
+
     try indexer.insertPublication(uri, did, rkey, name, description, base_path);
     logfire.counter("tap.publications_indexed", 1);
 }

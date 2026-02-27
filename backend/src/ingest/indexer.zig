@@ -125,6 +125,9 @@ pub fn insertDocument(
         }
     }
 
+    // skip .test domains (dev/staging data)
+    if (std.mem.endsWith(u8, base_path, ".test")) return;
+
     // detect platform from basePath if platform is unknown/other
     // this handles site.standard.* documents where collection doesn't indicate platform
     var actual_platform = platform;
