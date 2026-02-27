@@ -743,7 +743,7 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
         uri_count += 1;
     }
 
-    const snippets = fetchSnippets(alloc, uri_buf[0..uri_count]);
+    const extras = fetchLocalExtras(alloc, uri_buf[0..uri_count]);
 
     // serialize, filtering out the source URI
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -765,12 +765,13 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
             .uri = r.uri,
             .did = r.did,
             .title = r.title,
-            .snippet = snippets.get(r.uri) orelse "",
+            .snippet = extras.snippets.get(r.uri) orelse "",
             .createdAt = r.created_at,
             .rkey = r.rkey,
             .basePath = r.base_path,
             .platform = r.platform,
             .path = r.path,
+            .coverImage = extras.cover_images.get(r.uri) orelse "",
         });
         count += 1;
     }
@@ -928,7 +929,7 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
             }
         }
     }
-    const hybrid_snippets = fetchSnippets(alloc, sem_uri_buf[0..sem_uri_count]);
+    const hybrid_extras = fetchLocalExtras(alloc, sem_uri_buf[0..sem_uri_count]);
 
     // 7. serialize top 20 with source annotation
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -961,7 +962,7 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
             const existing = jsonStr(obj, "snippet");
             if (existing.len > 0) break :blk existing;
             if (bits == 0b10) {
-                break :blk hybrid_snippets.get(entry.uri) orelse "";
+                break :blk hybrid_extras.snippets.get(entry.uri) orelse "";
             }
             break :blk existing;
         };
@@ -974,10 +975,19 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
         }
         try jw.objectField("snippet");
         try jw.write(snippet);
-        inline for (.{ "rkey", "basePath", "platform", "path", "coverImage" }) |field| {
+        inline for (.{ "rkey", "basePath", "platform", "path" }) |field| {
             try jw.objectField(field);
             try jw.write(jsonStr(obj, field));
         }
+        // for semantic-only results, cover image may need local DB fallback
+        const cover = blk: {
+            const existing = jsonStr(obj, "coverImage");
+            if (existing.len > 0) break :blk existing;
+            if (bits & 0b10 != 0) break :blk hybrid_extras.cover_images.get(entry.uri) orelse "";
+            break :blk existing;
+        };
+        try jw.objectField("coverImage");
+        try jw.write(cover);
         try jw.objectField("createdAt");
         try jw.write(jsonStr(obj, "createdAt"));
         try jw.objectField("source");
@@ -1062,10 +1072,10 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         filtered_count += 1;
     }
 
-    // fetch content previews from local SQLite (arena-allocated, no explicit cleanup)
-    const snippets = fetchSnippets(alloc, seen[0..seen_count]);
+    // fetch content previews + cover images from local SQLite
+    const extras = fetchLocalExtras(alloc, seen[0..seen_count]);
 
-    // serialize results with snippets
+    // serialize results
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
@@ -1078,12 +1088,13 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
             .uri = r.uri,
             .did = r.did,
             .title = r.title,
-            .snippet = snippets.get(r.uri) orelse "",
+            .snippet = extras.snippets.get(r.uri) orelse "",
             .createdAt = r.created_at,
             .rkey = r.rkey,
             .basePath = r.base_path,
             .platform = r.platform,
             .path = r.path,
+            .coverImage = extras.cover_images.get(r.uri) orelse "",
         });
     }
     try jw.endArray();
@@ -1091,30 +1102,40 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     return try output.toOwnedSlice();
 }
 
-// --- snippet helpers (for semantic/similar results) ---
+// --- local DB helpers (for semantic/similar results) ---
 
-/// Fetch content previews from local SQLite for a list of URIs.
-/// Returns a map of URI -> preview text (first 200 chars of content).
-/// Gracefully returns empty map if local db is unavailable.
-fn fetchSnippets(alloc: Allocator, uris: []const []const u8) std.StringHashMap([]const u8) {
-    var map = std.StringHashMap([]const u8).init(alloc);
-    const local = db.getLocalDb() orelse return map;
+/// Extra fields fetched from local SQLite for semantic/similar results.
+const LocalExtras = struct {
+    snippets: std.StringHashMap([]const u8),
+    cover_images: std.StringHashMap([]const u8),
+};
+
+/// Fetch content previews and cover images from local SQLite for a list of URIs.
+/// Gracefully returns empty maps if local db is unavailable.
+fn fetchLocalExtras(alloc: Allocator, uris: []const []const u8) LocalExtras {
+    var snippets = std.StringHashMap([]const u8).init(alloc);
+    var cover_images = std.StringHashMap([]const u8).init(alloc);
+    const local = db.getLocalDb() orelse return .{ .snippets = snippets, .cover_images = cover_images };
     for (uris) |uri| {
         var rows = local.query(
-            "SELECT substr(content, 1, 200) FROM documents WHERE uri = ?",
+            "SELECT substr(content, 1, 200), COALESCE(cover_image, '') FROM documents WHERE uri = ?",
             .{uri},
         ) catch continue;
         defer rows.deinit();
         if (rows.next()) |row| {
             const preview = row.text(0);
             if (preview.len > 0) {
-                // dupe before rows.deinit() frees the backing memory
                 const duped = alloc.dupe(u8, preview) catch continue;
-                map.put(uri, duped) catch continue;
+                snippets.put(uri, duped) catch continue;
+            }
+            const cover = row.text(1);
+            if (cover.len > 0) {
+                const duped = alloc.dupe(u8, cover) catch continue;
+                cover_images.put(uri, duped) catch continue;
             }
         }
     }
-    return map;
+    return .{ .snippets = snippets, .cover_images = cover_images };
 }
 
 // --- JSON helpers (for hybrid search parsing) ---
