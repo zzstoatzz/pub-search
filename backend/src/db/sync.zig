@@ -47,6 +47,14 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         std.debug.print("sync: local has data, keeping ready during re-sync\n", .{});
     }
 
+    // create temp table to track synced URIs (for stale-doc cleanup)
+    {
+        local.lock();
+        defer local.unlock();
+        conn.exec("DROP TABLE IF EXISTS _synced_uris", .{}) catch {};
+        conn.exec("CREATE TEMP TABLE _synced_uris (uri TEXT PRIMARY KEY)", .{}) catch {};
+    }
+
     // sync documents in batches — fetch from Turso unlocked, write to local with brief lock
     var doc_count: usize = 0;
     var offset: usize = 0;
@@ -79,6 +87,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
                 insertDocumentLocal(conn, row) catch |err| {
                     std.debug.print("sync: insert doc failed: {}\n", .{err});
                 };
+                conn.exec("INSERT OR IGNORE INTO _synced_uris (uri) VALUES (?)", .{row.text(0)}) catch {};
                 doc_count += 1;
             }
             conn.exec("COMMIT", .{}) catch {};
@@ -163,6 +172,16 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             popular_count += 1;
         }
         conn.exec("COMMIT", .{}) catch {};
+    }
+
+    // clean up stale docs that were deleted from Turso (brief lock)
+    {
+        local.lock();
+        defer local.unlock();
+        conn.exec("DELETE FROM documents_fts WHERE uri NOT IN (SELECT uri FROM _synced_uris)", .{}) catch {};
+        conn.exec("DELETE FROM documents WHERE uri NOT IN (SELECT uri FROM _synced_uris)", .{}) catch {};
+        conn.exec("DELETE FROM document_tags WHERE document_uri NOT IN (SELECT uri FROM _synced_uris)", .{}) catch {};
+        conn.exec("DROP TABLE IF EXISTS _synced_uris", .{}) catch {};
     }
 
     // record sync time (brief lock)
