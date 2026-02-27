@@ -438,7 +438,7 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
 }
 
 fn getDashboardUrl() []const u8 {
-    return std.posix.getenv("DASHBOARD_URL") orelse "https://leaflet-search.pages.dev/dashboard.html";
+    return std.posix.getenv("DASHBOARD_URL") orelse "https://pub-search.waow.tech/dashboard.html";
 }
 
 fn handleDashboard(request: *http.Server.Request) !void {

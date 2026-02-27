@@ -231,7 +231,6 @@ a.pub-name:hover { color: #2a9d5c; }
 .theme-toggle {
   display: inline-flex;
   gap: 0.25rem;
-  margin-left: 0.5rem;
 }
 
 .theme-option {
