@@ -42,6 +42,7 @@ pub const ExtractedDocument = struct {
     source_collection: []const u8,
     path: ?[]const u8, // URL path from record (e.g., "/001" for zat.dev)
     content_type: ?[]const u8, // content.$type (e.g., "pub.leaflet.content") for platform detection
+    cover_image: ?[]const u8, // blob CID for cover image (e.g., "bafkrei...")
 
     pub fn deinit(self: *ExtractedDocument) void {
         self.allocator.free(self.content);
@@ -100,12 +101,19 @@ pub fn extractDocument(
     // extract content.$type for platform detection (e.g., "pub.leaflet.content")
     const content_type = zat.json.getString(record_val, "content.$type");
 
+    // extract cover image blob CID
+    // try coverImage.ref.$link first (site.standard/pckt/offprint/greengale)
+    const cover_image = zat.json.getString(record_val, "coverImage.ref.$link");
+
     // extract tags - allocate owned slice
     const tags = try extractTags(allocator, record_val);
     errdefer allocator.free(tags);
 
     // extract content - try textContent first (standard.site), then parse blocks
     const content = try extractContent(allocator, record_val);
+
+    // for leaflet documents without a coverImage, try first image block
+    const final_cover_image = cover_image orelse extractFirstImageCid(record_val);
 
     return .{
         .allocator = allocator,
@@ -118,6 +126,7 @@ pub fn extractDocument(
         .source_collection = collection,
         .path = path,
         .content_type = content_type,
+        .cover_image = final_cover_image,
     };
 }
 
@@ -249,6 +258,38 @@ fn extractListItem(allocator: Allocator, buf: *std.ArrayList(u8), item: json.Val
     }
 }
 
+/// Extract first image blob CID from leaflet-style page blocks.
+/// Searches pages -> blocks for pub.leaflet.blocks.image and returns image.ref.$link.
+fn extractFirstImageCid(record: json.Value) ?[]const u8 {
+    // check for pages at top level or nested in content object
+    const pages = zat.json.getArray(record, "pages") orelse
+        zat.json.getArray(record, "content.pages") orelse
+        return null;
+
+    for (pages) |page| {
+        if (page != .object) continue;
+        const blocks_val = page.object.get("blocks") orelse continue;
+        if (blocks_val != .array) continue;
+
+        for (blocks_val.array.items) |wrapper| {
+            if (wrapper != .object) continue;
+            const block_val = wrapper.object.get("block") orelse continue;
+            if (block_val != .object) continue;
+
+            const type_val = block_val.object.get("$type") orelse continue;
+            if (type_val != .string) continue;
+            if (!mem.eql(u8, type_val.string, "pub.leaflet.blocks.image")) continue;
+
+            // found an image block — extract image.ref.$link
+            const image_val: json.Value = .{ .object = block_val.object };
+            if (zat.json.getString(image_val, "image.ref.$link")) |cid| {
+                return cid;
+            }
+        }
+    }
+    return null;
+}
+
 // --- tests ---
 
 test "Platform.fromCollection: leaflet" {
@@ -297,6 +338,54 @@ test "extractDocument: site.standard.document with pub.leaflet.content" {
     try std.testing.expectEqualStrings("Hello world", doc.content);
     // content_type should be extracted for platform detection (custom domain support)
     try std.testing.expectEqualStrings("pub.leaflet.content", doc.content_type.?);
+}
+
+test "extractDocument: site.standard.document with coverImage" {
+    const allocator = std.testing.allocator;
+
+    const test_json =
+        \\{"title":"Cover Test","textContent":"body text","coverImage":{"$type":"blob","ref":{"$link":"bafkreicover123"},"mimeType":"image/jpeg","size":1234}}
+    ;
+
+    const parsed = try json.parseFromSlice(json.Value, allocator, test_json, .{});
+    defer parsed.deinit();
+
+    var doc = try extractDocument(allocator, parsed.value.object, "site.standard.document");
+    defer doc.deinit();
+
+    try std.testing.expectEqualStrings("bafkreicover123", doc.cover_image.?);
+}
+
+test "extractDocument: leaflet with image block fallback" {
+    const allocator = std.testing.allocator;
+
+    const test_json =
+        \\{"title":"Image Post","content":{"$type":"pub.leaflet.content","pages":[{"id":"page1","$type":"pub.leaflet.pages.linearDocument","blocks":[{"$type":"pub.leaflet.pages.linearDocument#block","block":{"$type":"pub.leaflet.blocks.text","plaintext":"Hello"}},{"$type":"pub.leaflet.pages.linearDocument#block","block":{"$type":"pub.leaflet.blocks.image","image":{"$type":"blob","ref":{"$link":"bafkreileafimg456"},"mimeType":"image/png","size":5678}}}]}]}}
+    ;
+
+    const parsed = try json.parseFromSlice(json.Value, allocator, test_json, .{});
+    defer parsed.deinit();
+
+    var doc = try extractDocument(allocator, parsed.value.object, "site.standard.document");
+    defer doc.deinit();
+
+    try std.testing.expectEqualStrings("bafkreileafimg456", doc.cover_image.?);
+}
+
+test "extractDocument: no cover image" {
+    const allocator = std.testing.allocator;
+
+    const test_json =
+        \\{"title":"No Image","textContent":"just text"}
+    ;
+
+    const parsed = try json.parseFromSlice(json.Value, allocator, test_json, .{});
+    defer parsed.deinit();
+
+    var doc = try extractDocument(allocator, parsed.value.object, "site.standard.document");
+    defer doc.deinit();
+
+    try std.testing.expect(doc.cover_image == null);
 }
 
 test "extractDocument: com.whtwnd.blog.entry (whitewind)" {

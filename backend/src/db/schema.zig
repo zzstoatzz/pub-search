@@ -229,6 +229,9 @@ fn runMigrations(client: *Client) !void {
         \\AND did IN (SELECT did FROM publications WHERE base_path LIKE 'greengale.app/%')
     , &.{}) catch {};
 
+    // cover_image: blob CID for document cover image (used for thumbnails in search results)
+    client.exec("ALTER TABLE documents ADD COLUMN cover_image TEXT", &.{}) catch {};
+
     // DiskANN vector index (documents_embedding_idx) is managed via scripts/rebuild-documents-table
     // DO NOT add CREATE INDEX here — it hangs on startup when the index already exists
 
