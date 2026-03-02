@@ -514,7 +514,14 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 
 fn stripUrlScheme(url: ?[]const u8) ?[]const u8 {
     const u = url orelse return null;
-    if (mem.startsWith(u8, u, "https://")) return u["https://".len..];
-    if (mem.startsWith(u8, u, "http://")) return u["http://".len..];
-    return u;
+    const without_scheme = if (mem.startsWith(u8, u, "https://"))
+        u["https://".len..]
+    else if (mem.startsWith(u8, u, "http://"))
+        u["http://".len..]
+    else
+        u;
+    // strip trailing slash to avoid double-slash when combined with path
+    if (without_scheme.len > 1 and without_scheme[without_scheme.len - 1] == '/')
+        return without_scheme[0 .. without_scheme.len - 1];
+    return without_scheme;
 }

@@ -130,17 +130,24 @@ pub fn insertDocument(
     // our extractor reads into publication_uri. Strip the scheme to match
     // base_path convention (frontend prepends "https://").
     if (base_path.len == 0 and pub_uri.len > 0) {
-        const host = if (std.mem.startsWith(u8, pub_uri, "https://"))
+        var host = if (std.mem.startsWith(u8, pub_uri, "https://"))
             pub_uri["https://".len..]
         else if (std.mem.startsWith(u8, pub_uri, "http://"))
             pub_uri["http://".len..]
         else
-            "";
+            @as([]const u8, "");
+        // strip trailing slash to avoid double-slash when combined with path
+        if (host.len > 1 and host[host.len - 1] == '/')
+            host = host[0 .. host.len - 1];
         if (host.len > 0 and host.len <= base_path_buf.len) {
             @memcpy(base_path_buf[0..host.len], host);
             base_path = base_path_buf[0..host.len];
         }
     }
+
+    // normalize: strip trailing slash to avoid double-slash in URLs
+    if (base_path.len > 1 and base_path[base_path.len - 1] == '/')
+        base_path = base_path[0 .. base_path.len - 1];
 
     // skip .test domains (dev/staging data)
     if (std.mem.endsWith(u8, base_path, ".test")) return;
