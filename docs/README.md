@@ -20,7 +20,7 @@ backend (zig)
 static frontend (cloudflare pages)
 ```
 
-content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) filters for publishing-related records, and the backend indexes them.
+content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) filters for publishing-related records, and the backend indexes them. a [reconciler](reconciliation.md) periodically verifies documents still exist at their source, catching deletions missed while the tap was down.
 
 ## how searching works
 
@@ -74,5 +74,6 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [content-extraction.md](content-extraction.md) — how content is extracted from each platform
 - [api.md](api.md) — API endpoint reference
 - [tap.md](tap.md) — firehose consumer setup, debugging, memory tuning
+- [reconciliation.md](reconciliation.md) — stale document detection and cleanup
 - [turso-hrana.md](turso-hrana.md) — Turso's HTTP protocol for database queries
 - [performance-saga.md](performance-saga.md) — a debugging story about latency spikes
