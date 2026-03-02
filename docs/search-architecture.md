@@ -34,7 +34,7 @@ key decisions:
 
 ### what's coupled to FTS5
 
-all in `backend/src/search.zig`:
+all in `backend/src/server/search.zig`:
 
 | component | FTS5-specific |
 |-----------|---------------|
@@ -50,7 +50,7 @@ all in `backend/src/search.zig`:
 - search-time dedup by `(did, title)` — collapses cross-platform duplicates
 - ingestion-time dedup by content hash — prevents duplicates at write time
 - caching logic
-- HTTP layer (server.zig just calls `search()`)
+- HTTP layer (server/mod.zig just calls `search()`)
 
 ### known limitations
 

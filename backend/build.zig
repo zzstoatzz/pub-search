@@ -30,19 +30,21 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const imports: []const std.Build.Module.Import = &.{
+        .{ .name = "websocket", .module = websocket.module("websocket") },
+        .{ .name = "zql", .module = zql.module("zql") },
+        .{ .name = "zat", .module = zat.module("zat") },
+        .{ .name = "zqlite", .module = zqlite.module("zqlite") },
+        .{ .name = "logfire", .module = logfire.module("logfire") },
+    };
+
     const exe = b.addExecutable(.{
         .name = "leaflet-search",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "websocket", .module = websocket.module("websocket") },
-                .{ .name = "zql", .module = zql.module("zql") },
-                .{ .name = "zat", .module = zat.module("zat") },
-                .{ .name = "zqlite", .module = zqlite.module("zqlite") },
-                .{ .name = "logfire", .module = logfire.module("logfire") },
-            },
+            .imports = imports,
         }),
     });
 
@@ -57,26 +59,18 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the server");
     run_step.dependOn(&run_cmd.step);
 
-    // test step
+    // tests — rooted at main.zig so all transitive imports are discovered
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = imports,
+        }),
+    });
+    unit_tests.linkLibC();
+
+    const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
-
-    const test_files = [_][]const u8{
-        "src/search.zig",
-        "src/ingest/extractor.zig",
-    };
-
-    for (test_files) |file| {
-        const unit_tests = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(file),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "zat", .module = zat.module("zat") },
-                },
-            }),
-        });
-        const run_tests = b.addRunArtifact(unit_tests);
-        test_step.dependOn(&run_tests.step);
-    }
+    test_step.dependOn(&run_tests.step);
 }

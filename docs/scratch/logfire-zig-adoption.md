@@ -55,7 +55,7 @@ pub fn main() !void {
 
 ## 3. replace timing.zig with spans
 
-current pattern in server.zig:
+current pattern in server/mod.zig:
 
 ```zig
 fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
@@ -154,7 +154,7 @@ pub fn recordSearch(query: []const u8) void {
     // ...
 }
 
-// with logfire (in server.zig or stats.zig)
+// with logfire (in server/mod.zig or stats.zig)
 pub fn recordSearch(query: []const u8) void {
     logfire.counter("search.total", 1);
     // existing logic...

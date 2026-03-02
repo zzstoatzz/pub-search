@@ -98,9 +98,9 @@ indexer.zig - extracts content from nested pages[].blocks[] structure
     ↓
 turso (sqlite) - documents table + FTS5 + embeddings
     ↓
-search.zig - FTS5 queries + vector similarity
+server/search.zig - FTS5 queries + vector similarity
     ↓
-server.zig - HTTP API (/search, /similar, /stats)
+server/mod.zig - HTTP API (/search, /similar, /stats)
 ```
 
 leaflet-specific code:

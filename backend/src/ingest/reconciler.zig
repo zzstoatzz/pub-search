@@ -4,8 +4,9 @@
 //! Documents that return 400/404 from com.atproto.repo.getRecord are
 //! deleted from turso and turbopuffer.
 //!
-//! This catches deletions missed while the tap was down — the firehose
-//! is ephemeral and delete events are never replayed.
+//! This catches deletions that tap resync cannot — resync only re-sends
+//! records that still exist, so documents deleted at the PDS between
+//! resyncs become ghosts. The reconciler verifies them directly.
 
 const std = @import("std");
 const http = std.http;
@@ -14,9 +15,9 @@ const mem = std.mem;
 const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
-const db = @import("db/mod.zig");
-const tpuf = @import("tpuf.zig");
-const indexer = @import("ingest/indexer.zig");
+const db = @import("../db/mod.zig");
+const tpuf = @import("../tpuf.zig");
+const indexer = @import("indexer.zig");
 
 // config (env vars with defaults)
 fn getIntervalSecs() u64 {

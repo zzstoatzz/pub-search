@@ -40,8 +40,8 @@ at ~12k documents, 50 per cycle every 30 minutes, the full index is verified in 
 
 | file | role |
 |------|------|
-| `backend/src/reconcile.zig` | background worker (~250 lines) |
-| `backend/src/main.zig` | wires up `reconcile.start(allocator)` after `tpuf.init()` |
+| `backend/src/ingest/reconciler.zig` | background worker (~250 lines) |
+| `backend/src/main.zig` | wires up `ingest.reconciler.start(allocator)` after `tpuf.init()` |
 | `backend/src/db/schema.zig` | `verified_at TEXT` column migration |
 | `backend/src/ingest/tap.zig` | `tpuf.delete()` after `indexer.deleteDocument()` |
 

@@ -5,10 +5,9 @@ const Thread = std.Thread;
 const logfire = @import("logfire");
 const db = @import("db/mod.zig");
 const tpuf = @import("tpuf.zig");
-const metrics = @import("metrics.zig");
-const server = @import("server.zig");
-const ingest = @import("ingest.zig");
-const reconcile = @import("reconcile.zig");
+const metrics = @import("metrics/mod.zig");
+const server = @import("server/mod.zig");
+const ingest = @import("ingest/mod.zig");
 
 const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 5;
@@ -88,7 +87,7 @@ fn initServices(allocator: std.mem.Allocator) void {
     tpuf.init();
 
     // start reconciler (verifies documents still exist at source PDS)
-    reconcile.start(allocator);
+    ingest.reconciler.start(allocator);
 
     // start embedder (voyage-4-lite, 1024 dims, 1 worker)
     ingest.embedder.start(allocator);
