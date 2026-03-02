@@ -1,0 +1,224 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Purge bridgy fed vectors from turbopuffer.
+
+The turso purge script cleaned the database, but vectors in turbopuffer
+were never removed. This script finds vectors with platform='other' and
+empty base_path, resolves their DIDs via plc.directory, and deletes
+confirmed bridgy fed vectors from turbopuffer.
+
+Loops until all bridgy vectors are removed (tpuf caps queries at 10k).
+
+Usage:
+    ./scripts/purge-bridgyfed-vectors          # dry run (default)
+    ./scripts/purge-bridgyfed-vectors --apply  # actually delete
+"""
+
+import argparse
+import asyncio
+import os
+import sys
+import time
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turbopuffer_api_key: str
+    turbopuffer_namespace: str = "leaflet-search"
+
+
+async def resolve_pds(
+    client: httpx.AsyncClient, did: str, semaphore: asyncio.Semaphore
+) -> str | None:
+    """Get PDS endpoint from PLC directory (or did:web .well-known)."""
+    async with semaphore:
+        try:
+            if did.startswith("did:web:"):
+                domain = did[len("did:web:"):]
+                url = f"https://{domain}/.well-known/did.json"
+            else:
+                url = f"https://plc.directory/{did}"
+            resp = await client.get(url, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            for service in data.get("service", []):
+                if service.get("type") == "AtprotoPersonalDataServer":
+                    return service["serviceEndpoint"]
+        except Exception as e:
+            print(f"  lookup failed for {did}: {e}", file=sys.stderr, flush=True)
+    return None
+
+
+def tpuf_query(
+    client: httpx.Client, settings: Settings, filters: list, top_k: int = 10000
+) -> list[dict]:
+    """Query turbopuffer with attribute filters."""
+    url = f"https://api.turbopuffer.com/v2/namespaces/{settings.turbopuffer_namespace}/query"
+    resp = client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {settings.turbopuffer_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "top_k": top_k,
+            "filters": filters,
+            "include_attributes": ["did"],
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json().get("rows", [])
+
+
+def tpuf_delete(client: httpx.Client, settings: Settings, ids: list[str]) -> None:
+    """Delete vectors by ID from turbopuffer."""
+    url = f"https://api.turbopuffer.com/v2/namespaces/{settings.turbopuffer_namespace}"
+    resp = client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {settings.turbopuffer_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={"deletes": ids},
+        timeout=60,
+    )
+    resp.raise_for_status()
+
+
+async def resolve_new_dids(
+    dids: list[str], cache: dict[str, bool]
+) -> dict[str, bool]:
+    """Resolve DIDs not already in cache. Returns updated cache."""
+    new_dids = [d for d in dids if d not in cache]
+    if not new_dids:
+        return cache
+
+    log(f"  resolving {len(new_dids)} new DIDs (20 concurrent)...")
+    plc_sem = asyncio.Semaphore(20)
+
+    async with httpx.AsyncClient() as client:
+
+        async def resolve_one(did: str) -> tuple[str, bool]:
+            pds = await resolve_pds(client, did, plc_sem)
+            is_bridgy = pds is not None and "brid.gy" in pds
+            return did, is_bridgy
+
+        results = await asyncio.gather(*[resolve_one(d) for d in new_dids])
+
+    for did, is_bridgy in results:
+        cache[did] = is_bridgy
+
+    bridgy = sum(1 for _, b in results if b)
+    log(f"  {bridgy} bridgy, {len(new_dids) - bridgy} non-bridgy")
+    return cache
+
+
+async def main():
+    parser = argparse.ArgumentParser(
+        description="Purge bridgy fed vectors from turbopuffer"
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="Actually delete (default is dry run)"
+    )
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURBOPUFFER_API_KEY", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.apply:
+        log("=== DRY RUN (pass --apply to delete) ===\n")
+
+    sync_client = httpx.Client()
+    filters = ["And", [["platform", "Eq", "other"], ["base_path", "Eq", ""]]]
+
+    # cache: DID -> is_bridgy (persists across rounds)
+    pds_cache: dict[str, bool] = {}
+    total_deleted = 0
+    round_num = 0
+
+    while True:
+        round_num += 1
+        log(f"--- round {round_num} ---")
+        log("querying turbopuffer for platform='other', base_path=''...")
+
+        rows = tpuf_query(sync_client, settings, filters)
+        log(f"  found {len(rows)} vectors")
+
+        if not rows:
+            break
+
+        # collect unique DIDs and map DID -> vector IDs
+        did_to_ids: dict[str, list[str]] = {}
+        for row in rows:
+            did_to_ids.setdefault(row["did"], []).append(row["id"])
+
+        # resolve any new DIDs
+        t0 = time.monotonic()
+        pds_cache = await resolve_new_dids(list(did_to_ids.keys()), pds_cache)
+        elapsed = time.monotonic() - t0
+        if elapsed > 0.1:
+            log(f"  resolved in {elapsed:.1f}s")
+
+        # collect vector IDs for bridgy DIDs
+        ids_to_delete = []
+        for did, ids in did_to_ids.items():
+            if pds_cache.get(did, False):
+                ids_to_delete.extend(ids)
+
+        bridgy_count = sum(1 for d in did_to_ids if pds_cache.get(d, False))
+        log(f"  {bridgy_count} bridgy DIDs, {len(ids_to_delete)} vectors to delete\n")
+
+        if not ids_to_delete:
+            break
+
+        if not args.apply:
+            total_deleted += len(ids_to_delete)
+            # dry run: single pass only (can't paginate without deleting)
+            if len(rows) == 10000:
+                log("  (tpuf capped at 10k — actual count may be higher)")
+            break
+
+        # batch delete
+        for i in range(0, len(ids_to_delete), 500):
+            batch = ids_to_delete[i : i + 500]
+            tpuf_delete(sync_client, settings, batch)
+            total_deleted += len(batch)
+            log(f"  deleted {len(batch)} vectors (total: {total_deleted})")
+
+        # if we got fewer than 10k, we've seen everything
+        if len(rows) < 10000:
+            break
+
+    sync_client.close()
+
+    bridgy_total = sum(1 for v in pds_cache.values() if v)
+    if total_deleted:
+        log(
+            f"\n{'would delete' if not args.apply else 'done! deleted'} "
+            f"{total_deleted} vectors from {bridgy_total} bridgy fed DIDs"
+        )
+    else:
+        log("\nnothing to purge!")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
