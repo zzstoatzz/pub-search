@@ -148,6 +148,10 @@ a.pub-name:hover { color: #2a9d5c; }
 .timing-value { color: var(--text); }
 .timing-value .dim { color: var(--text-dim); }
 
+.traffic-section {
+  position: relative;
+  margin-bottom: 2rem;
+}
 .traffic-sparkline {
   position: relative;
   height: 60px;
@@ -166,7 +170,9 @@ a.pub-name:hover { color: #2a9d5c; }
   padding: 1px 4px;
 }
 .traffic-range-btns {
-  margin-left: 0.5rem;
+  position: absolute;
+  top: 0;
+  right: 0;
 }
 .traffic-range-btns button {
   font-family: monospace;
