@@ -302,13 +302,47 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
         ) catch {};
     }
 
+    // sync deletions via tombstones (deleted_at is unix timestamp integer)
+    var deleted: usize = 0;
+    tombstone: {
+        var since_ts_buf: [20]u8 = undefined;
+        const since_ts_str = std.fmt.bufPrint(&since_ts_buf, "{d}", .{since_ts}) catch break :tombstone;
+
+        var tomb_result = turso.query(
+            "SELECT uri, record_type FROM tombstones WHERE deleted_at >= ?",
+            &.{since_ts_str},
+        ) catch |err| {
+            std.debug.print("sync: tombstone query failed: {}\n", .{err});
+            break :tombstone;
+        };
+        defer tomb_result.deinit();
+
+        if (tomb_result.rows.len > 0) {
+            local.lock();
+            defer local.unlock();
+            for (tomb_result.rows) |row| {
+                const uri = row.text(0);
+                const record_type = row.text(1);
+                if (std.mem.eql(u8, record_type, "document")) {
+                    conn.exec("DELETE FROM documents WHERE uri = ?", .{uri}) catch {};
+                    conn.exec("DELETE FROM documents_fts WHERE uri = ?", .{uri}) catch {};
+                    conn.exec("DELETE FROM document_tags WHERE document_uri = ?", .{uri}) catch {};
+                } else if (std.mem.eql(u8, record_type, "publication")) {
+                    conn.exec("DELETE FROM publications WHERE uri = ?", .{uri}) catch {};
+                    conn.exec("DELETE FROM publications_fts WHERE uri = ?", .{uri}) catch {};
+                }
+                deleted += 1;
+            }
+        }
+    }
+
     // periodic WAL checkpoint to prevent unbounded growth
     local.lock();
     conn.exec("PRAGMA wal_checkpoint(PASSIVE)", .{}) catch {};
     local.unlock();
 
-    if (new_docs > 0) {
-        std.debug.print("sync: incremental sync added {d} new documents\n", .{new_docs});
+    if (new_docs > 0 or deleted > 0) {
+        std.debug.print("sync: incremental sync — {d} new docs, {d} tombstone deletions\n", .{ new_docs, deleted });
     }
 }
 

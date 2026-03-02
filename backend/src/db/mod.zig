@@ -84,9 +84,10 @@ pub fn startSync() void {
 }
 
 fn syncLoop(turso: *Client, local: *LocalDb) void {
-    // full sync on startup — reconciles with Turso and cleans up stale docs
-    sync.fullSync(turso, local) catch |err| {
-        std.debug.print("sync: initial full sync failed: {}\n", .{err});
+    // incremental sync on startup — gets new docs + cleans tombstoned deletions
+    // (falls back to full sync automatically if no last_sync exists, i.e., first boot)
+    sync.incrementalSync(turso, local) catch |err| {
+        std.debug.print("sync: initial sync failed: {}\n", .{err});
     };
 
     // get sync interval from env (default 5 minutes)
