@@ -44,6 +44,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     } else {
         // re-sync: keep serving existing data while we refresh in-place
         // INSERT OR REPLACE will update rows; stale data is acceptable
+        local.setReady(true);
         std.debug.print("sync: local has data, keeping ready during re-sync\n", .{});
     }
 
