@@ -125,6 +125,23 @@ pub fn insertDocument(
         }
     }
 
+    // fallback: if publication_uri is an HTTP(S) URL, use its host as base_path
+    // standard.site documents store the origin URL in the "site" field, which
+    // our extractor reads into publication_uri. Strip the scheme to match
+    // base_path convention (frontend prepends "https://").
+    if (base_path.len == 0 and pub_uri.len > 0) {
+        const host = if (std.mem.startsWith(u8, pub_uri, "https://"))
+            pub_uri["https://".len..]
+        else if (std.mem.startsWith(u8, pub_uri, "http://"))
+            pub_uri["http://".len..]
+        else
+            "";
+        if (host.len > 0 and host.len <= base_path_buf.len) {
+            @memcpy(base_path_buf[0..host.len], host);
+            base_path = base_path_buf[0..host.len];
+        }
+    }
+
     // skip .test domains (dev/staging data)
     if (std.mem.endsWith(u8, base_path, ".test")) return;
 
