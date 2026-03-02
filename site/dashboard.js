@@ -266,8 +266,10 @@ function drawTrafficSvg() {
   // trim leading zeros — only draw from first non-zero point
   let firstNonZero = sliced.findIndex(d => d.count > 0);
   if (firstNonZero === -1) return; // nothing to draw
+  // include one zero point before the first non-zero for context
+  if (firstNonZero > 0) firstNonZero--;
   const data = sliced.slice(firstNonZero);
-  if (data.length < 2) return;
+  if (data.length === 0) return;
 
   const max = Math.max(...data.map(d => d.count), 1);
   const w = container.clientWidth || 560;
