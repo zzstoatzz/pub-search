@@ -262,8 +262,12 @@ function drawTrafficSvg() {
   container.innerHTML = '';
 
   const hours = RANGE_HOURS[currentRange] || 168;
-  const data = trafficData.slice(-hours);
-  if (data.length === 0) return;
+  const sliced = trafficData.slice(-hours);
+  // trim leading zeros — only draw from first non-zero point
+  let firstNonZero = sliced.findIndex(d => d.count > 0);
+  if (firstNonZero === -1) return; // nothing to draw
+  const data = sliced.slice(firstNonZero);
+  if (data.length < 2) return;
 
   const max = Math.max(...data.map(d => d.count), 1);
   const w = container.clientWidth || 560;
