@@ -18,7 +18,8 @@ const SAMPLE_COUNT = 1000;
 const ENDPOINT_COUNT = @typeInfo(Endpoint).@"enum".fields.len;
 const PERSIST_PATH = "/data/timing.bin";
 const PERSIST_PATH_HOURLY = "/data/timing_hourly.bin";
-const HOURS_TO_KEEP = 24;
+const HOURS_TO_KEEP = 720; // 30 days
+const LATENCY_HISTORY_HOURS = 24; // per-endpoint latency charts stay at 24h
 
 /// per-endpoint latency buffer
 const LatencyBuffer = struct {
@@ -225,8 +226,8 @@ pub fn getAllStats() [ENDPOINT_COUNT]EndpointStats {
     return result;
 }
 
-/// get time series for an endpoint (last 24 hours)
-pub fn getTimeSeries(endpoint: Endpoint) [HOURS_TO_KEEP]TimeSeriesPoint {
+/// get time series for an endpoint (last 24 hours, for latency charts)
+pub fn getTimeSeries(endpoint: Endpoint) [LATENCY_HISTORY_HOURS]TimeSeriesPoint {
     mutex.lock();
     defer mutex.unlock();
 
@@ -234,11 +235,11 @@ pub fn getTimeSeries(endpoint: Endpoint) [HOURS_TO_KEEP]TimeSeriesPoint {
 
     const current_hour = getCurrentHour();
     const ep_buckets = hourly[@intFromEnum(endpoint)];
-    var result: [HOURS_TO_KEEP]TimeSeriesPoint = undefined;
+    var result: [LATENCY_HISTORY_HOURS]TimeSeriesPoint = undefined;
 
     // return hours in chronological order, oldest first
-    for (0..HOURS_TO_KEEP) |i| {
-        const hours_ago = HOURS_TO_KEEP - 1 - i;
+    for (0..LATENCY_HISTORY_HOURS) |i| {
+        const hours_ago = LATENCY_HISTORY_HOURS - 1 - i;
         const hour = current_hour - @as(i64, @intCast(hours_ago)) * 3600;
         const idx = getHourIndex(hour);
         const bucket = ep_buckets[idx];
@@ -258,10 +259,43 @@ pub fn getTimeSeries(endpoint: Endpoint) [HOURS_TO_KEEP]TimeSeriesPoint {
 }
 
 /// get time series for all endpoints
-pub fn getAllTimeSeries() [ENDPOINT_COUNT][HOURS_TO_KEEP]TimeSeriesPoint {
-    var result: [ENDPOINT_COUNT][HOURS_TO_KEEP]TimeSeriesPoint = undefined;
+pub fn getAllTimeSeries() [ENDPOINT_COUNT][LATENCY_HISTORY_HOURS]TimeSeriesPoint {
+    var result: [ENDPOINT_COUNT][LATENCY_HISTORY_HOURS]TimeSeriesPoint = undefined;
     for (0..ENDPOINT_COUNT) |i| {
         result[i] = getTimeSeries(@enumFromInt(i));
+    }
+    return result;
+}
+
+/// traffic data point (aggregate across all endpoints)
+pub const TrafficPoint = struct {
+    hour: i64,
+    count: u32,
+};
+
+/// get aggregate traffic series (all endpoints summed, last 720 hours)
+pub fn getTrafficSeries() [HOURS_TO_KEEP]TrafficPoint {
+    mutex.lock();
+    defer mutex.unlock();
+
+    ensureInitialized();
+
+    const current_hour = getCurrentHour();
+    var result: [HOURS_TO_KEEP]TrafficPoint = undefined;
+
+    for (0..HOURS_TO_KEEP) |i| {
+        const hours_ago = HOURS_TO_KEEP - 1 - i;
+        const hour = current_hour - @as(i64, @intCast(hours_ago)) * 3600;
+        const idx = getHourIndex(hour);
+
+        var total: u32 = 0;
+        for (0..ENDPOINT_COUNT) |ep| {
+            const bucket = hourly[ep][idx];
+            if (bucket.hour == hour) {
+                total += bucket.count;
+            }
+        }
+        result[i] = .{ .hour = hour, .count = total };
     }
     return result;
 }

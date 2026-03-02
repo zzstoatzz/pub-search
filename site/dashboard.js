@@ -245,6 +245,108 @@ function renderLatencyChart(timing) {
   });
 }
 
+// traffic sparkline
+let trafficData = [];
+let currentRange = '7d';
+const RANGE_HOURS = { '24h': 24, '7d': 168, '30d': 720 };
+
+function renderTrafficSparkline(history) {
+  if (!history) return;
+  trafficData = history;
+  drawTrafficSvg();
+}
+
+function drawTrafficSvg() {
+  const container = document.getElementById('traffic-sparkline');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const hours = RANGE_HOURS[currentRange] || 168;
+  const data = trafficData.slice(-hours);
+  if (data.length === 0) return;
+
+  const max = Math.max(...data.map(d => d.count), 1);
+  const w = container.clientWidth || 560;
+  const h = 60;
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', w);
+  svg.setAttribute('height', h);
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  svg.style.display = 'block';
+
+  const pad = { top: 2, right: 2, bottom: 2, left: 2 };
+  const cw = w - pad.left - pad.right;
+  const ch = h - pad.top - pad.bottom;
+
+  const points = data.map((d, i) => {
+    const x = pad.left + (i / Math.max(data.length - 1, 1)) * cw;
+    const y = pad.top + ch - (d.count / max) * ch;
+    return { x, y, d };
+  });
+
+  // filled area
+  const polyPoints = [pad.left + ',' + (pad.top + ch)]
+    .concat(points.map(p => p.x + ',' + p.y))
+    .concat([(pad.left + cw) + ',' + (pad.top + ch)]);
+  const polygon = document.createElementNS(ns, 'polygon');
+  polygon.setAttribute('points', polyPoints.join(' '));
+  polygon.setAttribute('fill', '#1B7340');
+  polygon.setAttribute('opacity', '0.15');
+  svg.appendChild(polygon);
+
+  // line
+  const linePoints = points.map(p => p.x + ',' + p.y).join(' ');
+  const polyline = document.createElementNS(ns, 'polyline');
+  polyline.setAttribute('points', linePoints);
+  polyline.setAttribute('fill', 'none');
+  polyline.setAttribute('stroke', '#1B7340');
+  polyline.setAttribute('stroke-width', '1.5');
+  svg.appendChild(polyline);
+
+  // hover overlay
+  const overlay = document.createElementNS(ns, 'rect');
+  overlay.setAttribute('width', w);
+  overlay.setAttribute('height', h);
+  overlay.setAttribute('fill', 'transparent');
+  svg.appendChild(overlay);
+
+  container.appendChild(svg);
+
+  // tooltip
+  const tooltip = document.createElement('div');
+  tooltip.className = 'traffic-tooltip';
+  container.appendChild(tooltip);
+
+  svg.addEventListener('mousemove', function(e) {
+    const rect = svg.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const idx = Math.round((mouseX - pad.left) / cw * (data.length - 1));
+    const ci = Math.max(0, Math.min(data.length - 1, idx));
+    const pt = data[ci];
+    if (pt) {
+      const d = new Date(pt.hour * 1000);
+      const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + formatTimestamp(pt.hour);
+      tooltip.textContent = label + ' · ' + pt.count + ' req';
+      tooltip.style.opacity = '1';
+    }
+  });
+  svg.addEventListener('mouseleave', function() {
+    tooltip.style.opacity = '0';
+  });
+}
+
+// range button handler
+document.getElementById('traffic-range')?.addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-range]');
+  if (!btn) return;
+  currentRange = btn.dataset.range;
+  this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  drawTrafficSvg();
+});
+
 function formatTimestamp(hour) {
   const d = new Date(hour * 1000);
   const h = d.getHours();
@@ -289,6 +391,7 @@ async function fetchDashboard() {
 
     renderPlatforms(data.platforms);
     renderTiming(data.timing);
+    renderTrafficSparkline(data.trafficHistory);
     renderTimeline(data.timeline);
     renderPubs(data.topPubs);
     renderTags(data.tags);

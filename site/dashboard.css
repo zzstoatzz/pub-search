@@ -148,6 +148,45 @@ a.pub-name:hover { color: #2a9d5c; }
 .timing-value { color: var(--text); }
 .timing-value .dim { color: var(--text-dim); }
 
+.traffic-sparkline {
+  position: relative;
+  height: 60px;
+}
+.traffic-tooltip {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+  background: var(--tooltip-bg);
+  padding: 1px 4px;
+}
+.traffic-range-btns {
+  margin-left: 0.5rem;
+}
+.traffic-range-btns button {
+  font-family: monospace;
+  font-size: 10px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 1px 6px;
+  cursor: pointer;
+  margin-left: 2px;
+}
+.traffic-range-btns button:hover {
+  border-color: var(--border-focus);
+  color: var(--text-secondary);
+}
+.traffic-range-btns button.active {
+  border-color: #1B7340;
+  color: #1B7340;
+}
+
 .latency-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;

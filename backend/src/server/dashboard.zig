@@ -24,6 +24,7 @@ pub const Data = struct {
     top_pubs_json: []const u8,
     platforms_json: []const u8,
     timing_json: []const u8,
+    traffic_json: []const u8,
 };
 
 fn getRelayUrl() []const u8 {
@@ -121,6 +122,7 @@ pub fn fetch(alloc: Allocator) !Data {
         .top_pubs_json = try formatPubsJson(alloc, batch.get(4)),
         .platforms_json = try formatPlatformsJson(alloc, batch.get(1)),
         .timing_json = try formatTimingJson(alloc),
+        .traffic_json = try formatTrafficJson(alloc),
     };
 }
 
@@ -180,6 +182,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         .top_pubs_json = top_pubs_json,
         .platforms_json = platforms_json,
         .timing_json = try formatTimingJson(alloc),
+        .traffic_json = try formatTrafficJson(alloc),
     };
 }
 
@@ -320,6 +323,27 @@ fn formatTimingJson(alloc: Allocator) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
+fn formatTrafficJson(alloc: Allocator) ![]const u8 {
+    const series = timing.getTrafficSeries();
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+
+    try jw.beginArray();
+    for (series) |point| {
+        try jw.beginObject();
+        try jw.objectField("hour");
+        try jw.write(point.hour);
+        try jw.objectField("count");
+        try jw.write(point.count);
+        try jw.endObject();
+    }
+    try jw.endArray();
+
+    return try output.toOwnedSlice();
+}
+
 /// Generate dashboard data as JSON for API endpoint
 pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -370,6 +394,11 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
     try jw.objectField("timing");
     try jw.beginWriteRaw();
     try jw.writer.writeAll(data.timing_json);
+    jw.endWriteRaw();
+
+    try jw.objectField("trafficHistory");
+    try jw.beginWriteRaw();
+    try jw.writer.writeAll(data.traffic_json);
     jw.endWriteRaw();
 
     try jw.endObject();
