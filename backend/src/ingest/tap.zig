@@ -121,21 +121,11 @@ const ProcessQueue = struct {
     }
 };
 
-/// Cache of DID → is_bridgy_fed results from PLC directory lookups.
-/// Single-threaded (owned by processWorker), no sync needed.
-const PdsCache = std.StringHashMap(bool);
-
 fn processWorker(queue: *ProcessQueue) void {
     logfire.info("tap: process worker started", .{});
-    var pds_cache = PdsCache.init(queue.allocator);
-    defer {
-        var it = pds_cache.iterator();
-        while (it.next()) |entry| queue.allocator.free(entry.key_ptr.*);
-        pds_cache.deinit();
-    }
     while (queue.pop()) |data| {
         defer queue.allocator.free(data);
-        processMessage(queue.allocator, data, &pds_cache) catch |err| {
+        processMessage(queue.allocator, data) catch |err| {
             logfire.err("message processing error: {}", .{err});
         };
         queue.mutex.lock();
@@ -302,76 +292,7 @@ const LeafletPublication = struct {
     base_path: ?[]const u8 = null,
 };
 
-/// Check if a DID is hosted on brid.gy (bridged Mastodon/ActivityPub/Ghost content).
-/// Results are cached for the lifetime of the worker thread.
-/// Fails open: on HTTP/parse errors, returns false (allow through).
-fn isBridgyFed(allocator: Allocator, did: []const u8, cache: *PdsCache) bool {
-    if (cache.get(did)) |is_bridgy| return is_bridgy;
-
-    const result = resolvePdsIsBridgy(allocator, did);
-    // cache with duped key (cache outlives the parsed message)
-    const key = allocator.dupe(u8, did) catch return false;
-    cache.put(key, result) catch {
-        allocator.free(key);
-        return result;
-    };
-    if (result) {
-        logfire.info("tap: blocked bridgy fed DID: {s}", .{did});
-    }
-    return result;
-}
-
-/// HTTP GET plc.directory/{did}, check if PDS serviceEndpoint contains "brid.gy".
-fn resolvePdsIsBridgy(allocator: Allocator, did: []const u8) bool {
-    const http = std.http;
-
-    var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://plc.directory/{s}", .{did}) catch return false;
-
-    var client: http.Client = .{ .allocator = allocator };
-    defer client.deinit();
-
-    var response_body: std.Io.Writer.Allocating = .init(allocator);
-    defer response_body.deinit();
-
-    const res = client.fetch(.{
-        .location = .{ .url = url },
-        .method = .GET,
-        .response_writer = &response_body.writer,
-    }) catch |err| {
-        logfire.warn("tap: PLC lookup failed for {s}: {}", .{ did, err });
-        return false;
-    };
-
-    if (res.status != .ok) {
-        logfire.warn("tap: PLC lookup {s} returned {}", .{ did, res.status });
-        return false;
-    }
-
-    const body = response_body.toOwnedSlice() catch return false;
-    defer allocator.free(body);
-
-    const parsed = json.parseFromSlice(json.Value, allocator, body, .{}) catch return false;
-    defer parsed.deinit();
-
-    // look for service[].serviceEndpoint where type == "AtprotoPersonalDataServer"
-    const services = parsed.value.object.get("service") orelse return false;
-    if (services != .array) return false;
-
-    for (services.array.items) |svc| {
-        if (svc != .object) continue;
-        const svc_type = svc.object.get("type") orelse continue;
-        if (svc_type != .string) continue;
-        if (!mem.eql(u8, svc_type.string, "AtprotoPersonalDataServer")) continue;
-        const endpoint = svc.object.get("serviceEndpoint") orelse continue;
-        if (endpoint != .string) continue;
-        if (mem.indexOf(u8, endpoint.string, "brid.gy") != null) return true;
-    }
-
-    return false;
-}
-
-fn processMessage(allocator: Allocator, payload: []const u8, pds_cache: *PdsCache) !void {
+fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch {
         logfire.err("tap: JSON parse failed, first 100 bytes: {s}", .{payload[0..@min(payload.len, 100)]});
         return;
@@ -398,13 +319,9 @@ fn processMessage(allocator: Allocator, payload: []const u8, pds_cache: *PdsCach
         return;
     };
 
-    // skip bridgy fed content (bridged Mastodon/ActivityPub/Ghost posts)
-    if (isDocumentCollection(rec.collection) or isPublicationCollection(rec.collection)) {
-        if (isBridgyFed(allocator, did.raw, pds_cache)) {
-            logfire.span("tap.dropped", .{ .reason = "bridgy_fed", .collection = rec.collection }).end();
-            return;
-        }
-    }
+    // note: bridgy fed content is no longer filtered — the indexer's HTTP site URL
+    // fallback resolves base_path from the publication's "site" field, so we can
+    // build working links for bridged standard.site documents.
 
     // build AT-URI string (no allocation - uses stack buffer)
     var uri_buf: [256]u8 = undefined;
