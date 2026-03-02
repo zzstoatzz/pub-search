@@ -8,6 +8,7 @@ const zat = @import("zat");
 const logfire = @import("logfire");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
+const tpuf = @import("../tpuf.zig");
 
 // leaflet-specific collections
 const LEAFLET_DOCUMENT = "pub.leaflet.document";
@@ -444,6 +445,9 @@ fn processMessage(allocator: Allocator, payload: []const u8, pds_cache: *PdsCach
     } else if (rec.isDelete()) {
         if (isDocumentCollection(rec.collection)) {
             indexer.deleteDocument(uri);
+            // also clean up turbopuffer vector (deleteDocument only handles turso)
+            const hashed = tpuf.hashId(uri);
+            tpuf.delete(allocator, &.{&hashed}) catch {};
         } else if (isPublicationCollection(rec.collection)) {
             indexer.deletePublication(uri);
         }

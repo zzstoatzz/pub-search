@@ -8,6 +8,7 @@ const tpuf = @import("tpuf.zig");
 const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
+const reconcile = @import("reconcile.zig");
 
 const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 5;
@@ -85,6 +86,9 @@ fn initServices(allocator: std.mem.Allocator) void {
 
     // init vector store (reads TURBOPUFFER_API_KEY from env)
     tpuf.init();
+
+    // start reconciler (verifies documents still exist at source PDS)
+    reconcile.start(allocator);
 
     // start embedder (voyage-4-lite, 1024 dims, 1 worker)
     ingest.embedder.start(allocator);

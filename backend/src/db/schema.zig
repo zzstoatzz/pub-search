@@ -235,6 +235,9 @@ fn runMigrations(client: *Client) !void {
     // DiskANN vector index (documents_embedding_idx) is managed via scripts/rebuild-documents-table
     // DO NOT add CREATE INDEX here — it hangs on startup when the index already exists
 
+    // verified_at: tracks when reconciler last verified document exists at source PDS
+    client.exec("ALTER TABLE documents ADD COLUMN verified_at TEXT", &.{}) catch {};
+
     // indexed_at: tracks when a document was inserted/updated in Turso
     // used by incremental sync (created_at is publication date, not insertion time,
     // so resynced documents with old created_at were missed by incremental sync)
