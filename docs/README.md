@@ -70,6 +70,7 @@ the tools are popular and well-established. the assembly — wiring the firehose
 
 ## further reading
 
+- [search-syntax.md](search-syntax.md) — query syntax reference (quotes, OR, filters, modes)
 - [search-architecture.md](search-architecture.md) — FTS5 details, scaling considerations, future options
 - [content-extraction.md](content-extraction.md) — how content is extracted from each platform
 - [api.md](api.md) — API endpoint reference

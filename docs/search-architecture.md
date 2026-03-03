@@ -26,9 +26,10 @@ FTS5 MATCH query with BM25 + recency decay (on local SQLite replica)
 results with snippet()
 ```
 
-key decisions:
+key decisions (see [search-syntax.md](search-syntax.md) for the user-facing reference):
 - **OR between terms** for better recall (deliberate, see commit 35ad4b5)
-- **prefix match on last word** for type-ahead feel
+- **quoted phrases** passed through to FTS5 for exact matching
+- **prefix match on last word** for type-ahead feel (bare words only, not phrases)
 - **unicode61 tokenizer** splits on non-alphanumeric (we match this in buildFtsQuery)
 - **recency decay** boosts recent docs: `ORDER BY rank + (days_old / 30)`
 

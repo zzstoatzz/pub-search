@@ -1148,9 +1148,11 @@ fn jsonStr(obj: json.ObjectMap, key: []const u8) []const u8 {
     };
 }
 
-/// Build FTS5 query with OR between terms: "cat dog" -> "cat OR dog*"
-/// Uses OR for better recall with BM25 ranking (more matches = higher score)
-/// Quoted queries are passed through as phrase matches: "exact phrase" -> "exact phrase"
+/// Build FTS5 query from user input.
+/// - bare words are OR'd together, prefix `*` on last word
+/// - quoted phrases (`"..."`) are passed through for exact phrase matching
+/// - literal `OR` (case-sensitive) is recognized as operator, not a search term
+/// - unclosed quotes are treated as phrases with synthetic closing quote
 /// Separators match FTS5 unicode61 tokenizer: any non-alphanumeric character
 pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
@@ -1164,73 +1166,75 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
 
     const trimmed = query[start..end];
 
-    // quoted phrase: pass through to FTS5 for exact phrase matching
-    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
-        return try alloc.dupe(u8, trimmed);
-    }
+    // tokenize into phrases and words
+    const TokenKind = enum { word, phrase };
+    const Token = struct { kind: TokenKind, text: []const u8 };
 
-    // count words and total length
-    // match FTS5 unicode61 tokenizer: non-alphanumeric = separator
-    var word_count: usize = 0;
-    var total_word_len: usize = 0;
-    var in_word = false;
-    for (trimmed) |c| {
-        const is_alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
-        if (!is_alnum) {
-            in_word = false;
-        } else {
-            if (!in_word) word_count += 1;
-            in_word = true;
-            total_word_len += 1;
-        }
-    }
+    var tokens: std.ArrayList(Token) = .empty;
+    defer tokens.deinit(alloc);
 
-    if (word_count == 0) return "";
+    var i: usize = 0;
+    while (i < trimmed.len) {
+        if (trimmed[i] == '"') {
+            // quoted phrase: scan to closing quote or end
+            i += 1; // skip opening quote
+            const inner_start = i;
+            while (i < trimmed.len and trimmed[i] != '"') : (i += 1) {}
+            const inner_end = i;
+            if (i < trimmed.len) i += 1; // skip closing quote
 
-    // single word: just add prefix wildcard
-    if (word_count == 1) {
-        const buf = try alloc.alloc(u8, total_word_len + 1);
-        var pos: usize = 0;
-        for (trimmed) |c| {
-            const is_alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
-            if (is_alnum) {
-                buf[pos] = c;
-                pos += 1;
-            }
-        }
-        buf[pos] = '*';
-        return buf;
-    }
-
-    // multiple words: join with " OR ", prefix on last
-    // size = word chars + (n-1) * 4 for " OR " + 1 for "*"
-    const buf_len = total_word_len + (word_count - 1) * 4 + 1;
-    const buf = try alloc.alloc(u8, buf_len);
-
-    var pos: usize = 0;
-    var current_word: usize = 0;
-    in_word = false;
-
-    for (trimmed) |c| {
-        const is_alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
-        if (!is_alnum) {
-            if (in_word) {
-                // end of word - add " OR " if not last
-                current_word += 1;
-                if (current_word < word_count) {
-                    @memcpy(buf[pos .. pos + 4], " OR ");
-                    pos += 4;
+            // only emit if inner text has alphanumeric content
+            const inner = trimmed[inner_start..inner_end];
+            for (inner) |c| {
+                if (isAlnum(c)) {
+                    try tokens.append(alloc, .{ .kind = .phrase, .text = inner });
+                    break;
                 }
             }
-            in_word = false;
+        } else if (isAlnum(trimmed[i])) {
+            // bare word: scan alphanumeric run
+            const word_start = i;
+            while (i < trimmed.len and isAlnum(trimmed[i])) : (i += 1) {}
+            const word = trimmed[word_start..i];
+            // skip literal "OR" — it's an operator, not a search term
+            if (!std.mem.eql(u8, word, "OR")) {
+                try tokens.append(alloc, .{ .kind = .word, .text = word });
+            }
         } else {
-            buf[pos] = c;
-            pos += 1;
-            in_word = true;
+            i += 1; // skip separator
         }
     }
-    buf[pos] = '*';
-    return buf;
+
+    if (tokens.items.len == 0) return "";
+
+    // build output: join with " OR ", prefix * on last token if it's a bare word
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+
+    for (tokens.items, 0..) |token, idx| {
+        if (idx > 0) {
+            try out.appendSlice(alloc, " OR ");
+        }
+        switch (token.kind) {
+            .word => {
+                try out.appendSlice(alloc, token.text);
+                if (idx == tokens.items.len - 1) {
+                    try out.append(alloc, '*');
+                }
+            },
+            .phrase => {
+                try out.append(alloc, '"');
+                try out.appendSlice(alloc, token.text);
+                try out.append(alloc, '"');
+            },
+        }
+    }
+
+    return try out.toOwnedSlice(alloc);
+}
+
+fn isAlnum(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
 }
 
 // --- tests ---
@@ -1291,4 +1295,74 @@ test "buildFtsQuery: mixed punctuation" {
     const result = try buildFtsQuery(std.testing.allocator, "don't@stop_now");
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("don OR t OR stop OR now*", result);
+}
+
+test "buildFtsQuery: embedded quoted phrase" {
+    const result = try buildFtsQuery(std.testing.allocator, "python \"machine learning\" tutorial");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("python OR \"machine learning\" OR tutorial*", result);
+}
+
+test "buildFtsQuery: quoted phrase at start" {
+    const result = try buildFtsQuery(std.testing.allocator, "\"exact phrase\" python");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("\"exact phrase\" OR python*", result);
+}
+
+test "buildFtsQuery: quoted phrase at end" {
+    const result = try buildFtsQuery(std.testing.allocator, "python \"machine learning\"");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("python OR \"machine learning\"", result);
+}
+
+test "buildFtsQuery: literal OR passthrough" {
+    const result = try buildFtsQuery(std.testing.allocator, "bertha OR burton");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("bertha OR burton*", result);
+}
+
+test "buildFtsQuery: multiple ORs" {
+    const result = try buildFtsQuery(std.testing.allocator, "cat OR dog OR fish");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("cat OR dog OR fish*", result);
+}
+
+test "buildFtsQuery: OR at start ignored" {
+    const result = try buildFtsQuery(std.testing.allocator, "OR cat dog");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("cat OR dog*", result);
+}
+
+test "buildFtsQuery: OR at end ignored" {
+    const result = try buildFtsQuery(std.testing.allocator, "cat dog OR");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("cat OR dog*", result);
+}
+
+test "buildFtsQuery: only OR" {
+    const result = try buildFtsQuery(std.testing.allocator, "OR");
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "buildFtsQuery: unclosed quote" {
+    const result = try buildFtsQuery(std.testing.allocator, "\"hello world");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("\"hello world\"", result);
+}
+
+test "buildFtsQuery: empty quotes" {
+    const result = try buildFtsQuery(std.testing.allocator, "\"\"");
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "buildFtsQuery: empty quotes with word" {
+    const result = try buildFtsQuery(std.testing.allocator, "\"\" hello");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("hello*", result);
+}
+
+test "buildFtsQuery: mixed quotes and OR" {
+    const result = try buildFtsQuery(std.testing.allocator, "\"exact phrase\" OR python");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("\"exact phrase\" OR python*", result);
 }

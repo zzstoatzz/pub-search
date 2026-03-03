@@ -125,8 +125,47 @@
     .search-box {
       display: flex;
       gap: 0.5rem;
-      margin-bottom: 1.5rem;
+      margin-bottom: 0.5rem;
     }
+
+    .syntax-help-btn {
+      padding: 0.5rem 0.5rem;
+      font-family: monospace;
+      font-size: 11px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      color: var(--text-dim);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .syntax-help-btn:hover { color: var(--text-secondary); }
+    .syntax-help-btn.active { color: #1B7340; border-color: #1B7340; }
+
+    .syntax-help {
+      display: none;
+      background: var(--tooltip-bg);
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 1rem;
+      font-size: 11px;
+      line-height: 1.8;
+    }
+
+    .syntax-help.open { display: block; }
+
+    .syntax-help code {
+      color: #1B7340;
+      font-family: monospace;
+    }
+
+    .syntax-help .syntax-row {
+      display: flex;
+      gap: 1rem;
+    }
+
+    .syntax-help .syntax-example { min-width: 110px; }
+    .syntax-help .syntax-desc { color: var(--text-secondary); }
 
     input[type="text"] {
       flex: 1;
@@ -676,8 +715,12 @@
         width: 100%;
       }
 
-      .search-box button {
+      .search-box #search-btn {
         width: 100%;
+      }
+
+      .search-box .syntax-help-btn {
+        width: auto;
       }
 
       /* result card mobile tweaks */
@@ -753,6 +796,14 @@
     <div class="search-box">
       <input type="text" id="query" placeholder="search content..." autofocus>
       <button id="search-btn">search</button>
+      <button class="syntax-help-btn" id="syntax-help-btn" title="search syntax">[?]</button>
+    </div>
+
+    <div class="syntax-help" id="syntax-help">
+      <div class="syntax-row"><span class="syntax-example"><code>cat dog</code></span><span class="syntax-desc">OR between terms</span></div>
+      <div class="syntax-row"><span class="syntax-example"><code>"exact phrase"</code></span><span class="syntax-desc">phrase match</span></div>
+      <div class="syntax-row"><span class="syntax-example"><code>pyth</code></span><span class="syntax-desc">prefix on last word</span></div>
+      <div class="syntax-row"><span class="syntax-example"><code>a OR b</code></span><span class="syntax-desc">explicit OR</span></div>
     </div>
 
     <div id="mode-toggle" class="mode-toggle"></div>
@@ -808,6 +859,21 @@
       if (currentTheme === 'system') applyTheme('system');
     });
     renderThemeToggle();
+
+    // syntax help toggle
+    const syntaxHelpBtn = document.getElementById('syntax-help-btn');
+    const syntaxHelp = document.getElementById('syntax-help');
+    syntaxHelpBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      syntaxHelp.classList.toggle('open');
+      syntaxHelpBtn.classList.toggle('active');
+    });
+    document.addEventListener('click', function(e) {
+      if (!syntaxHelp.contains(e.target) && e.target !== syntaxHelpBtn) {
+        syntaxHelp.classList.remove('open');
+        syntaxHelpBtn.classList.remove('active');
+      }
+    });
 
     const queryInput = document.getElementById('query');
     const searchBtn = document.getElementById('search-btn');
