@@ -18,11 +18,21 @@ var client: ?Client = null;
 var sync_client: ?Client = null;
 var local_db: ?LocalDb = null;
 
-/// Initialize Turso client only (fast, call synchronously at startup)
+/// Initialize Turso client only (fast, call synchronously at startup).
+/// Schema migrations run separately via initSchema() in the background thread
+/// so a slow/unreachable turso doesn't block the accept loop.
 pub fn initTurso() !void {
     client = try Client.init(gpa.allocator());
     sync_client = try Client.init(gpa.allocator());
-    try schema.init(&client.?);
+}
+
+/// Run schema migrations (idempotent). Call from background thread.
+pub fn initSchema() void {
+    if (client) |*c| {
+        schema.init(c) catch |err| {
+            std.debug.print("schema init failed (tables likely already exist): {}\n", .{err});
+        };
+    }
 }
 
 /// Initialize local SQLite replica (slow, call in background thread)
