@@ -1151,7 +1151,6 @@ fn jsonStr(obj: json.ObjectMap, key: []const u8) []const u8 {
 /// Build FTS5 query from user input.
 /// - bare words are OR'd together, prefix `*` on last word
 /// - quoted phrases (`"..."`) are passed through for exact phrase matching
-/// - literal `OR` (case-sensitive) is recognized as operator, not a search term
 /// - unclosed quotes are treated as phrases with synthetic closing quote
 /// Separators match FTS5 unicode61 tokenizer: any non-alphanumeric character
 pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
@@ -1196,10 +1195,9 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
             const word_start = i;
             while (i < trimmed.len and isAlnum(trimmed[i])) : (i += 1) {}
             const word = trimmed[word_start..i];
-            // skip literal "OR" — it's an operator, not a search term
-            if (!std.mem.eql(u8, word, "OR")) {
-                try tokens.append(alloc, .{ .kind = .word, .text = word });
-            }
+            // "OR" is an FTS5 operator — quote it so it's searched as a literal word
+            const kind: TokenKind = if (std.mem.eql(u8, word, "OR")) .phrase else .word;
+            try tokens.append(alloc, .{ .kind = kind, .text = word });
         } else {
             i += 1; // skip separator
         }
@@ -1315,33 +1313,34 @@ test "buildFtsQuery: quoted phrase at end" {
     try std.testing.expectEqualStrings("python OR \"machine learning\"", result);
 }
 
-test "buildFtsQuery: literal OR passthrough" {
+test "buildFtsQuery: literal OR quoted to avoid FTS5 operator collision" {
     const result = try buildFtsQuery(std.testing.allocator, "bertha OR burton");
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("bertha OR burton*", result);
+    try std.testing.expectEqualStrings("bertha OR \"OR\" OR burton*", result);
 }
 
-test "buildFtsQuery: multiple ORs" {
+test "buildFtsQuery: multiple ORs quoted" {
     const result = try buildFtsQuery(std.testing.allocator, "cat OR dog OR fish");
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("cat OR dog OR fish*", result);
+    try std.testing.expectEqualStrings("cat OR \"OR\" OR dog OR \"OR\" OR fish*", result);
 }
 
-test "buildFtsQuery: OR at start ignored" {
+test "buildFtsQuery: OR at start quoted" {
     const result = try buildFtsQuery(std.testing.allocator, "OR cat dog");
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("cat OR dog*", result);
+    try std.testing.expectEqualStrings("\"OR\" OR cat OR dog*", result);
 }
 
-test "buildFtsQuery: OR at end ignored" {
+test "buildFtsQuery: OR at end" {
     const result = try buildFtsQuery(std.testing.allocator, "cat dog OR");
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("cat OR dog*", result);
+    try std.testing.expectEqualStrings("cat OR dog OR \"OR\"", result);
 }
 
 test "buildFtsQuery: only OR" {
     const result = try buildFtsQuery(std.testing.allocator, "OR");
-    try std.testing.expectEqualStrings("", result);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("\"OR\"", result);
 }
 
 test "buildFtsQuery: unclosed quote" {
@@ -1364,5 +1363,5 @@ test "buildFtsQuery: empty quotes with word" {
 test "buildFtsQuery: mixed quotes and OR" {
     const result = try buildFtsQuery(std.testing.allocator, "\"exact phrase\" OR python");
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("\"exact phrase\" OR python*", result);
+    try std.testing.expectEqualStrings("\"exact phrase\" OR \"OR\" OR python*", result);
 }

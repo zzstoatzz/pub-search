@@ -25,17 +25,6 @@ the last token only gets a prefix `*` if it's a bare word — phrases are never 
 
 unclosed quotes are treated as phrases: `"hello world` → `"hello world"`.
 
-## explicit OR
-
-`OR` (uppercase, case-sensitive) between terms is recognized as an operator rather than a search term. this means you can write natural boolean queries without them getting mangled.
-
-| you type | what runs |
-|----------|-----------|
-| `bertha OR burton` | `bertha OR burton*` |
-| `cat OR dog OR fish` | `cat OR dog OR fish*` |
-
-`OR` at the start or end of a query is ignored — only `OR` between terms matters.
-
 ## filters
 
 beyond the query text, you can filter results by:
