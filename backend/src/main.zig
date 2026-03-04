@@ -73,8 +73,14 @@ pub fn main() !void {
 }
 
 fn initServices(allocator: std.mem.Allocator) void {
-    // run schema migrations first (idempotent, but may be slow if turso is laggy)
-    db.initSchema();
+    // run schema migrations in a separate thread — turso may be slow/unreachable
+    // and we don't want it blocking local db init, sync, or other services
+    const schema_thread = Thread.spawn(.{}, db.initSchema, .{}) catch |err| {
+        logfire.warn("failed to spawn schema init thread: {}", .{err});
+        // try inline as fallback
+        db.initSchema();
+    };
+    schema_thread.detach();
 
     // init local db (slow - turso already initialized)
     db.initLocalDb();
