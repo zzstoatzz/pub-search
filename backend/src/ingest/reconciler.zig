@@ -192,6 +192,8 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
         // resolve PDS for this DID
         const pds = resolvePds(allocator, parts.did, pds_cache) orelse {
             // PDS unknown or DID deactivated — skip, don't delete
+            // still update verified_at so these don't permanently clog the queue
+            updateVerifiedAt(client, doc.uri);
             continue;
         };
 
