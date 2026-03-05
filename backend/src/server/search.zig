@@ -3,7 +3,7 @@ const json = std.json;
 const Allocator = std.mem.Allocator;
 const zql = @import("zql");
 const logfire = @import("logfire");
-const db = @import("../db/mod.zig");
+const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
 
 pub const SearchMode = enum {

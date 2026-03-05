@@ -1,13 +1,13 @@
 const std = @import("std");
 const posix = std.posix;
 
-const schema = @import("schema.zig");
-const result = @import("result.zig");
-const sync = @import("sync.zig");
+const schema = @import("db/schema.zig");
+const result = @import("db/result.zig");
+const sync = @import("db/sync.zig");
 
 // re-exports
-pub const Client = @import("Client.zig");
-pub const LocalDb = @import("LocalDb.zig");
+pub const Client = @import("db/Client.zig");
+pub const LocalDb = @import("db/LocalDb.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
 pub const BatchResult = result.BatchResult;

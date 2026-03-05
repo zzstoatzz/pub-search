@@ -15,7 +15,7 @@ const mem = std.mem;
 const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
-const db = @import("../db/mod.zig");
+const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
 const indexer = @import("indexer.zig");
 

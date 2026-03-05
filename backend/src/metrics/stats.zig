@@ -1,5 +1,5 @@
 const std = @import("std");
-const db = @import("../db/mod.zig");
+const db = @import("../db.zig");
 const activity = @import("activity.zig");
 const stats_buffer = @import("buffer.zig");
 

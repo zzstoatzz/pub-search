@@ -11,7 +11,7 @@ const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
-const db = @import("../db/mod.zig");
+const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
 
 // voyage-4-lite limits

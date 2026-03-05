@@ -2,7 +2,7 @@
 //! Follows activity.zig pattern: instant local writes, periodic remote sync
 
 const std = @import("std");
-const db = @import("../db/mod.zig");
+const db = @import("../db.zig");
 const logfire = @import("logfire");
 
 const SYNC_INTERVAL_MS = 5000; // 5 seconds

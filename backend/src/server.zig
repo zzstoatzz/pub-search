@@ -6,10 +6,10 @@ const json = std.json;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
-const db = @import("../db/mod.zig");
-const metrics = @import("../metrics/mod.zig");
-const search = @import("search.zig");
-const dashboard = @import("dashboard.zig");
+const db = @import("db.zig");
+const metrics = @import("metrics.zig");
+const search = @import("server/search.zig");
+const dashboard = @import("server/dashboard.zig");
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;

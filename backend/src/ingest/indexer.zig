@@ -1,6 +1,6 @@
 const std = @import("std");
 const logfire = @import("logfire");
-const db = @import("../db/mod.zig");
+const db = @import("../db.zig");
 
 /// Hash title+content for cross-platform dedup.
 /// Returns a 16-char hex string (wyhash of "title\x00content").
