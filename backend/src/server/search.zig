@@ -360,6 +360,18 @@ fn isDuplicateAuthorTitle(seen: *std.StringHashMap(void), alloc: Allocator, did:
     return false;
 }
 
+/// Inject an author DID condition into a SQL query's WHERE clause before ORDER BY.
+/// Uses the (? = '' OR col = ?) pattern: no-op when author_val is empty.
+fn addAuthorCondition(alloc: Allocator, stmt: db.Client.Statement, col: []const u8, author_val: []const u8) !db.Client.Statement {
+    const order_idx = std.mem.indexOf(u8, stmt.sql, "ORDER BY") orelse return stmt;
+    const new_sql = try std.fmt.allocPrint(alloc, "{s}AND (? = '' OR {s} = ?) {s}", .{ stmt.sql[0..order_idx], col, stmt.sql[order_idx..] });
+    const new_args = try alloc.alloc([]const u8, stmt.args.len + 2);
+    @memcpy(new_args[0..stmt.args.len], stmt.args);
+    new_args[stmt.args.len] = author_val;
+    new_args[stmt.args.len + 1] = author_val;
+    return .{ .sql = new_sql, .args = new_args };
+}
+
 /// Keyword search: FTS5 via local SQLite or Turso fallback.
 fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
     // try local SQLite first (faster for FTS queries)
@@ -431,33 +443,38 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     var statements: [3]db.Client.Statement = undefined;
     var stmt_count: usize = 0;
 
+    // author condition: inject into SQL so LIMIT applies after author filtering
+    const author_val: []const u8 = if (author_filter) |af| af else "";
+
     // query 0: documents by content (always present if we have any filter)
     const doc_sql = getDocQuerySql(has_query, has_tag, has_platform, has_since);
     const doc_args = try getDocQueryArgs(alloc, fts_query, tag_filter, platform_filter, since_filter, has_query, has_tag, has_platform, has_since);
     if (doc_sql) |sql| {
-        statements[stmt_count] = .{ .sql = sql, .args = doc_args };
+        statements[stmt_count] = try addAuthorCondition(alloc, .{ .sql = sql, .args = doc_args }, "d.did", author_val);
         stmt_count += 1;
     }
 
     // query 1: documents by publication base_path (subdomain search)
     const run_basepath = has_query and !has_tag;
     if (run_basepath) {
+        var base_stmt: db.Client.Statement = undefined;
         if (has_platform and has_since) {
-            statements[stmt_count] = .{ .sql = DocsByPubBasePathAndPlatformAndSince.positional, .args = &.{ fts_query, platform_filter.?, since_filter.? } };
+            base_stmt = .{ .sql = DocsByPubBasePathAndPlatformAndSince.positional, .args = &.{ fts_query, platform_filter.?, since_filter.? } };
         } else if (has_platform) {
-            statements[stmt_count] = .{ .sql = DocsByPubBasePathAndPlatform.positional, .args = &.{ fts_query, platform_filter.? } };
+            base_stmt = .{ .sql = DocsByPubBasePathAndPlatform.positional, .args = &.{ fts_query, platform_filter.? } };
         } else if (has_since) {
-            statements[stmt_count] = .{ .sql = DocsByPubBasePathAndSince.positional, .args = &.{ fts_query, since_filter.? } };
+            base_stmt = .{ .sql = DocsByPubBasePathAndSince.positional, .args = &.{ fts_query, since_filter.? } };
         } else {
-            statements[stmt_count] = .{ .sql = DocsByPubBasePath.positional, .args = &.{fts_query} };
+            base_stmt = .{ .sql = DocsByPubBasePath.positional, .args = &.{fts_query} };
         }
+        statements[stmt_count] = try addAuthorCondition(alloc, base_stmt, "d.did", author_val);
         stmt_count += 1;
     }
 
     // query 2: publications (only when no tag/platform filter)
     const run_pubs = tag_filter == null and platform_filter == null and has_query;
     if (run_pubs) {
-        statements[stmt_count] = .{ .sql = PubSearch.positional, .args = &.{fts_query} };
+        statements[stmt_count] = try addAuthorCondition(alloc, .{ .sql = PubSearch.positional, .args = &.{fts_query} }, "p.did", author_val);
         stmt_count += 1;
     }
 
@@ -527,6 +544,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
         return error.UnsupportedQuery;
     }
 
+    // author condition: pass DID or "" (empty = no-op via SQL "? = '' OR d.did = ?")
+    const author_val: []const u8 = if (author_filter) |af| af else "";
+
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
@@ -553,9 +573,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\  COALESCE(d.cover_image, '') as cover_image
             \\FROM documents_fts f
             \\JOIN documents d ON f.uri = d.uri
-            \\WHERE documents_fts MATCH ? AND d.platform = ?
+            \\WHERE documents_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
             \\ORDER BY rank LIMIT 40
-        , .{ fts_query, platform });
+        , .{ fts_query, platform, author_val, author_val });
         defer rows.deinit();
 
         while (rows.next()) |row| {
@@ -581,9 +601,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\FROM documents d
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
-            \\WHERE publications_fts MATCH ? AND d.platform = ?
+            \\WHERE publications_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
             \\ORDER BY rank LIMIT 40
-        , .{ fts_query, platform });
+        , .{ fts_query, platform, author_val, author_val });
         defer bp_rows.deinit();
 
         while (bp_rows.next()) |row| {
@@ -608,9 +628,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\  COALESCE(d.cover_image, '') as cover_image
             \\FROM documents_fts f
             \\JOIN documents d ON f.uri = d.uri
-            \\WHERE documents_fts MATCH ?
+            \\WHERE documents_fts MATCH ? AND (? = '' OR d.did = ?)
             \\ORDER BY rank LIMIT 40
-        , .{fts_query});
+        , .{ fts_query, author_val, author_val });
         defer rows.deinit();
 
         {
@@ -643,9 +663,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\FROM documents d
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
-            \\WHERE publications_fts MATCH ?
+            \\WHERE publications_fts MATCH ? AND (? = '' OR d.did = ?)
             \\ORDER BY rank LIMIT 40
-        , .{fts_query});
+        , .{ fts_query, author_val, author_val });
         defer bp_rows.deinit();
 
         {
@@ -678,9 +698,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\  p.rkey, p.base_path, p.platform
             \\FROM publications_fts f
             \\JOIN publications p ON f.uri = p.uri
-            \\WHERE publications_fts MATCH ?
+            \\WHERE publications_fts MATCH ? AND (? = '' OR p.did = ?)
             \\ORDER BY rank LIMIT 10
-        , .{fts_query});
+        , .{ fts_query, author_val, author_val });
         defer pub_rows.deinit();
 
         {
