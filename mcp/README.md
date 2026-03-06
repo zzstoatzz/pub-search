@@ -28,7 +28,9 @@ claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leafle
 
 | tool | description |
 |------|-------------|
-| `search` | search documents by query, tag, platform, date, or author |
+| `search` | keyword search by query, tag, platform, date, or author |
+| `search_semantic` | semantic search by meaning, filterable by platform or author |
+| `search_hybrid` | combined keyword + semantic search with author/platform filtering |
 | `get_document` | retrieve full content by AT-URI |
 | `find_similar` | find semantically similar documents |
 | `get_tags` | list all tags with document counts |
@@ -39,9 +41,14 @@ claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leafle
 
 ```
 search("space station") → [{uri: "at://...", title: "...", snippet: "...", url: "..."}]
+search("gated content", author="ngerakines.me") → results from that author only
+search("", author="zat.dev") → browse all docs by author
+search_semantic("building a relay", author="zat.dev") → semantic search scoped to author
 get_document("at://...") → {title: "...", content: "full article text..."}
 find_similar("at://...") → [{uri: "at://...", title: "...", snippet: "..."}]
 ```
+
+the `author` param accepts either a handle (`nate.bsky.social`) or a DID (`did:plc:xyz`). handles are resolved server-side.
 
 ## development
 
