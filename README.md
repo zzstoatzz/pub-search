@@ -28,7 +28,7 @@ see [mcp/README.md](mcp/README.md) for local setup and usage details.
 ## api
 
 ```
-GET /search?q=<query>&mode=keyword|semantic|hybrid&platform=<platform>&tag=<tag>&since=<date>&format=v2
+GET /search?q=<query>&mode=keyword|semantic|hybrid&platform=<platform>&tag=<tag>&since=<date>&author=<did|handle>&format=v2
 GET /similar?uri=<at-uri>&format=v2
 GET /tags
 GET /popular

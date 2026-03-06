@@ -29,11 +29,12 @@ unclosed quotes are treated as phrases: `"hello world` → `"hello world"`.
 
 beyond the query text, you can filter results by:
 
+- **author**: type `@handle` in the search box (e.g., `@zat.dev up`). quote to search literally: `"@zat.dev"`.
 - **platform**: leaflet, pckt, offprint, greengale, whitewind, other
 - **tag**: click any tag in the results to filter by it
 - **date**: today, this week, this month, this year
 
-filters combine with the search query — e.g., searching `python` with the `leaflet` platform filter returns only leaflet posts matching "python".
+filters combine with the search query — e.g., searching `@zat.dev up` returns only zat.dev's posts matching "up".
 
 ## search modes
 

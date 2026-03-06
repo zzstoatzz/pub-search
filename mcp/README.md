@@ -28,7 +28,7 @@ claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leafle
 
 | tool | description |
 |------|-------------|
-| `search` | search documents by query, tag, platform, or date |
+| `search` | search documents by query, tag, platform, date, or author |
 | `get_document` | retrieve full content by AT-URI |
 | `find_similar` | find semantically similar documents |
 | `get_tags` | list all tags with document counts |

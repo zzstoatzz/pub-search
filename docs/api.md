@@ -7,7 +7,7 @@ base URL: `https://leaflet-search-backend.fly.dev`
 ### search
 
 ```
-GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>&mode=<mode>
+GET /search?q=<query>&tag=<tag>&platform=<platform>&since=<date>&author=<did|handle>&mode=<mode>
 ```
 
 full-text search across documents and publications.
@@ -19,17 +19,18 @@ full-text search across documents and publications.
 | `tag` | string | no | filter by tag (documents only) |
 | `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `whitewind`, `other` |
 | `since` | string | no | ISO date, filter to documents created after |
+| `author` | string | no | filter by author: DID (`did:plc:xyz`) or handle (`nate.bsky.social`). handles are resolved server-side via AT Protocol. |
 | `mode` | string | no | `keyword` (default), `semantic`, or `hybrid`. semantic uses voyage-4-lite embeddings + turbopuffer ANN. hybrid merges keyword + semantic via reciprocal rank fusion. |
 | `format` | string | no | `v2` wraps response in `{"results": [...], "total": N, "hasMore": bool}` |
 | `limit` | int | no | max results to return (default 20) |
 | `offset` | int | no | pagination offset |
 
-*at least one of `q` or `tag` required
+*at least one of `q`, `tag`, or `author` required
 
 **filter behavior by mode:**
-- **keyword**: respects all filters (`tag`, `platform`, `since`)
-- **semantic**: respects `platform` only. ignores `tag` and `since`.
-- **hybrid**: keyword half respects all filters, semantic half respects `platform` only. results merged via RRF.
+- **keyword**: respects all filters (`tag`, `platform`, `since`, `author`)
+- **semantic**: respects `platform` and `author`. ignores `tag` and `since`.
+- **hybrid**: keyword half respects all filters, semantic half respects `platform` and `author`. results merged via RRF.
 
 **response:**
 ```json
