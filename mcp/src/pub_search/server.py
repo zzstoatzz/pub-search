@@ -27,7 +27,7 @@ search ATProto publishing platforms: leaflet, pckt, offprint, greengale, whitewi
 
 ## tools
 
-- `search(query, tag, platform, since)` - keyword search with filters
+- `search(query, tag, platform, since, author)` - keyword search with filters
 - `search_semantic(query)` - meaning-based search (natural language queries)
 - `search_hybrid(query)` - combined keyword + semantic with source annotations
 - `get_document(uri)` - fetch full content by AT-URI
@@ -66,6 +66,7 @@ def search_tips() -> str:
 
 - prefix matching on last word: "cat dog" matches "cat dogs"
 - combine filters: `search("python", tag="tutorial", platform="leaflet")`
+- filter by author: `search("python", author="nate.bsky.social")` or `search("", author="did:plc:xyz")`
 - use `since="2025-01-01"` for recent content
 - `search_semantic("natural language query")` for meaning-based search
 - `search_hybrid("query")` for best of both — results show `source` field
@@ -97,6 +98,7 @@ async def search(
     tag: str | None = None,
     platform: Platform | None = None,
     since: str | None = None,
+    author: str | None = None,
     limit: int = 5,
 ) -> list[SearchResult]:
     """search documents and publications.
@@ -106,12 +108,13 @@ async def search(
         tag: filter by tag
         platform: filter by platform (leaflet, pckt, offprint, greengale, whitewind, other)
         since: ISO date - only documents created after this date
+        author: filter by author (DID like "did:plc:xyz" or handle like "nate.bsky.social")
         limit: max results (default 5, max 40)
 
     returns:
         list of results with uri, title, snippet, platform, and web url
     """
-    if not query and not tag:
+    if not query and not tag and not author:
         return []
 
     params: dict[str, Any] = {"format": "v2", "limit": str(limit)}
@@ -123,6 +126,8 @@ async def search(
         params["platform"] = platform
     if since:
         params["since"] = since
+    if author:
+        params["author"] = author
 
     async with get_http_client() as client:
         response = await client.get("/search", params=params)
@@ -137,6 +142,7 @@ async def search(
 async def search_semantic(
     query: str,
     platform: Platform | None = None,
+    author: str | None = None,
     limit: int = 5,
 ) -> list[SearchResult]:
     """semantic search using vector embeddings.
@@ -148,6 +154,7 @@ async def search_semantic(
     args:
         query: natural language query
         platform: filter by platform (leaflet, pckt, offprint, greengale, whitewind, other)
+        author: filter by author (DID like "did:plc:xyz" or handle like "nate.bsky.social")
         limit: max results (default 5, max 40)
 
     returns:
@@ -156,6 +163,8 @@ async def search_semantic(
     params: dict[str, Any] = {"q": query, "mode": "semantic", "format": "v2", "limit": str(limit)}
     if platform:
         params["platform"] = platform
+    if author:
+        params["author"] = author
 
     async with get_http_client() as client:
         response = await client.get("/search", params=params)
@@ -173,6 +182,7 @@ async def search_semantic(
 async def search_hybrid(
     query: str,
     platform: Platform | None = None,
+    author: str | None = None,
     limit: int = 5,
 ) -> list[SearchResult]:
     """hybrid search combining keyword and semantic results.
@@ -185,6 +195,7 @@ async def search_hybrid(
     args:
         query: search query
         platform: filter by platform (leaflet, pckt, offprint, greengale, whitewind, other)
+        author: filter by author (DID like "did:plc:xyz" or handle like "nate.bsky.social")
         limit: max results (default 5, max 40)
 
     returns:
@@ -193,6 +204,8 @@ async def search_hybrid(
     params: dict[str, Any] = {"q": query, "mode": "hybrid", "format": "v2", "limit": str(limit)}
     if platform:
         params["platform"] = platform
+    if author:
+        params["author"] = author
 
     async with get_http_client() as client:
         response = await client.get("/search", params=params)

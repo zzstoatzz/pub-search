@@ -248,13 +248,23 @@
       color: var(--text-dim);
     }
 
-    .author-name a {
+    .author-name a, .author-name .author-link {
       color: var(--text-secondary);
       text-decoration: none;
     }
 
-    .author-name a:hover {
+    .author-name a:hover, .author-name .author-link:hover {
       color: #2a9d5c;
+    }
+
+    .author-name .external-link {
+      font-size: 10px;
+      margin-left: 2px;
+      opacity: 0.5;
+    }
+
+    .author-name .external-link:hover {
+      opacity: 1;
     }
 
     .entity-type {
@@ -595,6 +605,12 @@
       color: #38bdf8;
     }
 
+    .filter-chip.author {
+      background: rgba(42, 157, 92, 0.2);
+      border: 1px solid #2a9d5c;
+      color: #34d399;
+    }
+
     .filter-chip .x {
       cursor: pointer;
       opacity: 0.6;
@@ -903,6 +919,7 @@
     let currentTag = null;
     let currentPlatform = null;
     let currentSince = null;
+    let currentAuthor = null;
     let currentMode = 'keyword';
     let allTags = [];
     let popularSearches = [];
@@ -923,7 +940,7 @@
     }
 
     async function search(query, tag = null, platform = null, append = false) {
-      if (!query.trim() && !tag && !platform) return;
+      if (!query.trim() && !tag && !platform && !currentAuthor) return;
 
       if (!append) {
         searchBtn.disabled = true;
@@ -935,6 +952,7 @@
       if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
       if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
       if (currentSince) searchUrl += `&since=${encodeURIComponent(currentSince)}`;
+      if (currentAuthor) searchUrl += `&author=${encodeURIComponent(currentAuthor)}`;
       if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
 
       try {
@@ -1099,7 +1117,7 @@
         if (!handle) return;
         const nameSpan = el.querySelector('.author-name');
         if (!nameSpan || nameSpan.innerHTML) return; // already populated
-        nameSpan.innerHTML = `<a href="https://bsky.app/profile/${escapeHtml(did)}" target="_blank">@${escapeHtml(handle)}</a> · `;
+        nameSpan.innerHTML = `<span class="author-link" onclick="setAuthor('${escapeHtml(did)}')" style="cursor:pointer">@${escapeHtml(handle)}</span><a href="https://bsky.app/profile/${escapeHtml(did)}" target="_blank" class="external-link" onclick="event.stopPropagation()" title="view on bsky">\u2197</a> · `;
       });
     }
 
@@ -1241,6 +1259,7 @@
       if (currentTag) params.set('tag', currentTag);
       if (currentPlatform) params.set('platform', currentPlatform);
       if (currentSince) params.set('since', currentSince);
+      if (currentAuthor) params.set('author', currentAuthor);
       if (currentMode !== 'keyword') params.set('mode', currentMode);
       const url = params.toString() ? `?${params}` : '/';
       history.pushState(null, '', url);
@@ -1267,7 +1286,7 @@
       renderActiveFilter();
       renderTags();
       updateUrl();
-      if (queryInput.value.trim() || currentPlatform) {
+      if (queryInput.value.trim() || currentPlatform || currentAuthor) {
         search(queryInput.value, null, currentPlatform);
       } else {
         renderEmptyState();
@@ -1290,8 +1309,29 @@
       renderActiveFilter();
       renderPlatformFilter();
       updateUrl();
-      if (queryInput.value.trim() || currentTag) {
+      if (queryInput.value.trim() || currentTag || currentAuthor) {
         search(queryInput.value, currentTag, null);
+      } else {
+        renderEmptyState();
+      }
+    }
+
+    function setAuthor(did) {
+      if (currentAuthor === did) {
+        clearAuthor();
+        return;
+      }
+      currentAuthor = did;
+      renderActiveFilter();
+      doSearch();
+    }
+
+    function clearAuthor() {
+      currentAuthor = null;
+      renderActiveFilter();
+      updateUrl();
+      if (queryInput.value.trim() || currentTag || currentPlatform) {
+        search(queryInput.value, currentTag, currentPlatform);
       } else {
         renderEmptyState();
       }
@@ -1354,7 +1394,7 @@
       currentSince = sinceFromPreset(preset);
       renderDateFilter();
       renderActiveFilter();
-      if (queryInput.value.trim() || currentTag || currentPlatform || currentSince) {
+      if (queryInput.value.trim() || currentTag || currentPlatform || currentSince || currentAuthor) {
         doSearch();
       }
     }
@@ -1389,7 +1429,7 @@
         renderActiveFilter();
       }
       // trigger search if there's a query
-      if (queryInput.value.trim() || currentTag || currentPlatform) {
+      if (queryInput.value.trim() || currentTag || currentPlatform || currentAuthor) {
         doSearch();
       }
     }
@@ -1397,7 +1437,7 @@
     const DATE_PRESET_LABELS = { week: 'last week', month: 'last month', year: 'last year' };
 
     function renderActiveFilter() {
-      if (!currentTag && !currentPlatform && !currentSince) {
+      if (!currentTag && !currentPlatform && !currentSince && !currentAuthor) {
         activeFilterDiv.innerHTML = '';
         return;
       }
@@ -1411,6 +1451,11 @@
       if (currentSince) {
         const label = DATE_PRESET_LABELS[currentDatePreset] || currentSince;
         chips.push(`<span class="filter-chip date">${escapeHtml(label)}<span class="x" onclick="setDateFilter(null)">\u00d7</span></span>`);
+      }
+      if (currentAuthor) {
+        const handle = authorCache.get(currentAuthor);
+        const label = handle ? `@${handle}` : currentAuthor.slice(0, 20) + '...';
+        chips.push(`<span class="filter-chip author">${escapeHtml(label)}<span class="x" onclick="clearAuthor()">\u00d7</span></span>`);
       }
       activeFilterDiv.innerHTML = `<div class="active-filters"><span class="active-filters-label">active filters:</span>${chips.join('')}</div>`;
     }
@@ -1506,6 +1551,7 @@
       currentTag = params.get('tag') || null;
       currentPlatform = params.get('platform') || null;
       currentSince = params.get('since') || null;
+      currentAuthor = params.get('author') || null;
       currentDatePreset = presetFromSince(currentSince);
       currentMode = params.get('mode') || 'keyword';
       renderActiveFilter();
@@ -1515,7 +1561,7 @@
       renderModeToggle();
       tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
       dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
-      if (queryInput.value || currentTag || currentPlatform) search(queryInput.value, currentTag, currentPlatform);
+      if (queryInput.value || currentTag || currentPlatform || currentAuthor) search(queryInput.value, currentTag, currentPlatform);
     });
 
     // init
@@ -1524,11 +1570,27 @@
     const initialTag = initialParams.get('tag');
     const initialPlatform = initialParams.get('platform');
     const initialSince = initialParams.get('since');
+    const initialAuthor = initialParams.get('author');
     const initialMode = initialParams.get('mode');
     if (initialQuery) queryInput.value = initialQuery;
     if (initialTag) currentTag = initialTag;
     if (initialPlatform) currentPlatform = initialPlatform;
     if (initialSince) { currentSince = initialSince; currentDatePreset = presetFromSince(initialSince); }
+    if (initialAuthor) {
+      currentAuthor = initialAuthor;
+      // resolve author handle if it's a DID and not yet cached
+      if (initialAuthor.startsWith('did:') && !authorCache.has(initialAuthor)) {
+        fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?actors=${encodeURIComponent(initialAuthor)}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (data?.profiles?.[0]) {
+              authorCache.set(data.profiles[0].did, data.profiles[0].handle);
+              renderActiveFilter();
+            }
+          })
+          .catch(() => {});
+      }
+    }
     if (initialMode) currentMode = initialMode;
     renderActiveFilter();
     renderPlatformFilter();
@@ -1537,7 +1599,7 @@
     tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
     dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
 
-    if (initialQuery || initialTag || initialPlatform) {
+    if (initialQuery || initialTag || initialPlatform || initialAuthor) {
       search(initialQuery || '', initialTag, initialPlatform);
     }
 

@@ -6,6 +6,7 @@ const json = std.json;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
+const zat = @import("zat");
 const db = @import("db.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
@@ -105,6 +106,7 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const tag_filter = parseQueryParam(alloc, target, "tag") catch null;
     const platform_filter = parseQueryParam(alloc, target, "platform") catch null;
     const since_filter = parseQueryParam(alloc, target, "since") catch null;
+    const author_param = parseQueryParam(alloc, target, "author") catch null;
     const mode_str = parseQueryParam(alloc, target, "mode") catch null;
     const mode = search.SearchMode.fromString(mode_str);
     const format = parseQueryParam(alloc, target, "format") catch "v1";
@@ -112,6 +114,12 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     const offset_str = parseQueryParam(alloc, target, "offset") catch null;
     const limit = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
     const offset = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
+
+    // resolve author param: if it's a handle (not a DID), resolve via AT Protocol
+    const author_filter: ?[]const u8 = if (author_param) |ap| blk: {
+        if (mem.startsWith(u8, ap, "did:")) break :blk ap;
+        break :blk resolveHandle(alloc, ap) catch null;
+    } else null;
 
     // record per-mode latency
     const timing_endpoint: metrics.timing.Endpoint = switch (mode) {
@@ -126,17 +134,18 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
         .query = query,
         .tag = tag_filter,
         .platform = platform_filter,
+        .author = author_filter,
         .mode = @tagName(mode),
     });
     defer span.end();
 
-    if (query.len == 0 and tag_filter == null) {
+    if (query.len == 0 and tag_filter == null and author_filter == null) {
         try sendJson(request, "{\"error\":\"enter a search term\"}");
         return;
     }
 
     // perform search - arena handles cleanup
-    const results = search.search(alloc, query, tag_filter, platform_filter, since_filter, mode) catch |err| {
+    const results = search.search(alloc, query, tag_filter, platform_filter, since_filter, author_filter, mode) catch |err| {
         logfire.err("search failed: {}", .{err});
         metrics.stats.recordError();
         return err;
@@ -564,6 +573,23 @@ fn paginateJsonArray(alloc: Allocator, array_json: []const u8, limit: usize, off
     }
     try jw.endArray();
     return try output.toOwnedSlice();
+}
+
+/// Resolve an AT Protocol handle to a DID via zat's HandleResolver.
+/// Tries HTTP .well-known first, falls back to DNS-over-HTTPS.
+fn resolveHandle(alloc: std.mem.Allocator, handle: []const u8) ![]const u8 {
+    const parsed = zat.Handle.parse(handle) orelse {
+        logfire.warn("resolveHandle: invalid handle: {s}", .{handle});
+        return error.InvalidHandle;
+    };
+
+    var resolver = zat.HandleResolver.init(alloc);
+    defer resolver.deinit();
+
+    return resolver.resolve(parsed) catch |err| {
+        logfire.warn("resolveHandle: failed for {s}: {}", .{ handle, err });
+        return error.ResolveFailed;
+    };
 }
 
 fn handleActivity(request: *http.Server.Request) !void {

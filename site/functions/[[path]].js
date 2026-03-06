@@ -24,6 +24,7 @@ function buildTitle(params) {
 
   let suffix = '';
   const modifiers = [];
+  if (params.author) modifiers.push(`by ${params.author}`);
   if (params.platform) modifiers.push(`on ${params.platform}`);
   if (params.since) {
     const preset = presetFromSince(params.since);
@@ -47,6 +48,7 @@ function buildDescription(params) {
   else if (params.tag) parts.push(`documents tagged #${params.tag}`);
   else parts.push('search results');
 
+  if (params.author) parts.push(`by ${params.author}`);
   if (params.platform) parts.push(`on ${params.platform}`);
   if (params.since) {
     const preset = presetFromSince(params.since);
@@ -71,15 +73,16 @@ export async function onRequest(context) {
   const tag = url.searchParams.get('tag');
   const platform = url.searchParams.get('platform');
   const since = url.searchParams.get('since');
+  const author = url.searchParams.get('author');
   const mode = url.searchParams.get('mode');
 
   // if no search params, pass through (static tags in index.html are fine)
-  if (!q && !tag && !platform && !since) {
+  if (!q && !tag && !platform && !since && !author) {
     return context.next();
   }
 
-  const title = buildTitle({ q, tag, platform, since });
-  const description = buildDescription({ q, tag, platform, since });
+  const title = buildTitle({ q, tag, platform, since, author });
+  const description = buildDescription({ q, tag, platform, since, author });
 
   // build og:image URL with same search params
   const ogImageUrl = new URL('/og-image', url.origin);
@@ -87,6 +90,7 @@ export async function onRequest(context) {
   if (tag) ogImageUrl.searchParams.set('tag', tag);
   if (platform) ogImageUrl.searchParams.set('platform', platform);
   if (since) ogImageUrl.searchParams.set('since', since);
+  if (author) ogImageUrl.searchParams.set('author', author);
   if (mode) ogImageUrl.searchParams.set('mode', mode);
 
   const ogUrl = url.toString();
