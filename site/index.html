@@ -248,23 +248,13 @@
       color: var(--text-dim);
     }
 
-    .author-name a, .author-name .author-link {
+    .author-name a {
       color: var(--text-secondary);
       text-decoration: none;
     }
 
-    .author-name a:hover, .author-name .author-link:hover {
+    .author-name a:hover {
       color: #2a9d5c;
-    }
-
-    .author-name .external-link {
-      font-size: 10px;
-      margin-left: 2px;
-      opacity: 0.5;
-    }
-
-    .author-name .external-link:hover {
-      opacity: 1;
     }
 
     .entity-type {
@@ -1118,7 +1108,7 @@
         if (!handle) return;
         const nameSpan = el.querySelector('.author-name');
         if (!nameSpan || nameSpan.innerHTML) return; // already populated
-        nameSpan.innerHTML = `<span class="author-link" onclick="setAuthor('${escapeHtml(did)}')" style="cursor:pointer">@${escapeHtml(handle)}</span><a href="https://bsky.app/profile/${escapeHtml(did)}" target="_blank" class="external-link" onclick="event.stopPropagation()" title="view on bsky">\u2197</a> · `;
+        nameSpan.innerHTML = `<a href="https://bsky.app/profile/${escapeHtml(did)}" target="_blank">@${escapeHtml(handle)}</a> · `;
       });
     }
 
