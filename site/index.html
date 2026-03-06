@@ -835,7 +835,7 @@
     <div class="syntax-help" id="syntax-help">
       <div class="syntax-row"><span class="syntax-example"><code>cat dog</code></span><span class="syntax-desc">matches either term</span></div>
       <div class="syntax-row"><span class="syntax-example"><code>"exact phrase"</code></span><span class="syntax-desc">matches exact phrase</span></div>
-      <div class="syntax-row"><span class="syntax-example"><code>@handle query</code></span><span class="syntax-desc">filter by author</span></div>
+      <div class="syntax-row"><span class="syntax-example"><code>@handle query</code></span><span class="syntax-desc">filter by author (quote to search literally)</span></div>
     </div>
 
     <div id="mode-toggle" class="mode-toggle"></div>
@@ -1267,13 +1267,15 @@
     }
 
     function doSearch() {
-      // parse @handle from query text
+      // parse @handle from query text (only if not inside quotes)
       const raw = queryInput.value;
-      const authorMatch = raw.match(/(?:^|\s)@([\w.-]+\.\w+)(?:\s|$)/);
+      // match @handle that's NOT inside quotes — look for unquoted @handle.tld pattern
+      const unquoted = raw.replace(/"[^"]*"/g, ''); // strip quoted sections
+      const authorMatch = unquoted.match(/(?:^|\s)@([\w.-]+\.\w+)/);
       if (authorMatch) {
         const handle = authorMatch[1];
-        // strip @handle from query, clean up whitespace
-        queryInput.value = raw.replace(/@[\w.-]+\.\w+/, '').replace(/\s+/g, ' ').trim();
+        // strip the @handle from the original query (not the unquoted version)
+        queryInput.value = raw.replace(new RegExp('\\s*@' + handle.replace(/\./g, '\\.') + '\\s*'), ' ').trim();
         currentAuthor = handle;
         renderActiveFilter();
       }
