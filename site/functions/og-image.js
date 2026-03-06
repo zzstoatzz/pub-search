@@ -2,6 +2,10 @@ import { ImageResponse } from "workers-og";
 
 const API_URL = "https://leaflet-search-backend.fly.dev";
 
+function stripQuotes(s) {
+  return s.replace(/^"+|"+$/g, "");
+}
+
 const DATE_PRESET_LABELS = {
   week: "last week",
   month: "last month",
@@ -164,7 +168,7 @@ export async function onRequest(context) {
             fontFamily: '"JetBrains Mono", monospace',
             marginTop: "16px",
           },
-          children: `"${truncate(q, 45)}"`,
+          children: `"${truncate(stripQuotes(q), 45)}"`,
         },
       });
     }

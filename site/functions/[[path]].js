@@ -12,10 +12,14 @@ function presetFromSince(since) {
   return null;
 }
 
+function stripQuotes(s) {
+  return s.replace(/^"+|"+$/g, '');
+}
+
 function buildTitle(params) {
   const parts = [];
 
-  if (params.q) parts.push(`"${params.q}"`);
+  if (params.q) parts.push(`"${stripQuotes(params.q)}"`);
   if (params.tag) parts.push(`#${params.tag}`);
 
   let suffix = '';
@@ -39,7 +43,7 @@ function buildTitle(params) {
 function buildDescription(params) {
   const parts = [];
 
-  if (params.q) parts.push(`search results for "${params.q}"`);
+  if (params.q) parts.push(`search results for "${stripQuotes(params.q)}"`);
   else if (params.tag) parts.push(`documents tagged #${params.tag}`);
   else parts.push('search results');
 
