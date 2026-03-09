@@ -33,6 +33,7 @@ const SearchResultJson = struct {
     path: []const u8 = "", // URL path from record (e.g., "/001")
     source: []const u8 = "",
     coverImage: []const u8 = "",
+    publicationName: []const u8 = "",
 };
 
 /// Document search result (internal)
@@ -48,6 +49,7 @@ const Doc = struct {
     platform: []const u8,
     path: []const u8,
     coverImage: []const u8,
+    publicationName: []const u8,
 
     fn fromRow(row: db.Row) Doc {
         return .{
@@ -62,6 +64,7 @@ const Doc = struct {
             .platform = row.text(8),
             .path = row.text(9),
             .coverImage = row.text(10),
+            .publicationName = row.text(11),
         };
     }
 
@@ -78,6 +81,7 @@ const Doc = struct {
             .platform = row.text(8),
             .path = row.text(9),
             .coverImage = row.text(10),
+            .publicationName = row.text(11),
         };
     }
 
@@ -94,6 +98,7 @@ const Doc = struct {
             .platform = self.platform,
             .path = self.path,
             .coverImage = self.coverImage,
+            .publicationName = self.publicationName,
         };
     }
 };
@@ -102,8 +107,10 @@ const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE dt.tag = :tag
     \\ORDER BY d.created_at DESC LIMIT 40
@@ -114,9 +121,11 @@ const DocsByFtsAndTag = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE documents_fts MATCH :query AND dt.tag = :tag
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
@@ -127,9 +136,11 @@ const DocsByFts = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
@@ -139,9 +150,11 @@ const DocsByFtsAndSince = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.created_at >= :since
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
@@ -151,9 +164,11 @@ const DocsByFtsAndPlatform = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.platform = :platform
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
@@ -163,9 +178,11 @@ const DocsByFtsAndPlatformAndSince = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.platform = :platform AND d.created_at >= :since
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
@@ -174,8 +191,10 @@ const DocsByTagAndPlatform = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE dt.tag = :tag AND d.platform = :platform
     \\ORDER BY d.created_at DESC LIMIT 40
@@ -186,9 +205,11 @@ const DocsByFtsAndTagAndPlatform = zql.Query(
     \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents_fts f
     \\JOIN documents d ON f.uri = d.uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE documents_fts MATCH :query AND dt.tag = :tag AND d.platform = :platform
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
@@ -198,8 +219,10 @@ const DocsByPlatform = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.platform = :platform
     \\ORDER BY d.created_at DESC LIMIT 40
 );
@@ -208,8 +231,10 @@ const DocsByAuthor = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.did = :author
     \\ORDER BY d.created_at DESC LIMIT 40
 );
@@ -218,8 +243,10 @@ const DocsByAuthorAndPlatform = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
     \\  d.created_at, d.rkey, d.base_path, d.has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.did = :author AND d.platform = :platform
     \\ORDER BY d.created_at DESC LIMIT 40
 );
@@ -233,7 +260,8 @@ const DocsByPubBasePath = zql.Query(
     \\  p.base_path,
     \\  1 as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
@@ -247,7 +275,8 @@ const DocsByPubBasePathAndPlatform = zql.Query(
     \\  p.base_path,
     \\  1 as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
@@ -261,7 +290,8 @@ const DocsByPubBasePathAndSince = zql.Query(
     \\  p.base_path,
     \\  1 as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
@@ -275,7 +305,8 @@ const DocsByPubBasePathAndPlatformAndSince = zql.Query(
     \\  p.base_path,
     \\  1 as has_publication,
     \\  d.platform, COALESCE(d.path, '') as path,
-    \\  COALESCE(d.cover_image, '') as cover_image
+    \\  COALESCE(d.cover_image, '') as cover_image,
+    \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
@@ -570,9 +601,11 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
             \\  d.created_at, d.rkey, d.base_path, d.has_publication,
             \\  d.platform, COALESCE(d.path, '') as path,
-            \\  COALESCE(d.cover_image, '') as cover_image
+            \\  COALESCE(d.cover_image, '') as cover_image,
+            \\  COALESCE(p.name, '') as publication_name
             \\FROM documents_fts f
             \\JOIN documents d ON f.uri = d.uri
+            \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
             \\ORDER BY rank LIMIT 40
         , .{ fts_query, platform, author_val, author_val });
@@ -597,7 +630,8 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\SELECT d.uri, d.did, d.title, '' as snippet,
             \\  d.created_at, d.rkey, p.base_path,
             \\  1 as has_publication, d.platform, COALESCE(d.path, '') as path,
-            \\  COALESCE(d.cover_image, '') as cover_image
+            \\  COALESCE(d.cover_image, '') as cover_image,
+            \\  COALESCE(p.name, '') as publication_name
             \\FROM documents d
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
@@ -625,9 +659,11 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
             \\  d.created_at, d.rkey, d.base_path, d.has_publication,
             \\  d.platform, COALESCE(d.path, '') as path,
-            \\  COALESCE(d.cover_image, '') as cover_image
+            \\  COALESCE(d.cover_image, '') as cover_image,
+            \\  COALESCE(p.name, '') as publication_name
             \\FROM documents_fts f
             \\JOIN documents d ON f.uri = d.uri
+            \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ? AND (? = '' OR d.did = ?)
             \\ORDER BY rank LIMIT 40
         , .{ fts_query, author_val, author_val });
@@ -659,7 +695,8 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\SELECT d.uri, d.did, d.title, '' as snippet,
             \\  d.created_at, d.rkey, p.base_path,
             \\  1 as has_publication, d.platform, COALESCE(d.path, '') as path,
-            \\  COALESCE(d.cover_image, '') as cover_image
+            \\  COALESCE(d.cover_image, '') as cover_image,
+            \\  COALESCE(p.name, '') as publication_name
             \\FROM documents d
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
@@ -867,6 +904,7 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
             .platform = r.platform,
             .path = r.path,
             .coverImage = extras.cover_images.get(r.uri) orelse "",
+            .publicationName = extras.pub_names.get(r.uri) orelse "",
         });
         count += 1;
     }
@@ -1083,6 +1121,15 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
         };
         try jw.objectField("coverImage");
         try jw.write(cover);
+        // for semantic-only results, pub name may need local DB fallback
+        const pub_name = blk: {
+            const existing = jsonStr(obj, "publicationName");
+            if (existing.len > 0) break :blk existing;
+            if (bits & 0b10 != 0) break :blk hybrid_extras.pub_names.get(entry.uri) orelse "";
+            break :blk existing;
+        };
+        try jw.objectField("publicationName");
+        try jw.write(pub_name);
         try jw.objectField("createdAt");
         try jw.write(jsonStr(obj, "createdAt"));
         try jw.objectField("source");
@@ -1193,6 +1240,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
             .platform = r.platform,
             .path = r.path,
             .coverImage = extras.cover_images.get(r.uri) orelse "",
+            .publicationName = extras.pub_names.get(r.uri) orelse "",
         });
     }
     try jw.endArray();
@@ -1206,17 +1254,19 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
 const LocalExtras = struct {
     snippets: std.StringHashMap([]const u8),
     cover_images: std.StringHashMap([]const u8),
+    pub_names: std.StringHashMap([]const u8),
 };
 
-/// Fetch content previews and cover images from local SQLite for a list of URIs.
+/// Fetch content previews, cover images, and publication names from local SQLite for a list of URIs.
 /// Gracefully returns empty maps if local db is unavailable.
 fn fetchLocalExtras(alloc: Allocator, uris: []const []const u8) LocalExtras {
     var snippets = std.StringHashMap([]const u8).init(alloc);
     var cover_images = std.StringHashMap([]const u8).init(alloc);
-    const local = db.getLocalDb() orelse return .{ .snippets = snippets, .cover_images = cover_images };
+    var pub_names = std.StringHashMap([]const u8).init(alloc);
+    const local = db.getLocalDb() orelse return .{ .snippets = snippets, .cover_images = cover_images, .pub_names = pub_names };
     for (uris) |uri| {
         var rows = local.query(
-            "SELECT substr(content, 1, 200), COALESCE(cover_image, '') FROM documents WHERE uri = ?",
+            "SELECT substr(content, 1, 200), COALESCE(cover_image, ''), COALESCE((SELECT name FROM publications WHERE uri = documents.publication_uri), '') FROM documents WHERE uri = ?",
             .{uri},
         ) catch continue;
         defer rows.deinit();
@@ -1231,9 +1281,14 @@ fn fetchLocalExtras(alloc: Allocator, uris: []const []const u8) LocalExtras {
                 const duped = alloc.dupe(u8, cover) catch continue;
                 cover_images.put(uri, duped) catch continue;
             }
+            const pub_name = row.text(2);
+            if (pub_name.len > 0) {
+                const duped = alloc.dupe(u8, pub_name) catch continue;
+                pub_names.put(uri, duped) catch continue;
+            }
         }
     }
-    return .{ .snippets = snippets, .cover_images = cover_images };
+    return .{ .snippets = snippets, .cover_images = cover_images, .pub_names = pub_names };
 }
 
 // --- JSON helpers (for hybrid search parsing) ---

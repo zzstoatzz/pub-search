@@ -20,6 +20,7 @@ class SearchResult(BaseModel):
     path: str = ""
     source: str = ""
     score: float = 0.0
+    publicationName: str = ""
 
     @computed_field
     @property
