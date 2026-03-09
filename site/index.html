@@ -986,7 +986,7 @@
         for (const doc of results) {
           const entityType = doc.type || 'article';
           const plat = doc.platform || 'leaflet';
-          const docUrl = buildDocUrl(doc, entityType, plat);
+          const docUrl = doc.url || null;
           const platformConfig = PLATFORM_CONFIG[plat];
           const platformBadge = platformConfig
             ? `<span class="platform-badge" onclick="event.stopPropagation(); setPlatform('${escapeHtml(plat)}')" style="cursor:pointer">${escapeHtml(platformConfig.label)}</span>`
@@ -1130,78 +1130,14 @@
       return `"${escaped}"`;
     }
 
-    // platform-specific URL patterns
-    // note: some platforms use basePath from publication, which we prefer
-    // fallback docUrl() is used when basePath is missing
     const PLATFORM_CONFIG = {
-      leaflet: {
-        home: 'https://leaflet.pub',
-        label: 'leaflet.pub',
-        // leaflet uses did/rkey pattern for fallback URLs
-        docUrl: (did, rkey) => `https://leaflet.pub/p/${did}/${rkey}`
-      },
-      pckt: {
-        home: 'https://pckt.blog',
-        label: 'pckt.blog',
-        // pckt uses blog slugs + path, not did/rkey - needs basePath from publication
-        docUrl: null
-      },
-      offprint: {
-        home: 'https://offprint.app',
-        label: 'offprint.app',
-        // offprint is in early beta, URL pattern unknown
-        docUrl: null
-      },
-      greengale: {
-        home: 'https://greengale.app',
-        label: 'greengale.app',
-        // greengale uses basePath + path pattern
-        docUrl: null
-      },
-      whitewind: {
-        home: 'https://whtwnd.com',
-        label: 'whtwnd.com',
-        docUrl: (did, rkey) => `https://whtwnd.com/${did}/${rkey}`
-      },
-      other: {
-        home: 'https://standard.site',
-        label: 'other',
-        // "other" = site.standard.* documents not from a known platform
-        docUrl: null
-      },
+      leaflet: { home: 'https://leaflet.pub', label: 'leaflet.pub' },
+      pckt: { home: 'https://pckt.blog', label: 'pckt.blog' },
+      offprint: { home: 'https://offprint.app', label: 'offprint.app' },
+      greengale: { home: 'https://greengale.app', label: 'greengale.app' },
+      whitewind: { home: 'https://whtwnd.com', label: 'whtwnd.com' },
+      other: { home: 'https://standard.site', label: 'other' },
     };
-
-    function buildDocUrl(doc, entityType, platform) {
-      if (entityType === 'publication') {
-        return doc.basePath ? `https://${doc.basePath}` : null;
-      }
-
-      // Platform-specific URL patterns:
-      // 1. Leaflet: basePath + rkey (e.g., https://dad.leaflet.pub/3mburumcnbs2m)
-      if (platform === 'leaflet' && doc.basePath && doc.rkey) {
-        return `https://${doc.basePath}/${doc.rkey}`;
-      }
-
-      // 2. pckt: basePath + path (e.g., https://devlog.pckt.blog/some-slug-abc123)
-      if (platform === 'pckt' && doc.basePath && doc.path) {
-        const separator = doc.path.startsWith('/') ? '' : '/';
-        return `https://${doc.basePath}${separator}${doc.path}`;
-      }
-
-      // 3. Other platforms with path: basePath + path
-      if (doc.basePath && doc.path) {
-        const separator = doc.path.startsWith('/') ? '' : '/';
-        return `https://${doc.basePath}${separator}${doc.path}`;
-      }
-
-      // 5. Platform-specific fallback URL (e.g., leaflet.pub/p/did/rkey)
-      const config = PLATFORM_CONFIG[platform];
-      if (config?.docUrl && doc.did && doc.rkey) {
-        return config.docUrl(doc.did, doc.rkey);
-      }
-
-      return null;
-    }
 
     function getPlatformHome(platform, basePath) {
       if (basePath) {
@@ -1633,7 +1569,7 @@
 
         const items = filtered.map(doc => {
           const platform = doc.platform || 'leaflet';
-          const url = buildDocUrl(doc, doc.type || 'article', platform);
+          const url = doc.url || null;
           return url
             ? `<a href="${url}" target="_blank" class="related-item">${escapeHtml(doc.title || 'Untitled')}</a>`
             : `<span class="related-item">${escapeHtml(doc.title || 'Untitled')}</span>`;
