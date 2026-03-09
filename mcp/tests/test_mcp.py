@@ -25,6 +25,7 @@ class TestTypes:
             rkey="123",
             basePath="gyst.leaflet.pub",
             platform="leaflet",
+            url="https://gyst.leaflet.pub/123",
         )
         assert r.type == "article"
         assert r.uri == "at://did:plc:abc/pub.leaflet.document/123"

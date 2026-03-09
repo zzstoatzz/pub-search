@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel
 
 
 class SearchResult(BaseModel):
@@ -21,23 +21,7 @@ class SearchResult(BaseModel):
     source: str = ""
     score: float = 0.0
     publicationName: str = ""
-
-    @computed_field
-    @property
-    def url(self) -> str:
-        """web URL for this document."""
-        if self.type == "publication" and self.basePath:
-            return f"https://{self.basePath}"
-        if self.platform == "leaflet" and self.basePath and self.rkey:
-            return f"https://{self.basePath}/{self.rkey}"
-        if self.basePath and self.path:
-            sep = "" if self.path.startswith("/") else "/"
-            return f"https://{self.basePath}{sep}{self.path}"
-        if self.platform == "leaflet" and self.did and self.rkey:
-            return f"https://leaflet.pub/p/{self.did}/{self.rkey}"
-        if self.uri:
-            return f"https://pdsls.dev/{self.uri}"
-        return ""
+    url: str = ""
 
 
 class Tag(BaseModel):

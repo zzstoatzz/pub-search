@@ -34,6 +34,7 @@ const SearchResultJson = struct {
     source: []const u8 = "",
     coverImage: []const u8 = "",
     publicationName: []const u8 = "",
+    url: []const u8 = "",
 };
 
 /// Document search result (internal)
@@ -85,9 +86,10 @@ const Doc = struct {
         };
     }
 
-    fn toJson(self: Doc) SearchResultJson {
+    fn toJson(self: Doc, alloc: Allocator) SearchResultJson {
+        const doc_type: []const u8 = if (self.hasPublication) "article" else "looseleaf";
         return .{
-            .type = if (self.hasPublication) "article" else "looseleaf",
+            .type = doc_type,
             .uri = self.uri,
             .did = self.did,
             .title = self.title,
@@ -99,9 +101,37 @@ const Doc = struct {
             .path = self.path,
             .coverImage = self.coverImage,
             .publicationName = self.publicationName,
+            .url = buildDocUrl(alloc, doc_type, self.platform, self.basePath, self.path, self.rkey, self.did),
         };
     }
 };
+
+/// Build canonical URL for a document/publication from its fields.
+/// Mirrors the frontend's buildDocUrl logic (site/index.html:1174).
+fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, base_path: []const u8, path: []const u8, rkey: []const u8, did: []const u8) []const u8 {
+    // publication → https://{basePath}
+    if (std.mem.eql(u8, doc_type, "publication") and base_path.len > 0) {
+        return std.fmt.allocPrint(alloc, "https://{s}", .{base_path}) catch "";
+    }
+    // leaflet + basePath + rkey → https://{basePath}/{rkey}
+    if (std.mem.eql(u8, platform, "leaflet") and base_path.len > 0 and rkey.len > 0) {
+        return std.fmt.allocPrint(alloc, "https://{s}/{s}", .{ base_path, rkey }) catch "";
+    }
+    // basePath + path → https://{basePath}[/]{path}
+    if (base_path.len > 0 and path.len > 0) {
+        const sep: []const u8 = if (path[0] == '/') "" else "/";
+        return std.fmt.allocPrint(alloc, "https://{s}{s}{s}", .{ base_path, sep, path }) catch "";
+    }
+    // leaflet fallback → https://leaflet.pub/p/{did}/{rkey}
+    if (std.mem.eql(u8, platform, "leaflet") and did.len > 0 and rkey.len > 0) {
+        return std.fmt.allocPrint(alloc, "https://leaflet.pub/p/{s}/{s}", .{ did, rkey }) catch "";
+    }
+    // whitewind fallback → https://whtwnd.com/{did}/{rkey}
+    if (std.mem.eql(u8, platform, "whitewind") and did.len > 0 and rkey.len > 0) {
+        return std.fmt.allocPrint(alloc, "https://whtwnd.com/{s}/{s}", .{ did, rkey }) catch "";
+    }
+    return "";
+}
 
 const DocsByTag = zql.Query(
     \\SELECT d.uri, d.did, d.title, '' as snippet,
@@ -348,7 +378,7 @@ const Pub = struct {
         };
     }
 
-    fn toJson(self: Pub) SearchResultJson {
+    fn toJson(self: Pub, alloc: Allocator) SearchResultJson {
         return .{
             .type = "publication",
             .uri = self.uri,
@@ -358,6 +388,7 @@ const Pub = struct {
             .rkey = self.rkey,
             .basePath = self.basePath,
             .platform = self.platform,
+            .url = buildDocUrl(alloc, "publication", self.platform, self.basePath, "", self.rkey, self.did),
         };
     }
 };
@@ -452,7 +483,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             for (res.rows) |row| {
                 const doc = Doc.fromRow(row);
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
-                try jw.write(doc.toJson());
+                try jw.write(doc.toJson(alloc));
             }
         } else {
             var res = c.query(DocsByAuthor.positional, &.{author_filter.?}) catch {
@@ -463,7 +494,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             for (res.rows) |row| {
                 const doc = Doc.fromRow(row);
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
-                try jw.write(doc.toJson());
+                try jw.write(doc.toJson(alloc));
             }
         }
         try jw.endArray();
@@ -532,7 +563,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
-            try jw.write(doc.toJson());
+            try jw.write(doc.toJson(alloc));
         }
         query_idx += 1;
     }
@@ -545,7 +576,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
             if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
-                try jw.write(doc.toJson());
+                try jw.write(doc.toJson(alloc));
             }
         }
         query_idx += 1;
@@ -558,7 +589,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, pub_result.did, af)) continue;
             }
-            try jw.write(pub_result.toJson());
+            try jw.write(pub_result.toJson(alloc));
         }
     }
 
@@ -622,7 +653,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
-            try jw.write(doc.toJson());
+            try jw.write(doc.toJson(alloc));
         }
 
         // base_path search with platform
@@ -649,7 +680,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                 if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
             }
             if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
-                try jw.write(doc.toJson());
+                try jw.write(doc.toJson(alloc));
             }
         }
     } else {
@@ -684,7 +715,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 const uri_dupe = try alloc.dupe(u8, doc.uri);
                 try seen_uris.put(uri_dupe, {});
-                try jw.write(doc.toJson());
+                try jw.write(doc.toJson(alloc));
                 doc_count += 1;
             }
             logfire.info("search.iterate.docs_fts rows={d}", .{doc_count});
@@ -721,7 +752,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                     }
                 }
                 if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
-                    try jw.write(doc.toJson());
+                    try jw.write(doc.toJson(alloc));
                 }
                 bp_count += 1;
             }
@@ -749,7 +780,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                 if (author_filter) |af| {
                     if (!std.mem.eql(u8, pub_result.did, af)) { pub_count += 1; continue; }
                 }
-                try jw.write(pub_result.toJson());
+                try jw.write(pub_result.toJson(alloc));
                 pub_count += 1;
             }
             logfire.info("search.iterate.pubs_fts rows={d}", .{pub_count});
@@ -892,8 +923,9 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
         if (std.mem.eql(u8, r.uri, uri)) continue;
         if (count >= limit) break;
         if (try isDuplicateAuthorTitle(&seen_authors, alloc, r.did, r.title)) continue;
+        const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(SearchResultJson{
-            .type = if (r.has_publication) "article" else "looseleaf",
+            .type = doc_type,
             .uri = r.uri,
             .did = r.did,
             .title = r.title,
@@ -905,6 +937,7 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
             .path = r.path,
             .coverImage = extras.cover_images.get(r.uri) orelse "",
             .publicationName = extras.pub_names.get(r.uri) orelse "",
+            .url = buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
         });
         count += 1;
     }
@@ -1130,6 +1163,8 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
         };
         try jw.objectField("publicationName");
         try jw.write(pub_name);
+        try jw.objectField("url");
+        try jw.write(buildDocUrl(alloc, jsonStr(obj, "type"), jsonStr(obj, "platform"), jsonStr(obj, "basePath"), jsonStr(obj, "path"), jsonStr(obj, "rkey"), jsonStr(obj, "did")));
         try jw.objectField("createdAt");
         try jw.write(jsonStr(obj, "createdAt"));
         try jw.objectField("source");
@@ -1228,8 +1263,9 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     try jw.beginArray();
     for (filtered_indices[0..filtered_count]) |idx| {
         const r = results[idx];
+        const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(SearchResultJson{
-            .type = if (r.has_publication) "article" else "looseleaf",
+            .type = doc_type,
             .uri = r.uri,
             .did = r.did,
             .title = r.title,
@@ -1241,6 +1277,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
             .path = r.path,
             .coverImage = extras.cover_images.get(r.uri) orelse "",
             .publicationName = extras.pub_names.get(r.uri) orelse "",
+            .url = buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
         });
     }
     try jw.endArray();
