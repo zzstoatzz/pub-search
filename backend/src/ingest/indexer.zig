@@ -244,6 +244,22 @@ pub fn insertPublication(
         &.{ uri, did, rkey, name, description orelse "", base_path orelse "" },
     );
 
+    // backfill: if documents arrived before this publication, they have empty base_path
+    if (base_path) |bp| {
+        if (bp.len > 0) {
+            c.exec(
+                \\UPDATE documents SET
+                \\  base_path = ?,
+                \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
+                \\  embedded_at = NULL
+                \\WHERE publication_uri = ?
+                \\  AND (base_path IS NULL OR base_path = '')
+            , &.{ bp, uri }) catch |err| {
+                logfire.warn("indexer: base_path backfill failed for pub {s}: {}", .{ uri, err });
+            };
+        }
+    }
+
     // update FTS index (includes base_path for subdomain search)
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
     c.exec(
