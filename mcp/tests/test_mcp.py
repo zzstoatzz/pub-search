@@ -147,7 +147,7 @@ class TestMcpServerRegistration:
             tools = await client.list_tools()
 
         tool_names = {t.name for t in tools}
-        expected = {"search", "search_semantic", "search_hybrid", "get_document", "find_similar", "get_tags", "get_stats", "get_popular"}
+        expected = {"search", "get_document", "find_similar", "get_tags", "get_stats", "get_popular"}
         assert expected == tool_names
 
     async def test_list_prompts(self, client):
