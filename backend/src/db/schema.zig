@@ -246,4 +246,8 @@ fn runMigrations(client: *Client) !void {
         "UPDATE documents SET indexed_at = created_at WHERE indexed_at IS NULL",
         &.{},
     ) catch {};
+
+    // is_bridgyfed: marks documents from bridgy fed (brid.gy PDS)
+    // 0 = normal, 1 = bridgy fed (excluded from search by default)
+    client.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", &.{}) catch {};
 }

@@ -1,0 +1,250 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Mark bridgy fed content in turso (set is_bridgyfed = 1).
+
+Finds all DIDs with platform='other', resolves their PDS via plc.directory,
+and UPDATE is_bridgyfed = 1 for any DID hosted on brid.gy.
+
+Usage:
+    ./scripts/mark-bridgyfed          # dry run (default)
+    ./scripts/mark-bridgyfed --apply  # actually update
+"""
+
+import argparse
+import asyncio
+import os
+import sys
+import time
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://"):]
+        return url
+
+
+def _make_stmt(sql: str, args: list | None = None) -> dict:
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = [
+            {"type": "null"} if a is None else {"type": "text", "value": str(a)}
+            for a in args
+        ]
+    return stmt
+
+
+async def _turso_request(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    stmt: dict,
+    semaphore: asyncio.Semaphore,
+    retries: int = 5,
+) -> dict:
+    """Send a pipeline request to Turso with retries on transient errors."""
+    async with semaphore:
+        for attempt in range(retries):
+            try:
+                response = await client.post(
+                    f"https://{settings.turso_host}/v2/pipeline",
+                    headers={
+                        "Authorization": f"Bearer {settings.turso_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "requests": [
+                            {"type": "execute", "stmt": stmt},
+                            {"type": "close"},
+                        ]
+                    },
+                    timeout=120,
+                )
+                if response.status_code in (400, 502, 503, 504) and attempt < retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    log(f"  turso {response.status_code}, retry in {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                if response.status_code != 200:
+                    print(f"turso error: {response.text}", file=sys.stderr, flush=True)
+                response.raise_for_status()
+                return response.json()
+            except httpx.TimeoutException:
+                if attempt < retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    log(f"  turso timeout, retry in {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+    raise RuntimeError("unreachable")
+
+
+async def turso_query(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    sql: str,
+    semaphore: asyncio.Semaphore,
+    args: list | None = None,
+) -> list[dict]:
+    data = await _turso_request(client, settings, _make_stmt(sql, args), semaphore)
+    result = data["results"][0]["response"]["result"]
+    cols = [c["name"] for c in result["cols"]]
+    return [{col: cell["value"] for col, cell in zip(cols, row)} for row in result["rows"]]
+
+
+async def turso_exec(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    sql: str,
+    semaphore: asyncio.Semaphore,
+    args: list | None = None,
+) -> int:
+    data = await _turso_request(client, settings, _make_stmt(sql, args), semaphore)
+    return data["results"][0]["response"]["result"]["affected_row_count"]
+
+
+async def resolve_pds(client: httpx.AsyncClient, did: str, semaphore: asyncio.Semaphore) -> str | None:
+    """Get PDS endpoint from PLC directory."""
+    async with semaphore:
+        try:
+            resp = await client.get(f"https://plc.directory/{did}", timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            for service in data.get("service", []):
+                if service.get("type") == "AtprotoPersonalDataServer":
+                    return service["serviceEndpoint"]
+        except Exception as e:
+            print(f"  plc lookup failed for {did}: {e}", file=sys.stderr, flush=True)
+    return None
+
+
+async def mark_did(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    did: str,
+    semaphore: asyncio.Semaphore,
+) -> int:
+    """Mark all documents for a DID as bridgy fed. Returns affected row count."""
+    return await turso_exec(
+        client, settings,
+        "UPDATE documents SET is_bridgyfed = 1 WHERE did = ? AND (is_bridgyfed IS NULL OR is_bridgyfed = 0)",
+        semaphore, [did],
+    )
+
+
+async def main():
+    parser = argparse.ArgumentParser(description="Mark bridgy fed content in turso")
+    parser.add_argument("--apply", action="store_true", help="Actually update (default is dry run)")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.apply:
+        log("=== DRY RUN (pass --apply to update) ===\n")
+
+    plc_sem = asyncio.Semaphore(20)  # concurrent PLC lookups
+    turso_sem = asyncio.Semaphore(10)  # concurrent turso requests
+
+    async with httpx.AsyncClient() as client:
+        # step 1: get distinct DIDs with platform='other'
+        log("querying distinct DIDs with platform='other'...")
+        rows = await turso_query(
+            client, settings,
+            "SELECT DISTINCT did FROM documents WHERE platform = 'other'",
+            turso_sem,
+        )
+        dids = [r["did"] for r in rows]
+        log(f"  found {len(dids)} distinct DIDs\n")
+
+        # step 2: resolve PDS concurrently
+        log("resolving PDS endpoints (20 concurrent)...")
+        t0 = time.monotonic()
+
+        async def resolve_one(did: str) -> tuple[str, str | None]:
+            pds = await resolve_pds(client, did, plc_sem)
+            return did, pds
+
+        results = await asyncio.gather(*[resolve_one(d) for d in dids])
+        elapsed = time.monotonic() - t0
+
+        bridgy_dids = []
+        non_bridgy_dids = []
+        for did, pds in results:
+            if pds and "brid.gy" in pds:
+                bridgy_dids.append(did)
+            else:
+                non_bridgy_dids.append(did)
+
+        log(f"  resolved {len(dids)} DIDs in {elapsed:.1f}s")
+        log(f"  bridgy fed: {len(bridgy_dids)}")
+        log(f"  non-bridgy: {len(non_bridgy_dids)}\n")
+
+        if not bridgy_dids:
+            log("nothing to mark!")
+            return
+
+        if not args.apply:
+            # show counts per DID
+            log("querying document counts per bridgy fed DID...")
+            total = 0
+            for did in bridgy_dids[:10]:
+                count_rows = await turso_query(
+                    client, settings,
+                    "SELECT count(*) as n FROM documents WHERE did = ?",
+                    turso_sem, [did],
+                )
+                n = int(count_rows[0]["n"])
+                total += n
+                log(f"  {did}: {n} docs")
+            if len(bridgy_dids) > 10:
+                log(f"  ... and {len(bridgy_dids) - 10} more DIDs")
+            log(f"\npass --apply to mark these documents (estimated ~{total}+ rows)")
+            return
+
+        # step 3: mark concurrently (10 concurrent turso connections)
+        log(f"marking {len(bridgy_dids)} bridgy fed DIDs (10 concurrent)...")
+        t0 = time.monotonic()
+        marked = 0
+        done = 0
+
+        async def mark_one(did: str) -> int:
+            return await mark_did(client, settings, did, turso_sem)
+
+        # process in chunks of 50 for progress reporting
+        for chunk_start in range(0, len(bridgy_dids), 50):
+            chunk = bridgy_dids[chunk_start : chunk_start + 50]
+            counts = await asyncio.gather(*[mark_one(d) for d in chunk])
+            marked += sum(counts)
+            done += len(chunk)
+            log(f"  [{done}/{len(bridgy_dids)}] marked {marked} docs so far")
+
+        elapsed = time.monotonic() - t0
+        log(f"\ndone! marked {marked} documents from {len(bridgy_dids)} DIDs in {elapsed:.1f}s")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

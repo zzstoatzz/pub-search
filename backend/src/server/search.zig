@@ -265,7 +265,7 @@ const DocsByAuthor = zql.Query(
     \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\WHERE d.did = :author
+    \\WHERE d.did = :author AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
     \\ORDER BY d.created_at DESC LIMIT 40
 );
 
@@ -277,7 +277,7 @@ const DocsByAuthorAndPlatform = zql.Query(
     \\  COALESCE(p.name, '') as publication_name
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\WHERE d.did = :author AND d.platform = :platform
+    \\WHERE d.did = :author AND d.platform = :platform AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
     \\ORDER BY d.created_at DESC LIMIT 40
 );
 
@@ -434,6 +434,28 @@ fn addAuthorCondition(alloc: Allocator, stmt: db.Client.Statement, col: []const 
     return .{ .sql = new_sql, .args = new_args };
 }
 
+/// Inject bridgy fed exclusion into a SQL query's WHERE clause before ORDER BY.
+/// Excludes documents where is_bridgyfed = 1 (bridgy fed content).
+fn addBridgyFedExclusion(alloc: Allocator, stmt: db.Client.Statement) !db.Client.Statement {
+    const order_idx = std.mem.indexOf(u8, stmt.sql, "ORDER BY") orelse return stmt;
+    const new_sql = try std.fmt.allocPrint(alloc, "{s}AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) {s}", .{ stmt.sql[0..order_idx], stmt.sql[order_idx..] });
+    return .{ .sql = new_sql, .args = stmt.args };
+}
+
+/// Check if a URI is from bridgy fed by looking up is_bridgyfed in local SQLite.
+fn isBridgyFed(uri: []const u8) bool {
+    const local = db.getLocalDb() orelse return false;
+    var rows = local.query(
+        "SELECT is_bridgyfed FROM documents WHERE uri = ?",
+        .{uri},
+    ) catch return false;
+    defer rows.deinit();
+    if (rows.next()) |row| {
+        return row.int(0) != 0;
+    }
+    return false;
+}
+
 /// Keyword search: FTS5 via local SQLite or Turso fallback.
 fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
     // try local SQLite first (faster for FTS queries)
@@ -512,7 +534,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     const doc_sql = getDocQuerySql(has_query, has_tag, has_platform, has_since);
     const doc_args = try getDocQueryArgs(alloc, fts_query, tag_filter, platform_filter, since_filter, has_query, has_tag, has_platform, has_since);
     if (doc_sql) |sql| {
-        statements[stmt_count] = try addAuthorCondition(alloc, .{ .sql = sql, .args = doc_args }, "d.did", author_val);
+        statements[stmt_count] = try addBridgyFedExclusion(alloc, try addAuthorCondition(alloc, .{ .sql = sql, .args = doc_args }, "d.did", author_val));
         stmt_count += 1;
     }
 
@@ -529,7 +551,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
         } else {
             base_stmt = .{ .sql = DocsByPubBasePath.positional, .args = &.{fts_query} };
         }
-        statements[stmt_count] = try addAuthorCondition(alloc, base_stmt, "d.did", author_val);
+        statements[stmt_count] = try addBridgyFedExclusion(alloc, try addAuthorCondition(alloc, base_stmt, "d.did", author_val));
         stmt_count += 1;
     }
 
@@ -638,6 +660,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN documents d ON f.uri = d.uri
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
+            \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
             \\ORDER BY rank LIMIT 40
         , .{ fts_query, platform, author_val, author_val });
         defer rows.deinit();
@@ -667,6 +690,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
             \\WHERE publications_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
+            \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
             \\ORDER BY rank LIMIT 40
         , .{ fts_query, platform, author_val, author_val });
         defer bp_rows.deinit();
@@ -696,6 +720,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN documents d ON f.uri = d.uri
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ? AND (? = '' OR d.did = ?)
+            \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
             \\ORDER BY rank LIMIT 40
         , .{ fts_query, author_val, author_val });
         defer rows.deinit();
@@ -732,6 +757,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
             \\WHERE publications_fts MATCH ? AND (? = '' OR d.did = ?)
+            \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
             \\ORDER BY rank LIMIT 40
         , .{ fts_query, author_val, author_val });
         defer bp_rows.deinit();
@@ -1229,6 +1255,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     for (results, 0..) |r, idx| {
         if (filtered_count >= 20) break;
         if (r.title.len == 0) continue;
+        if (isBridgyFed(r.uri)) continue;
         if (platform_filter) |pf| {
             if (!std.mem.eql(u8, r.platform, pf)) continue;
         }

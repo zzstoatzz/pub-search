@@ -173,12 +173,20 @@ pub fn insertDocument(
         }
     }
 
+    // bridgy fed detection: if platform is "other" and pub_uri is an HTTP(S) URL,
+    // this is likely bridgy fed content (only bridgy fed puts HTTP URLs in the "site" field)
+    const is_bridgyfed: []const u8 = if (std.mem.eql(u8, actual_platform, "other") and
+        (std.mem.startsWith(u8, pub_uri, "http://") or std.mem.startsWith(u8, pub_uri, "https://")))
+        "1"
+    else
+        "0";
+
     // use ON CONFLICT to preserve embedded_at (INSERT OR REPLACE would nuke it)
     // indexed_at uses strftime to record when this row was inserted/updated in Turso
     // (created_at is the document's publication date, which can be old for resynced docs)
     try c.exec(
-        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, cover_image, indexed_at)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, cover_image, indexed_at, is_bridgyfed)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?)
         \\ON CONFLICT(uri) DO UPDATE SET
         \\  did = excluded.did,
         \\  rkey = excluded.rkey,
@@ -194,9 +202,10 @@ pub fn insertDocument(
         \\  content_hash = excluded.content_hash,
         \\  cover_image = excluded.cover_image,
         \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
+        \\  is_bridgyfed = excluded.is_bridgyfed,
         \\  embedded_at = documents.embedded_at
     ,
-        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "" },
+        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "", is_bridgyfed },
     );
 
     // update FTS index

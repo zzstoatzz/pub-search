@@ -244,6 +244,7 @@ fn createSchema(self: *LocalDb) !void {
     c.exec("ALTER TABLE documents ADD COLUMN indexed_at TEXT", .{}) catch {};
     c.exec("ALTER TABLE documents ADD COLUMN embedded_at TEXT", .{}) catch {};
     c.exec("ALTER TABLE documents ADD COLUMN cover_image TEXT DEFAULT ''", .{}) catch {};
+    c.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", .{}) catch {};
 }
 
 /// Row adapter matching result.Row interface (column-indexed access)
