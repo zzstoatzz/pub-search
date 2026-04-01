@@ -7,7 +7,7 @@ const timing = @import("../metrics.zig").timing;
 
 // JSON output types
 const TagJson = struct { tag: []const u8, count: i64 };
-const TimelineJson = struct { date: []const u8, count: i64 };
+const TimelineJson = struct { date: []const u8, count: i64, bridgyfed: i64 };
 const PubJson = struct { name: []const u8, basePath: []const u8, count: i64 };
 const PlatformJson = struct { platform: []const u8, count: i64 };
 
@@ -18,6 +18,7 @@ pub const Data = struct {
     publications: i64,
     documents: i64,
     embeddings: i64,
+    bridgyfed_documents: i64,
     relay_url: []const u8,
     tags_json: []const u8,
     timeline_json: []const u8,
@@ -39,13 +40,17 @@ const STATS_SQL =
     \\  (SELECT total_searches FROM stats WHERE id = 1) as searches,
     \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
     \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at,
-    \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings
+    \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
+    \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed
 ;
 
 const PLATFORMS_SQL =
-    \\SELECT platform, COUNT(*) as count
+    \\SELECT CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 'bridgy fed'
+    \\  ELSE platform END as platform,
+    \\  COUNT(*) as count
     \\FROM documents
-    \\GROUP BY platform
+    \\GROUP BY CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 'bridgy fed'
+    \\  ELSE platform END
     \\ORDER BY count DESC
 ;
 
@@ -58,7 +63,8 @@ pub const TAGS_SQL =
 ;
 
 const TIMELINE_SQL =
-    \\SELECT DATE(indexed_at) as date, COUNT(*) as count
+    \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
+    \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
     \\FROM documents
     \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
     \\AND DATE(indexed_at) <= DATE('now')
@@ -71,6 +77,7 @@ const TOP_PUBS_SQL =
     \\SELECT p.name, p.base_path, COUNT(d.uri) as doc_count
     \\FROM publications p
     \\JOIN documents d ON d.publication_uri = p.uri
+    \\WHERE COALESCE(d.is_bridgyfed, 0) = 0
     \\GROUP BY p.uri
     \\ORDER BY doc_count DESC
     \\LIMIT 8
@@ -109,6 +116,7 @@ pub fn fetch(alloc: Allocator) !Data {
     const publications = if (stats_row) |r| r.int(1) else 0;
     const documents = if (stats_row) |r| r.int(0) else 0;
     const embeddings = if (stats_row) |r| r.int(5) else 0;
+    const bridgyfed_documents = if (stats_row) |r| r.int(6) else 0;
 
     return .{
         .started_at = started_at,
@@ -116,6 +124,7 @@ pub fn fetch(alloc: Allocator) !Data {
         .publications = publications,
         .documents = documents,
         .embeddings = embeddings,
+        .bridgyfed_documents = bridgyfed_documents,
         .relay_url = getRelayUrl(),
         .tags_json = try formatTagsJson(alloc, batch.get(2)),
         .timeline_json = try formatTimelineJson(alloc, batch.get(3)),
@@ -142,13 +151,15 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
-        \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings
+        \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
+        \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed
     , .{});
     defer counts_rows.deinit();
     const counts_row = counts_rows.next() orelse return error.NoStats;
     const documents = counts_row.int(0);
     const publications = counts_row.int(1);
     const embeddings = counts_row.int(2);
+    const bridgyfed_documents = counts_row.int(3);
 
     // platforms query
     var platforms_rows = try local.query(PLATFORMS_SQL, .{});
@@ -176,6 +187,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         .publications = publications,
         .documents = documents,
         .embeddings = embeddings,
+        .bridgyfed_documents = bridgyfed_documents,
         .relay_url = getRelayUrl(),
         .tags_json = tags_json,
         .timeline_json = timeline_json,
@@ -204,7 +216,7 @@ fn formatTimelineJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1) });
+        try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
     }
     try jw.endArray();
     return try output.toOwnedSlice();
@@ -249,7 +261,7 @@ fn formatTimelineJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     errdefer output.deinit();
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (rows) |row| try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1) });
+    for (rows) |row| try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -366,6 +378,9 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
 
     try jw.objectField("embeddings");
     try jw.write(data.embeddings);
+
+    try jw.objectField("bridgyfedDocuments");
+    try jw.write(data.bridgyfed_documents);
 
     try jw.objectField("relayUrl");
     try jw.write(data.relay_url);

@@ -29,14 +29,42 @@ function renderTimeline(timeline) {
   const el = document.getElementById('timeline');
   if (!timeline || timeline.length === 0) return;
 
+  // add legend if any bridgy fed data
+  const hasBridgy = timeline.some(d => (d.bridgyfed || 0) > 0);
+  if (hasBridgy) {
+    const legend = document.createElement('div');
+    legend.className = 'timeline-legend';
+    legend.innerHTML =
+      '<span><span class="legend-swatch" style="background:#1B7340"></span>content</span>' +
+      '<span><span class="legend-swatch" style="background:#d97706"></span>bridgy fed</span>';
+    el.parentNode.insertBefore(legend, el);
+  }
+
   const max = Math.max(...timeline.map(d => d.count));
   [...timeline].reverse().forEach(d => {
-    const h = max > 0 ? (d.count / max * 100) : 0;
-    const bar = document.createElement('div');
-    bar.className = 'bar';
-    bar.style.height = Math.max(h, 3) + '%';
-    bar.title = d.date + ': ' + d.count;
-    el.appendChild(bar);
+    const totalH = max > 0 ? (d.count / max * 100) : 0;
+    const bridgy = d.bridgyfed || 0;
+    const normal = d.count - bridgy;
+
+    const stack = document.createElement('div');
+    stack.className = 'bar-stack';
+    stack.style.height = Math.max(totalH, 3) + '%';
+    stack.title = d.date + ': ' + d.count + (bridgy ? ' (' + bridgy + ' bridgy fed)' : '');
+
+    if (bridgy > 0 && d.count > 0) {
+      const bridgyDiv = document.createElement('div');
+      bridgyDiv.className = 'bar-bridgy';
+      bridgyDiv.style.height = (bridgy / d.count * 100) + '%';
+      stack.appendChild(bridgyDiv);
+    }
+    if (normal > 0 && d.count > 0) {
+      const normalDiv = document.createElement('div');
+      normalDiv.className = 'bar-normal';
+      normalDiv.style.height = (normal / d.count * 100) + '%';
+      stack.appendChild(normalDiv);
+    }
+
+    el.appendChild(stack);
   });
 }
 
@@ -72,7 +100,9 @@ function renderPlatforms(platforms) {
   platforms.forEach(p => {
     const row = document.createElement('div');
     row.className = 'doc-row';
-    row.innerHTML = '<span class="doc-type">' + escapeHtml(p.platform) + '</span><span class="doc-count">' + p.count + '</span>';
+    const isBridgy = p.platform === 'bridgy fed';
+    const typeClass = 'doc-type' + (isBridgy ? ' bridgy-fed' : '');
+    row.innerHTML = '<span class="' + typeClass + '">' + escapeHtml(p.platform) + '</span><span class="doc-count">' + p.count + '</span>';
     el.appendChild(row);
   });
 }
@@ -383,6 +413,7 @@ async function fetchDashboard() {
     document.getElementById('searches').textContent = data.searches;
     document.getElementById('publications').textContent = data.publications;
     document.getElementById('embeddings').textContent = data.embeddings ?? '--';
+    document.getElementById('bridgyfed').textContent = data.bridgyfedDocuments ?? '--';
 
     if (data.relayUrl) {
       const relayEl = document.getElementById('relay');
