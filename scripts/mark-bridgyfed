@@ -146,7 +146,7 @@ async def mark_did(
     """Mark all documents for a DID as bridgy fed. Returns affected row count."""
     return await turso_exec(
         client, settings,
-        "UPDATE documents SET is_bridgyfed = 1 WHERE did = ? AND (is_bridgyfed IS NULL OR is_bridgyfed = 0)",
+        "UPDATE documents SET is_bridgyfed = 1, indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE did = ? AND (is_bridgyfed IS NULL OR is_bridgyfed = 0)",
         semaphore, [did],
     )
 
