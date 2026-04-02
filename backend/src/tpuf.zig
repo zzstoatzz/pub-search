@@ -586,3 +586,33 @@ fn doRequest(allocator: Allocator, key: []const u8, url: []const u8, body: []con
 
     return try response_body.toOwnedSlice();
 }
+
+// --- keepalive ---
+
+const KEEPALIVE_INTERVAL_NS: u64 = 3 * 60 * std.time.ns_per_s; // 3 minutes
+
+/// Start a background thread that pings turbopuffer periodically to prevent cold starts.
+/// Cold starts add ~600-900ms to the first query after inactivity.
+pub fn startKeepalive(allocator: Allocator) void {
+    if (api_key == null) return;
+    const thread = std.Thread.spawn(.{}, keepaliveLoop, .{allocator}) catch |err| {
+        logfire.warn("tpuf: failed to start keepalive thread: {}", .{err});
+        return;
+    };
+    thread.detach();
+    logfire.info("tpuf: keepalive started (interval=3m)", .{});
+}
+
+fn keepaliveLoop(allocator: Allocator) void {
+    // minimal query body: rank by ID, top_k=1, no attributes
+    const ping_body = "{\"rank_by\":[\"id\",\"asc\"],\"top_k\":1,\"include_attributes\":[]}";
+    while (true) {
+        std.Thread.sleep(KEEPALIVE_INTERVAL_NS);
+        const key = api_key orelse return;
+        const response = doRequest(allocator, key, query_url, ping_body) catch |err| {
+            logfire.debug("tpuf: keepalive ping failed: {}", .{err});
+            continue;
+        };
+        allocator.free(response);
+    }
+}

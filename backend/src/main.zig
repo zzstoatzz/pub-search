@@ -88,6 +88,7 @@ fn initServices(allocator: std.mem.Allocator) void {
 
     // init vector store (reads TURBOPUFFER_API_KEY from env)
     tpuf.init();
+    tpuf.startKeepalive(allocator);
 
     // start reconciler (verifies documents still exist at source PDS)
     ingest.reconciler.start(allocator);

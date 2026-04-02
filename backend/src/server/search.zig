@@ -113,12 +113,14 @@ fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, bas
     if (std.mem.eql(u8, doc_type, "publication") and base_path.len > 0) {
         return std.fmt.allocPrint(alloc, "https://{s}", .{base_path}) catch "";
     }
+    // skip non-document-serving hosts (blento is a card portal, not a document platform)
+    const usable_base = base_path.len > 0 and !std.mem.startsWith(u8, base_path, "blento.app");
     // leaflet + basePath + rkey → https://{basePath}/{rkey}
-    if (std.mem.eql(u8, platform, "leaflet") and base_path.len > 0 and rkey.len > 0) {
+    if (std.mem.eql(u8, platform, "leaflet") and usable_base and rkey.len > 0) {
         return std.fmt.allocPrint(alloc, "https://{s}/{s}", .{ base_path, rkey }) catch "";
     }
     // basePath + path → https://{basePath}[/]{path}
-    if (base_path.len > 0 and path.len > 0) {
+    if (usable_base and path.len > 0) {
         const sep: []const u8 = if (path[0] == '/') "" else "/";
         return std.fmt.allocPrint(alloc, "https://{s}{s}{s}", .{ base_path, sep, path }) catch "";
     }

@@ -715,16 +715,18 @@
     if (!m) return null;
     var did = m[1], collection = m[2], rkey = m[3];
     if (platform === 'whitewind' || collection.startsWith('com.whtwnd.')) return 'https://whtwnd.com/' + did + '/' + rkey;
+    // skip non-document-serving hosts (blento is a card portal, not a document platform)
+    var usableBase = basePath && !basePath.startsWith('blento.app');
     // leaflet uses rkey directly
-    if (platform === 'leaflet' && basePath) return 'https://' + basePath + '/' + rkey;
+    if (platform === 'leaflet' && usableBase) return 'https://' + basePath + '/' + rkey;
     // leaflet without basePath
     if (platform === 'leaflet') return 'https://leaflet.pub/p/' + did + '/' + rkey;
     // other platforms (pckt, offprint, etc.) use path slug when available
-    if (basePath && path) {
+    if (usableBase && path) {
       var sep = path.charAt(0) === '/' ? '' : '/';
       return 'https://' + basePath + sep + path;
     }
-    if (basePath) return 'https://' + basePath + '/' + rkey;
+    if (usableBase) return 'https://' + basePath + '/' + rkey;
     // universal fallback — AT Protocol record viewer
     return 'https://pdsls.dev/at/' + did + '/' + collection + '/' + rkey;
   }
@@ -801,11 +803,12 @@
           d.clusters.fine.length + ' clusters';
         document.getElementById('loading').classList.add('hidden');
         view.dirty = true;
-        // trigger search from URL ?q= param
-        var urlQ = new URLSearchParams(window.location.search).get('q');
-        if (urlQ) {
-          searchInput.value = urlQ;
-          doSearch(urlQ, true);
+        // apply prefetched search results (fired in parallel with atlas.json)
+        if (pendingSearchResults) {
+          pendingSearchResults.then(function(resp) {
+            pendingSearchResults = null;
+            if (resp) applySearchResults(resp, searchInput.value);
+          });
         }
       })
       .catch(function(err) {
@@ -816,6 +819,14 @@
 
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
+  // prefetch search results in parallel with atlas.json when ?q= is present
+  var urlQ = new URLSearchParams(window.location.search).get('q');
+  if (urlQ) {
+    searchInput.value = urlQ;
+    pendingSearchResults = fetch(API_URL + '/search?mode=semantic&limit=20&format=v2&q=' + encodeURIComponent(urlQ))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; });
+  }
   loadData();
   loop();
 
@@ -824,6 +835,7 @@
   var searchInput = document.getElementById('search-input');
   var searchForm = document.getElementById('search-form');
   var searchStatusEl = null;
+  var pendingSearchResults = null; // promise for prefetched search results
 
   function setSearchStatus(msg) {
     if (!searchStatusEl) {
@@ -847,9 +859,59 @@
     view.dirty = true;
   }
 
+  function applySearchResults(resp, query) {
+    searchQuery = query;
+    var results = (resp && resp.results) || [];
+    if (results.length === 0) {
+      setSearchStatus('no results');
+      searchMatches = null;
+      searchCenter = null;
+      view.dirty = true;
+      return;
+    }
+
+    // match result URIs to atlas points
+    var matches = new Set();
+    var weightedX = 0, weightedY = 0, totalWeight = 0;
+    for (var i = 0; i < results.length; i++) {
+      var uri = results[i].uri;
+      if (uriToIndex && uriToIndex.has(uri)) {
+        var idx = uriToIndex.get(uri);
+        matches.add(idx);
+        var w = results.length - i;
+        weightedX += pointsX[idx] * w;
+        weightedY += pointsY[idx] * w;
+        totalWeight += w;
+      }
+    }
+
+    if (matches.size === 0) {
+      setSearchStatus(results.length + ' results, 0 on map');
+      searchMatches = null;
+      searchCenter = null;
+      view.dirty = true;
+      return;
+    }
+
+    searchMatches = matches;
+    searchCenter = { x: weightedX / totalWeight, y: weightedY / totalWeight };
+    setSearchStatus(matches.size + ' of ' + results.length + ' on map');
+
+    var maxDist = 0;
+    matches.forEach(function(idx) {
+      var dx = pointsX[idx] - searchCenter.x;
+      var dy = pointsY[idx] - searchCenter.y;
+      var d = Math.sqrt(dx * dx + dy * dy);
+      if (d > maxDist) maxDist = d;
+    });
+
+    var targetZoom = maxDist > 0 ? Math.min(view.maxZoom, 0.3 / maxDist) : 6;
+    targetZoom = Math.max(4, Math.min(15, targetZoom));
+    animateTo(searchCenter.x, searchCenter.y, targetZoom);
+  }
+
   function doSearch(query, skipPush) {
     if (!query || !data || !uriToIndex) return;
-    searchQuery = query;
     setSearchStatus('searching...');
     if (!skipPush) {
       var url = new URL(window.location);
@@ -862,61 +924,7 @@
         if (!r.ok) throw new Error('search failed: ' + r.status);
         return r.json();
       })
-      .then(function(resp) {
-        var results = resp.results || [];
-        if (results.length === 0) {
-          setSearchStatus('no results');
-          searchMatches = null;
-          searchCenter = null;
-          view.dirty = true;
-          return;
-        }
-
-        // match result URIs to atlas points
-        var matches = new Set();
-        var weightedX = 0, weightedY = 0, totalWeight = 0;
-        for (var i = 0; i < results.length; i++) {
-          var uri = results[i].uri;
-          if (uriToIndex.has(uri)) {
-            var idx = uriToIndex.get(uri);
-            matches.add(idx);
-            // weight by rank (higher rank = more weight)
-            var w = results.length - i;
-            weightedX += pointsX[idx] * w;
-            weightedY += pointsY[idx] * w;
-            totalWeight += w;
-          }
-        }
-
-        if (matches.size === 0) {
-          setSearchStatus(results.length + ' results, 0 on map');
-          searchMatches = null;
-          searchCenter = null;
-          view.dirty = true;
-          return;
-        }
-
-        searchMatches = matches;
-        searchCenter = { x: weightedX / totalWeight, y: weightedY / totalWeight };
-        setSearchStatus(matches.size + ' of ' + results.length + ' on map');
-
-        // compute spread to determine zoom level
-        var maxDist = 0;
-        matches.forEach(function(idx) {
-          var dx = pointsX[idx] - searchCenter.x;
-          var dy = pointsY[idx] - searchCenter.y;
-          var d = Math.sqrt(dx * dx + dy * dy);
-          if (d > maxDist) maxDist = d;
-        });
-
-        // zoom to fit the spread with some padding
-        // at zoom=1, visible radius in data coords is ~1.0 (since range is [-1,1])
-        // we want maxDist to fit in ~30% of the viewport
-        var targetZoom = maxDist > 0 ? Math.min(view.maxZoom, 0.3 / maxDist) : 6;
-        targetZoom = Math.max(4, Math.min(15, targetZoom));
-
-        animateTo(searchCenter.x, searchCenter.y, targetZoom);
-      })
+      .then(function(resp) { applySearchResults(resp, query); })
       .catch(function(err) {
         setSearchStatus('error');
         console.error(err);
