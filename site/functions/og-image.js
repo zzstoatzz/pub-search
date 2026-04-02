@@ -101,13 +101,208 @@ async function fetchStats() {
   }
 }
 
+// platform colors for constellation OG image (core colors from the canvas)
+const PLATFORM_DOTS = [
+  { color: "#4ade80", label: "leaflet" },
+  { color: "#60a5fa", label: "whitewind" },
+  { color: "#fbbf24", label: "pckt" },
+  { color: "#fb7185", label: "offprint" },
+  { color: "#2dd4bf", label: "greengale" },
+  { color: "#9ca3af", label: "other" },
+];
+
+// deterministic "random" positions for constellation dots
+function constellationDots() {
+  const dots = [];
+  const positions = [
+    [180, 200], [340, 150], [520, 280], [700, 180], [850, 250],
+    [240, 350], [450, 180], [620, 340], [780, 300], [950, 200],
+    [300, 260], [500, 400], [680, 220], [400, 320], [560, 160],
+    [820, 380], [200, 420], [730, 400], [900, 340], [380, 220],
+    [150, 300], [480, 250], [650, 380], [770, 160], [920, 420],
+  ];
+  for (let i = 0; i < positions.length; i++) {
+    const platform = PLATFORM_DOTS[i % PLATFORM_DOTS.length];
+    const size = 4 + (i % 3) * 2;
+    const opacity = 0.4 + (i % 4) * 0.15;
+    dots.push({
+      type: "div",
+      props: {
+        style: {
+          position: "absolute",
+          left: `${positions[i][0]}px`,
+          top: `${positions[i][1]}px`,
+          width: `${size}px`,
+          height: `${size}px`,
+          borderRadius: "50%",
+          background: platform.color,
+          opacity: opacity,
+        },
+        children: "",
+      },
+    });
+  }
+  return dots;
+}
+
+function buildConstellationImage(docCount) {
+  const children = [];
+
+  // scattered dots as background decoration
+  children.push(...constellationDots());
+
+  // header
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        color: "#888",
+        fontSize: "28px",
+        fontFamily: '"JetBrains Mono", monospace',
+        marginBottom: "8px",
+      },
+      children: "pub search",
+    },
+  });
+
+  // title
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        color: "#fff",
+        fontSize: "48px",
+        fontFamily: '"JetBrains Mono", monospace',
+        marginTop: "16px",
+      },
+      children: "constellation",
+    },
+  });
+
+  // subtitle
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        color: "#555",
+        fontSize: "24px",
+        fontFamily: '"JetBrains Mono", monospace',
+        marginTop: "12px",
+      },
+      children: "2d semantic map of the document index",
+    },
+  });
+
+  // platform legend
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        gap: "16px",
+        marginTop: "32px",
+      },
+      children: PLATFORM_DOTS.slice(0, 5).map((p) => ({
+        type: "div",
+        props: {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+          },
+          children: [
+            {
+              type: "div",
+              props: {
+                style: {
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  background: p.color,
+                },
+                children: "",
+              },
+            },
+            {
+              type: "div",
+              props: {
+                style: {
+                  color: "#666",
+                  fontSize: "18px",
+                  fontFamily: '"JetBrains Mono", monospace',
+                },
+                children: p.label,
+              },
+            },
+          ],
+        },
+      })),
+    },
+  });
+
+  // footer
+  const footerText = docCount
+    ? `${docCount.toLocaleString()} documents · explore the index`
+    : "explore the index";
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        color: "#555",
+        fontSize: "20px",
+        fontFamily: '"JetBrains Mono", monospace',
+        marginTop: "auto",
+      },
+      children: footerText,
+    },
+  });
+
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        position: "relative",
+        width: "1200px",
+        height: "630px",
+        background: "#050505",
+        padding: "48px 56px",
+        fontFamily: '"JetBrains Mono", monospace',
+      },
+      children,
+    },
+  };
+}
+
 export async function onRequest(context) {
   const url = new URL(context.request.url);
+  const page = url.searchParams.get("page");
   const q = url.searchParams.get("q");
   const tag = url.searchParams.get("tag");
   const platform = url.searchParams.get("platform");
   const since = url.searchParams.get("since");
   const mode = url.searchParams.get("mode");
+
+  // constellation page
+  if (page === "constellation") {
+    const stats = await fetchStats();
+    const html = buildConstellationImage(stats ? stats.documents : null);
+    return new ImageResponse(html, {
+      width: 1200,
+      height: 630,
+      fonts: [
+        {
+          name: "JetBrains Mono",
+          data: await loadGoogleFont("JetBrains Mono"),
+          style: "normal",
+        },
+      ],
+      headers: {
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
+  }
 
   const hasParams = q || tag || platform || since;
 
