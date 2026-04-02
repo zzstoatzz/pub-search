@@ -181,6 +181,12 @@ pub fn insertDocument(
     else
         "0";
 
+    // drop bridgy fed content entirely — low quality, pollutes the index
+    if (std.mem.eql(u8, is_bridgyfed, "1")) {
+        logfire.debug("indexer: dropping bridgy fed content {s}", .{uri});
+        return;
+    }
+
     // use ON CONFLICT to preserve embedded_at (INSERT OR REPLACE would nuke it)
     // indexed_at uses strftime to record when this row was inserted/updated in Turso
     // (created_at is the document's publication date, which can be old for resynced docs)
