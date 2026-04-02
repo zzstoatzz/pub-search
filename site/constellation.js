@@ -1,7 +1,6 @@
 (function() {
   'use strict';
 
-  // --- platform colors: [core, mid, edge] triplets ---
   var PLATFORM_COLORS = {
     leaflet:   { core: '#4ade80', mid: '#22c55e', edge: '#166534' },
     whitewind: { core: '#60a5fa', mid: '#3b82f6', edge: '#1e3a8a' },
@@ -36,9 +35,9 @@
 
   // --- data ---
   var data = null;
-  var pointsX = null;   // Float32Array
+  var pointsX = null;
   var pointsY = null;
-  var platformIdx = null; // Uint8Array — index into PLATFORMS
+  var platformIdx = null;
   var gridIndex = null;
 
   // --- canvas ---
@@ -47,63 +46,52 @@
   var dpr = window.devicePixelRatio || 1;
   var W, H;
 
-  // --- sprite cache: pre-rendered point images per platform ---
-  // sprites[platformIndex] = { normal: OffscreenCanvas, hover: OffscreenCanvas }
+  // --- sprite cache ---
   var sprites = null;
-  var spriteSize = 0;     // current sprite pixel size
-  var spriteTheme = null; // 'dark' or 'light' — rebuild on change
+  var spriteSize = 0;
+  var spriteTheme = null;
 
   function buildSprites(radius) {
     var size = Math.ceil(radius * 6 * dpr) + 2;
     if (size < 4) size = 4;
-    var half = size / 2;
-    var colors = getColors();
     var theme = isDark() ? 'dark' : 'light';
-
-    // skip rebuild if nothing changed
     if (sprites && spriteSize === size && spriteTheme === theme) return;
     spriteSize = size;
     spriteTheme = theme;
-
+    var colors = getColors();
     sprites = [];
     for (var p = 0; p < PLATFORMS.length; p++) {
       var c = colors[PLATFORMS[p]];
       sprites.push({
-        normal: makeSprite(size, half, radius * dpr, c, 0.7),
-        hover:  makeSprite(size * 2, size, radius * dpr * 2, c, 1.0),
+        normal: makeSprite(size, radius * dpr, c, 0.7),
+        hover:  makeSprite(size * 2, radius * dpr * 2, c, 1.0),
       });
     }
   }
 
-  function makeSprite(size, half, r, colors, alpha) {
+  function makeSprite(size, r, colors, alpha) {
     var cv = document.createElement('canvas');
     cv.width = size; cv.height = size;
     var c = cv.getContext('2d');
-
-    // radial gradient — drawn once, stamped many times
+    var half = size / 2;
     var grad = c.createRadialGradient(half, half, 0, half, half, r * 2.5);
     grad.addColorStop(0, colors.core);
     grad.addColorStop(0.3, colors.mid);
     grad.addColorStop(0.7, colors.edge);
     grad.addColorStop(1, 'rgba(0,0,0,0)');
-
     c.globalAlpha = alpha;
     c.fillStyle = grad;
     c.beginPath();
     c.arc(half, half, r * 2.5, 0, Math.PI * 2);
     c.fill();
-
-    // bright core
     c.globalAlpha = alpha * 0.9;
     c.fillStyle = colors.core;
     c.beginPath();
     c.arc(half, half, r * 0.5, 0, Math.PI * 2);
     c.fill();
-
     return cv;
   }
 
-  // --- tiny dot sprite for zoomed-out view (1-2px per point) ---
   var dotSprites = null;
   var dotTheme = null;
 
@@ -127,7 +115,6 @@
     }
   }
 
-  // --- resize ---
   function resizeCanvas() {
     W = window.innerWidth;
     H = window.innerHeight;
@@ -136,25 +123,26 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    sprites = null; // force rebuild
+    sprites = null;
     dotSprites = null;
     view.dirty = true;
   }
 
-  // --- coordinate transforms ---
-  function dataToScreenX(dx) {
-    return W / 2 + (dx + view.panX) * Math.min(W, H) * 0.42 * view.zoom;
-  }
-  function dataToScreenY(dy) {
-    return H / 2 + (dy + view.panY) * Math.min(W, H) * 0.42 * view.zoom;
+  // --- coordinate transforms (inlined for hot path) ---
+  var scale = 1; // cached per frame
+  var cx, cy;
+
+  function cacheTransform() {
+    scale = Math.min(W, H) * 0.42 * view.zoom;
+    cx = W / 2 + view.panX * scale;
+    cy = H / 2 + view.panY * scale;
   }
 
   function screenToData(sx, sy) {
-    var scale = Math.min(W, H) * 0.42 * view.zoom;
     return [(sx - W / 2) / scale - view.panX, (sy - H / 2) / scale - view.panY];
   }
 
-  // --- spatial index (grid-based) ---
+  // --- spatial index ---
   function buildSpatialIndex() {
     if (!data) return;
     var cellSize = 0.02;
@@ -170,14 +158,13 @@
     if (!gridIndex) return -1;
     var d = screenToData(sx, sy);
     var dx = d[0], dy = d[1];
-    var searchRadius = maxDist / (Math.min(W, H) * 0.42 * view.zoom);
+    var searchRadius = maxDist / scale;
     var cs = gridIndex.cellSize;
     var gxMin = Math.floor((dx - searchRadius) / cs);
     var gxMax = Math.floor((dx + searchRadius) / cs);
     var gyMin = Math.floor((dy - searchRadius) / cs);
     var gyMax = Math.floor((dy + searchRadius) / cs);
     var bestIdx = -1, bestDist = searchRadius * searchRadius;
-
     for (var gx = gxMin; gx <= gxMax; gx++) {
       for (var gy = gyMin; gy <= gyMax; gy++) {
         var cell = gridIndex.cells[gx + ',' + gy];
@@ -193,6 +180,15 @@
     return bestIdx;
   }
 
+  // --- label helper: strokeText outline instead of shadowBlur ---
+  function drawLabel(text, x, y, dark) {
+    ctx.strokeStyle = dark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.strokeText(text, x, y);
+    ctx.fillText(text, x, y);
+  }
+
   // --- rendering ---
   function render() {
     if (!data || !view.dirty) return;
@@ -202,25 +198,27 @@
     var zoom = view.zoom;
     var n = data.points.length;
 
+    cacheTransform();
+
     // background
     ctx.globalAlpha = 1;
     ctx.fillStyle = dark ? '#050505' : '#f5f5f0';
     ctx.fillRect(0, 0, W, H);
 
-    // visible bounds in data space (with padding)
+    // visible bounds in data space
     var tl = screenToData(0, 0);
     var br = screenToData(W, H);
     var pad = 0.05;
     var xMin = tl[0] - pad, xMax = br[0] + pad;
     var yMin = tl[1] - pad, yMax = br[1] + pad;
 
-    // --- cluster glows (zoomed out, few items — OK to use gradients) ---
+    // --- cluster glows (zoomed out) ---
     if (zoom < 4) {
       var clusters = zoom < 2 ? data.clusters.coarse : data.clusters.fine;
       ctx.globalAlpha = zoom < 2 ? 0.6 : 0.3;
       for (var c = 0; c < clusters.length; c++) {
         var cl = clusters[c];
-        var sx = dataToScreenX(cl.cx), sy = dataToScreenY(cl.cy);
+        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
         if (sx < -100 || sx > W + 100 || sy < -100 || sy > H + 100) continue;
         var r = Math.sqrt(cl.count) * 2;
         var grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
@@ -233,26 +231,25 @@
       }
     }
 
-    // --- connection lines (zoomed in, spatial-index accelerated) ---
+    // --- connection lines (batched by opacity bucket) ---
     if (zoom >= 3 && gridIndex) {
-      var connRadius = 0.025; // data-space distance for connections
+      var connRadius = 0.025;
       var cs = gridIndex.cellSize;
-      var lineColor = dark ? 'rgba(255,255,255,' : 'rgba(0,0,0,';
-      ctx.lineWidth = 0.5;
-      var drawn = {}; // avoid duplicate edges
-      var maxLines = 2000;
+      var maxLines = 1500;
       var lineCount = 0;
+
+      // batch into 3 opacity buckets to minimize style changes
+      var buckets = [[], [], []]; // near, mid, far
 
       for (var i = 0; i < n && lineCount < maxLines; i++) {
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
 
+        var sx1 = cx + px * scale, sy1 = cy + py * scale;
         var gxMin2 = Math.floor((px - connRadius) / cs);
         var gxMax2 = Math.floor((px + connRadius) / cs);
         var gyMin2 = Math.floor((py - connRadius) / cs);
         var gyMax2 = Math.floor((py + connRadius) / cs);
-
-        var sx1 = dataToScreenX(px), sy1 = dataToScreenY(py);
 
         for (var gx = gxMin2; gx <= gxMax2 && lineCount < maxLines; gx++) {
           for (var gy = gyMin2; gy <= gyMax2 && lineCount < maxLines; gy++) {
@@ -260,27 +257,40 @@
             if (!cell) continue;
             for (var k = 0; k < cell.length && lineCount < maxLines; k++) {
               var j = cell[k];
-              if (j <= i) continue; // avoid duplicates
+              if (j <= i) continue;
               var dx = pointsX[j] - px, dy = pointsY[j] - py;
               var dist2 = dx * dx + dy * dy;
               if (dist2 > connRadius * connRadius || dist2 < 0.0001) continue;
-              var dist = Math.sqrt(dist2);
-              var opacity = (1 - dist / connRadius) * 0.12;
-              ctx.beginPath();
-              ctx.moveTo(sx1, sy1);
-              ctx.lineTo(dataToScreenX(pointsX[j]), dataToScreenY(pointsY[j]));
-              ctx.strokeStyle = lineColor + opacity + ')';
-              ctx.stroke();
+              var t = Math.sqrt(dist2) / connRadius; // 0=close, 1=far
+              var bucket = t < 0.33 ? 0 : t < 0.66 ? 1 : 2;
+              buckets[bucket].push(sx1, sy1, cx + pointsX[j] * scale, cy + pointsY[j] * scale);
               lineCount++;
             }
           }
         }
       }
+
+      // draw each bucket in one path
+      var opacities = dark
+        ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.06)', 'rgba(255,255,255,0.03)']
+        : ['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.05)', 'rgba(0,0,0,0.02)'];
+      ctx.lineWidth = 0.5;
+      for (var b = 0; b < 3; b++) {
+        var buf = buckets[b];
+        if (!buf.length) continue;
+        ctx.beginPath();
+        for (var l = 0; l < buf.length; l += 4) {
+          ctx.moveTo(buf[l], buf[l + 1]);
+          ctx.lineTo(buf[l + 2], buf[l + 3]);
+        }
+        ctx.strokeStyle = opacities[b];
+        ctx.globalAlpha = 1;
+        ctx.stroke();
+      }
     }
 
     // --- points: sprite-stamped ---
     ctx.globalAlpha = 1;
-
     var useGlow = zoom >= 2;
     if (useGlow) {
       var pointR = zoom < 5 ? 1.5 + zoom * 0.3 : 2 + zoom * 0.2;
@@ -292,10 +302,8 @@
     for (var i = 0; i < n; i++) {
       var px = pointsX[i], py = pointsY[i];
       if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
-
-      var sx = dataToScreenX(px), sy = dataToScreenY(py);
+      var sx = cx + px * scale, sy = cy + py * scale;
       var pi = platformIdx[i];
-
       if (i === hoveredIndex && useGlow) {
         var spr = sprites[pi].hover;
         ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
@@ -308,55 +316,51 @@
       }
     }
 
-    // --- labels ---
+    // --- labels (no shadowBlur — uses strokeText outline instead) ---
     ctx.globalAlpha = 1;
-    var labelColor = dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)';
-    ctx.fillStyle = labelColor;
+    ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.shadowColor = dark ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.8)';
-    ctx.shadowBlur = 4;
 
     if (zoom < 2) {
-      var fontSize = Math.max(10, 13 / zoom);
-      ctx.font = fontSize + 'px monospace';
-      ctx.globalAlpha = 0.8;
+      // coarse labels — fixed 12px screen size
+      ctx.font = '12px monospace';
+      ctx.globalAlpha = 0.85;
       for (var c = 0; c < data.clusters.coarse.length; c++) {
         var cl = data.clusters.coarse[c];
-        var sx = dataToScreenX(cl.cx), sy = dataToScreenY(cl.cy);
+        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
         if (sx < -50 || sx > W + 50 || sy < -20 || sy > H + 20) continue;
-        ctx.fillText(cl.label, sx, sy - Math.sqrt(cl.count) * 1.5);
+        drawLabel(cl.label, sx, sy - Math.sqrt(cl.count) * 1.5, dark);
       }
     } else if (zoom < 5) {
-      var fontSize = Math.max(9, 11 / (zoom * 0.5));
-      ctx.font = fontSize + 'px monospace';
-      ctx.globalAlpha = 0.7;
+      // fine labels — fixed 11px screen size
+      ctx.font = '11px monospace';
+      ctx.globalAlpha = 0.75;
       for (var c = 0; c < data.clusters.fine.length; c++) {
         var cl = data.clusters.fine[c];
         if (cl.cx < xMin || cl.cx > xMax || cl.cy < yMin || cl.cy > yMax) continue;
-        var sx = dataToScreenX(cl.cx), sy = dataToScreenY(cl.cy);
+        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
         if (sx < -50 || sx > W + 50 || sy < -20 || sy > H + 20) continue;
-        ctx.fillText(cl.label, sx, sy - 12);
+        drawLabel(cl.label, sx, sy - 14, dark);
       }
     } else {
-      var fontSize = Math.min(12, 10 / (zoom * 0.15));
-      ctx.font = fontSize + 'px monospace';
-      ctx.globalAlpha = 0.6;
-      var shown = 0, maxLabels = 60;
+      // document titles — fixed 11px, readable at any zoom
+      ctx.font = '11px monospace';
+      ctx.globalAlpha = 0.7;
+      var shown = 0, maxLabels = 50;
       for (var i = 0; i < n && shown < maxLabels; i++) {
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
         var title = data.points[i].title;
         if (!title) continue;
-        var sx = dataToScreenX(px), sy = dataToScreenY(py);
+        var sx = cx + px * scale, sy = cy + py * scale;
         if (sx < 0 || sx > W || sy < 0 || sy > H) continue;
-        if (title.length > 40) title = title.substring(0, 38) + '\u2026';
-        ctx.fillText(title, sx, sy - (useGlow ? sprites[0].normal.height / (2 * dpr) : 4) - 4);
+        if (title.length > 45) title = title.substring(0, 43) + '\u2026';
+        drawLabel(title, sx, sy - 10, dark);
         shown++;
       }
     }
 
-    ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
   }
 
@@ -376,13 +380,14 @@
   var dragStartX, dragStartY, dragStartPanX, dragStartPanY;
   var pinchStartDist = 0, pinchStartZoom = 1;
 
-  // --- interaction: mouse ---
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
     var factor = e.deltaY > 0 ? 0.9 : 1.1;
     var newZoom = Math.max(view.minZoom, Math.min(view.maxZoom, view.zoom * factor));
+    cacheTransform();
     var d = screenToData(e.clientX, e.clientY);
     view.zoom = newZoom;
+    cacheTransform();
     var d2 = screenToData(e.clientX, e.clientY);
     view.panX += d2[0] - d[0];
     view.panY += d2[1] - d[1];
@@ -399,7 +404,7 @@
   window.addEventListener('mousemove', function(e) {
     mouseX = e.clientX; mouseY = e.clientY;
     if (dragging) {
-      var scale = Math.min(W, H) * 0.42 * view.zoom;
+      cacheTransform();
       view.panX = dragStartPanX + (e.clientX - dragStartX) / scale;
       view.panY = dragStartPanY + (e.clientY - dragStartY) / scale;
       view.dirty = true;
@@ -408,6 +413,7 @@
     }
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(function() {
+      cacheTransform();
       var idx = findNearest(mouseX, mouseY, 20);
       if (idx !== hoveredIndex) {
         hoveredIndex = idx;
@@ -459,7 +465,7 @@
     }
     var ids = Object.keys(touches);
     if (ids.length === 1 && dragging) {
-      var scale = Math.min(W, H) * 0.42 * view.zoom;
+      cacheTransform();
       view.panX = dragStartPanX + (touches[ids[0]].x - dragStartX) / scale;
       view.panY = dragStartPanY + (touches[ids[0]].y - dragStartY) / scale;
       view.dirty = true;
@@ -506,7 +512,6 @@
     canvas.style.cursor = dragging ? 'grabbing' : 'grab';
   }
 
-  // --- AT URI to URL ---
   function atUriToUrl(uri, basePath, platform) {
     var m = uri.match(/^at:\/\/(did:[^/]+)\/([^/]+)\/(.+)$/);
     if (!m) return null;
@@ -516,7 +521,6 @@
     return 'https://pds.pub/at/' + encodeURIComponent(uri);
   }
 
-  // --- legend ---
   function renderLegend() {
     var el = document.getElementById('legend');
     var colors = getColors();
@@ -527,7 +531,6 @@
     el.innerHTML = html;
   }
 
-  // --- load data ---
   function loadData() {
     fetch('constellation.json')
       .then(function(r) {
@@ -540,26 +543,20 @@
         pointsX = new Float32Array(n);
         pointsY = new Float32Array(n);
         platformIdx = new Uint8Array(n);
-
-        // build platform lookup
         var platMap = {};
         for (var p = 0; p < PLATFORMS.length; p++) platMap[PLATFORMS[p]] = p;
         var otherIdx = platMap.other;
-
         for (var i = 0; i < n; i++) {
           pointsX[i] = d.points[i].x;
           pointsY[i] = d.points[i].y;
           platformIdx[i] = platMap[d.points[i].platform] !== undefined ? platMap[d.points[i].platform] : otherIdx;
         }
-
         buildSpatialIndex();
         renderLegend();
-
         document.getElementById('stats').textContent =
           n.toLocaleString() + ' documents \u00B7 ' +
           d.clusters.coarse.length + ' regions \u00B7 ' +
           d.clusters.fine.length + ' clusters';
-
         document.getElementById('loading').classList.add('hidden');
         view.dirty = true;
       })
@@ -569,7 +566,6 @@
       });
   }
 
-  // --- init ---
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
   loadData();
