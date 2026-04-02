@@ -740,6 +740,12 @@
           d.clusters.fine.length + ' clusters';
         document.getElementById('loading').classList.add('hidden');
         view.dirty = true;
+        // trigger search from URL ?q= param
+        var urlQ = new URLSearchParams(window.location.search).get('q');
+        if (urlQ) {
+          searchInput.value = urlQ;
+          doSearch(urlQ, true);
+        }
       })
       .catch(function(err) {
         document.getElementById('loading').querySelector('.spinner').textContent = 'error: ' + err.message;
@@ -772,13 +778,23 @@
     searchCenter = null;
     searchQuery = '';
     setSearchStatus('');
+    var url = new URL(window.location);
+    if (url.searchParams.has('q')) {
+      url.searchParams.delete('q');
+      history.replaceState(null, '', url);
+    }
     view.dirty = true;
   }
 
-  function doSearch(query) {
+  function doSearch(query, skipPush) {
     if (!query || !data || !uriToIndex) return;
     searchQuery = query;
     setSearchStatus('searching...');
+    if (!skipPush) {
+      var url = new URL(window.location);
+      url.searchParams.set('q', query);
+      history.replaceState(null, '', url);
+    }
 
     fetch(API_URL + '/search?mode=semantic&limit=20&format=v2&q=' + encodeURIComponent(query))
       .then(function(r) {
