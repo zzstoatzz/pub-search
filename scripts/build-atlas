@@ -227,8 +227,8 @@ def main():
     # --- step 3: clustering ---
     import hdbscan
 
-    log("HDBSCAN coarse (min_cluster_size=100)...")
-    clusterer_coarse = hdbscan.HDBSCAN(min_cluster_size=100, min_samples=5)
+    log("HDBSCAN coarse (min_cluster_size=50)...")
+    clusterer_coarse = hdbscan.HDBSCAN(min_cluster_size=50, min_samples=10)
     labels_coarse_raw = clusterer_coarse.fit_predict(X_2d)
     n_coarse = len(set(labels_coarse_raw)) - (1 if -1 in labels_coarse_raw else 0)
     n_outliers_coarse = (labels_coarse_raw == -1).sum()
