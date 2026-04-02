@@ -259,7 +259,7 @@ pub fn insertPublication(
         &.{ uri, did, rkey, name, description orelse "", base_path orelse "" },
     );
 
-    // backfill: if documents arrived before this publication, they have empty base_path
+    // backfill: update documents whose base_path is empty or stale (differs from publication)
     if (base_path) |bp| {
         if (bp.len > 0) {
             c.exec(
@@ -268,8 +268,8 @@ pub fn insertPublication(
                 \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
                 \\  embedded_at = NULL
                 \\WHERE publication_uri = ?
-                \\  AND (base_path IS NULL OR base_path = '')
-            , &.{ bp, uri }) catch |err| {
+                \\  AND (base_path IS NULL OR base_path = '' OR base_path != ?)
+            , &.{ bp, uri, bp }) catch |err| {
                 logfire.warn("indexer: base_path backfill failed for pub {s}: {}", .{ uri, err });
             };
         }

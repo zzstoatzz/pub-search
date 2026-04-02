@@ -93,6 +93,9 @@ canvas:active {
 .header .nav a {
   color: var(--text-dim);
   text-decoration: none;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
 
 .header .nav a:hover {
@@ -103,6 +106,11 @@ canvas:active {
   cursor: pointer;
   color: var(--text-dim);
   user-select: none;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .theme-toggle:hover {
@@ -169,29 +177,62 @@ canvas:active {
   font-size: 13px;
 }
 
-/* legend */
-.legend {
+/* bottom bar: legend + stats stacked */
+.bottom-bar {
   position: fixed;
-  bottom: 12px;
-  left: 16px;
+  bottom: 0;
+  left: 0;
+  right: 0;
   z-index: 10;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px 10px;
+}
+
+.legend {
+  pointer-events: auto;
   font-size: 10px;
   color: var(--text-dim);
   display: flex;
-  gap: 10px;
+  gap: 2px;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
 .legend-item {
   display: flex;
   align-items: center;
   gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 8px;
+  border-radius: 4px;
+  transition: opacity 0.15s, background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.legend-item:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.legend-item.dimmed {
+  opacity: 0.3;
 }
 
 .legend-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.stats {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
 }
 
 /* search */
@@ -228,25 +269,18 @@ canvas:active {
   white-space: nowrap;
 }
 
-/* stats */
-.stats {
-  position: fixed;
-  bottom: 12px;
-  right: 16px;
-  z-index: 10;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
 /* mobile */
 @media (max-width: 600px) {
   .header { padding: 8px 10px; }
   .header h1 { font-size: 11px; }
-  .header .nav { gap: 8px; font-size: 10px; }
-  #search-input { width: 90px; font-size: 10px; padding: 4px 6px; }
-  #search-input:focus { width: 130px; }
-  .legend { bottom: 24px; left: 10px; right: 10px; gap: 6px; font-size: 9px; }
-  .stats { bottom: 8px; left: 10px; right: 10px; text-align: center; font-size: 9px; }
+  .header .nav { gap: 4px; font-size: 10px; }
+  #search-input { width: 80px; font-size: 10px; padding: 4px 6px; }
+  #search-input:focus { width: 120px; }
+  .bottom-bar { padding: 4px 8px 6px; gap: 2px; }
+  .legend { gap: 0; }
+  .legend-item { padding: 5px 6px; font-size: 9px; }
+  .legend-dot { width: 6px; height: 6px; }
+  .stats { font-size: 9px; }
   .tooltip { max-width: 260px; font-size: 11px; }
   .tooltip .meta { font-size: 10px; }
   .tooltip .platform-badge { font-size: 9px; }

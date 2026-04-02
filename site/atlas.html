@@ -49,8 +49,10 @@
     <div class="platform-badge" id="tooltip-platform"></div>
   </div>
 
-  <div class="legend" id="legend"></div>
-  <div class="stats" id="stats"></div>
+  <div class="bottom-bar">
+    <div class="legend" id="legend"></div>
+    <div class="stats" id="stats"></div>
+  </div>
 
   <script>
     var currentTheme = localStorage.getItem('theme') || 'dark';
@@ -72,7 +74,9 @@
     function renderThemeToggle() {
       var el = document.getElementById('theme-toggle');
       if (!el) return;
-      el.innerHTML = '<span onclick="cycleTheme()" title="' + currentTheme + '">' + THEME_ICONS[currentTheme] + '</span>';
+      el.textContent = THEME_ICONS[currentTheme];
+      el.title = currentTheme;
+      el.onclick = cycleTheme;
     }
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
       if (currentTheme === 'system') applyTheme('system');

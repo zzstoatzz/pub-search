@@ -312,22 +312,33 @@
       buildDotSprites();
     }
 
-    for (var i = 0; i < n; i++) {
-      var px = pointsX[i], py = pointsY[i];
-      if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
-      var sx = cx + px * scale, sy = cy + py * scale;
-      var pi = platformIdx[i];
-      if (i === hoveredIndex && useGlow) {
-        var spr = sprites[pi].hover;
-        ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
-      } else if (useGlow) {
-        var spr = sprites[pi].normal;
-        ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
-      } else {
-        var dot = dotSprites[pi];
-        ctx.drawImage(dot, sx - dot.width / (2 * dpr), sy - dot.height / (2 * dpr), dot.width / dpr, dot.height / dpr);
+    var filtering = activePlatforms !== null;
+    // draw dimmed points first, then active points on top
+    for (var pass = 0; pass < (filtering ? 2 : 1); pass++) {
+      if (filtering && pass === 0) ctx.globalAlpha = 0.12;
+      else ctx.globalAlpha = 1;
+      for (var i = 0; i < n; i++) {
+        var px = pointsX[i], py = pointsY[i];
+        if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
+        var pi = platformIdx[i];
+        var isActive = !filtering || activePlatforms.has(PLATFORMS[pi]);
+        // pass 0 = dimmed (inactive), pass 1 = bright (active)
+        if (filtering && ((pass === 0 && isActive) || (pass === 1 && !isActive))) continue;
+        if (!filtering && pass === 1) continue;
+        var sx = cx + px * scale, sy = cy + py * scale;
+        if (i === hoveredIndex && useGlow) {
+          var spr = sprites[pi].hover;
+          ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
+        } else if (useGlow) {
+          var spr = sprites[pi].normal;
+          ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
+        } else {
+          var dot = dotSprites[pi];
+          ctx.drawImage(dot, sx - dot.width / (2 * dpr), sy - dot.height / (2 * dpr), dot.width / dpr, dot.height / dpr);
+        }
       }
     }
+    ctx.globalAlpha = 1;
 
     // --- search highlights ---
     if (searchMatches && searchMatches.size > 0) {
@@ -406,6 +417,9 @@
       return true;
     }
 
+    // label margin: keep labels inside viewport with some padding
+    var LABEL_MARGIN = small ? 8 : 12;
+
     if (zoom < 2) {
       // coarse labels — sort by cluster size so biggest labels win
       ctx.font = (small ? '9px' : '12px') + ' monospace';
@@ -415,8 +429,12 @@
       for (var c = 0; c < sorted.length; c++) {
         var cl = sorted[c];
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - Math.sqrt(cl.count) * 1.5;
-        if (sx < -50 || sx > W + 50 || sy < -20 || sy > H + 20) continue;
+        if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
+        var halfW = tw / 2;
+        // clamp horizontally so label stays in viewport
+        if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
+        if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
         if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
     } else if (zoom < 5) {
@@ -429,8 +447,11 @@
         var cl = sorted[c];
         if (cl.cx < xMin || cl.cx > xMax || cl.cy < yMin || cl.cy > yMax) continue;
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - 14;
-        if (sx < -50 || sx > W + 50 || sy < -20 || sy > H + 20) continue;
+        if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
+        var halfW = tw / 2;
+        if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
+        if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
         if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
     } else {
@@ -446,9 +467,12 @@
         var title = data.points[i].title;
         if (!title) continue;
         var sx = cx + px * scale, sy = cy + py * scale - 10;
-        if (sx < 0 || sx > W || sy < 0 || sy > H) continue;
+        if (sy < LABEL_MARGIN || sy > H - 40) continue;
         if (title.length > truncLen) title = title.substring(0, truncLen - 2) + '\u2026';
         var tw = ctx.measureText(title).width;
+        var halfW = tw / 2;
+        if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
+        if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
         if (canPlace(sx, sy, tw, fontSize)) { drawLabel(title, sx, sy, dark); shown++; }
       }
     }
@@ -705,14 +729,43 @@
     return 'https://pdsls.dev/at/' + did + '/' + collection + '/' + rkey;
   }
 
+  // --- platform filter state ---
+  var activePlatforms = null; // null = all visible, Set = only these
+
   function renderLegend() {
     var el = document.getElementById('legend');
     var colors = getColors();
     var html = '';
     for (var i = 0; i < PLATFORMS.length; i++) {
-      html += '<div class="legend-item"><span class="legend-dot" style="background:' + colors[PLATFORMS[i]].mid + '"></span>' + PLATFORMS[i] + '</div>';
+      var p = PLATFORMS[i];
+      var dimmed = activePlatforms && !activePlatforms.has(p) ? ' dimmed' : '';
+      html += '<div class="legend-item' + dimmed + '" data-platform="' + p + '"><span class="legend-dot" style="background:' + colors[p].mid + '"></span>' + p + '</div>';
     }
     el.innerHTML = html;
+    // attach click handlers
+    var items = el.querySelectorAll('.legend-item');
+    for (var i = 0; i < items.length; i++) {
+      items[i].addEventListener('click', onLegendClick);
+    }
+  }
+
+  function onLegendClick(e) {
+    var item = e.currentTarget;
+    var platform = item.getAttribute('data-platform');
+    if (!activePlatforms) {
+      // first click: select only this platform
+      activePlatforms = new Set([platform]);
+    } else if (activePlatforms.has(platform)) {
+      activePlatforms.delete(platform);
+      // if nothing selected, show all
+      if (activePlatforms.size === 0) activePlatforms = null;
+    } else {
+      activePlatforms.add(platform);
+      // if all selected, reset to null
+      if (activePlatforms.size === PLATFORMS.length) activePlatforms = null;
+    }
+    renderLegend();
+    view.dirty = true;
   }
 
   function loadData() {
