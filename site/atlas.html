@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>pub search / constellation</title>
+  <title>pub search / atlas</title>
   <meta name="description" content="2d semantic map of atproto publishing platforms">
-  <meta property="og:title" content="pub search / constellation">
+  <meta property="og:title" content="pub search / atlas">
   <meta property="og:description" content="2d semantic map of atproto publishing platforms">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="https://pub-search.waow.tech/og-image?page=constellation">
+  <meta property="og:image" content="https://pub-search.waow.tech/og-image?page=atlas">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="pub search / constellation">
+  <meta name="twitter:title" content="pub search / atlas">
   <meta name="twitter:description" content="2d semantic map of atproto publishing platforms">
-  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image?page=constellation">
+  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image?page=atlas">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='2' fill='%231B7340'/><circle cx='8' cy='10' r='1.5' fill='%231B7340' opacity='.6'/><circle cx='24' cy='8' r='1' fill='%231B7340' opacity='.4'/><circle cx='22' cy='22' r='1.5' fill='%231B7340' opacity='.5'/><circle cx='6' cy='24' r='1' fill='%231B7340' opacity='.3'/></svg>">
   <script>
     (function() {
@@ -23,18 +23,21 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="constellation.css">
+  <link rel="stylesheet" href="atlas.css">
 </head>
 <body>
   <div class="loading-overlay" id="loading">
-    <div class="spinner">loading constellation...</div>
+    <div class="spinner">loading atlas...</div>
   </div>
 
   <canvas id="canvas"></canvas>
 
   <div class="header">
-    <h1><a href="/">pub search</a> <span class="dim">/ constellation</span></h1>
+    <h1><a href="/">pub search</a> <span class="dim">/ atlas</span></h1>
     <div class="nav">
+      <form class="search-form" id="search-form">
+        <input type="text" id="search-input" placeholder="search..." autocomplete="off" spellcheck="false">
+      </form>
       <a href="/dashboard.html">stats</a>
       <span class="theme-toggle" id="theme-toggle"></span>
     </div>
@@ -58,7 +61,7 @@
       if (theme === 'system') resolved = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', resolved);
       renderThemeToggle();
-      if (window.constellation) window.constellation.setDirty();
+      if (window.atlas) window.atlas.setDirty();
     }
     var THEME_ICONS = { dark: '\u263E', light: '\u263C', system: '\u25D1' };
     var THEME_CYCLE = ['dark', 'light', 'system'];
@@ -76,6 +79,6 @@
     });
     renderThemeToggle();
   </script>
-  <script src="constellation.js"></script>
+  <script src="atlas.js"></script>
 </body>
 </html>

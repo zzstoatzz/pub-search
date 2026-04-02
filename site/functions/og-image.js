@@ -101,7 +101,7 @@ async function fetchStats() {
   }
 }
 
-// platform colors for constellation OG image (core colors from the canvas)
+// platform colors for atlas OG image (core colors from the canvas)
 const PLATFORM_DOTS = [
   { color: "#4ade80", label: "leaflet" },
   { color: "#60a5fa", label: "whitewind" },
@@ -111,8 +111,8 @@ const PLATFORM_DOTS = [
   { color: "#9ca3af", label: "other" },
 ];
 
-// deterministic "random" positions for constellation dots
-function constellationDots() {
+// deterministic "random" positions for atlas dots
+function atlasDots() {
   const dots = [];
   const positions = [
     [180, 200], [340, 150], [520, 280], [700, 180], [850, 250],
@@ -149,7 +149,7 @@ function buildConstellationImage(docCount) {
   const children = [];
 
   // scattered dots as background decoration
-  children.push(...constellationDots());
+  children.push(...atlasDots());
 
   // header
   children.push({
@@ -175,7 +175,7 @@ function buildConstellationImage(docCount) {
         fontFamily: '"JetBrains Mono", monospace',
         marginTop: "16px",
       },
-      children: "constellation",
+      children: "atlas",
     },
   });
 
@@ -284,8 +284,8 @@ export async function onRequest(context) {
   const since = url.searchParams.get("since");
   const mode = url.searchParams.get("mode");
 
-  // constellation page
-  if (page === "constellation") {
+  // atlas page
+  if (page === "atlas") {
     const stats = await fetchStats();
     const html = buildConstellationImage(stats ? stats.documents : null);
     return new ImageResponse(html, {

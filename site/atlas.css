@@ -194,6 +194,40 @@ canvas:active {
   border-radius: 50%;
 }
 
+/* search */
+.search-form {
+  display: flex;
+  align-items: center;
+}
+
+#search-input {
+  background: var(--bg-subtle);
+  border: 1px solid var(--tooltip-border);
+  color: var(--text);
+  font-family: monospace;
+  font-size: 11px;
+  padding: 3px 8px;
+  width: 140px;
+  outline: none;
+  transition: width 0.2s, border-color 0.2s;
+}
+
+#search-input:focus {
+  width: 200px;
+  border-color: var(--text-dim);
+}
+
+#search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.search-status {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
 /* stats */
 .stats {
   position: fixed;

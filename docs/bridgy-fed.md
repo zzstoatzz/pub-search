@@ -8,7 +8,7 @@ we've tried including bridgy fed content twice. both times it caused problems:
 
 **attempt 1 (early 2026):** bridgy fed content flooded the index — tens of thousands of short fediverse posts mixed in with long-form articles. search results became polluted with content that wasn't meaningfully "published" in the way leaflet/whitewind/etc. content is. we added `is_bridgyfed` column to turso and marked all bridgy fed documents, then excluded them from search results.
 
-**attempt 2 (later):** even with search exclusion, the vectors remained in turbopuffer and polluted semantic search and the constellation visualization. had to run `scripts/purge-bridgyfed-vectors` to clean up ~26k orphan vectors.
+**attempt 2 (later):** even with search exclusion, the vectors remained in turbopuffer and polluted semantic search and the atlas visualization. had to run `scripts/purge-bridgyfed-vectors` to clean up ~26k orphan vectors.
 
 **current state:** bridgy fed content is now **dropped at ingest** in the backend. the tap still receives it (can't filter at the firehose level), but the backend's ingest pipeline checks the PDS endpoint and silently drops any DID hosted on `brid.gy`. this is the cleanest solution — no storage, no cleanup needed.
 

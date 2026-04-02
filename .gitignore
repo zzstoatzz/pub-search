@@ -6,4 +6,4 @@ dist/
 .zig-cache/
 zig-out/
 .loq_cache
-site/constellation.json
+site/atlas.json

@@ -61,13 +61,13 @@ the backend is fully configurable via environment variables:
 
 the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `site.standard.*` collections. platform is stored per-document and returned in search results.
 
-## constellation
+## atlas
 
-a 2D semantic map of the entire document index: [pub-search.waow.tech/constellation](https://pub-search.waow.tech/constellation)
+a 2D semantic map of the entire document index: [pub-search.waow.tech/atlas](https://pub-search.waow.tech/atlas)
 
 documents are projected from 1024-dim voyage embeddings to 2D via PCA → UMAP, then clustered with HDBSCAN at two granularities. each point is colored by platform. zoom in to see finer cluster labels and individual document titles.
 
-built with `scripts/build-constellation` (batch job, ~20s) → `site/constellation.json` → canvas renderer. see [docs/constellation.md](docs/constellation.md) for details.
+built with `scripts/build-atlas` (batch job, ~20s) → `site/atlas.json` → canvas renderer. see [docs/atlas.md](docs/atlas.md) for details.
 
 ## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 

@@ -39,6 +39,19 @@
   var pointsY = null;
   var platformIdx = null;
   var gridIndex = null;
+  var uriToIndex = null; // Map<uri, index> for search matching
+
+  // --- search state ---
+  var searchMatches = null; // Set of point indices matching current search
+  var searchCenter = null; // {x, y} weighted centroid of matches
+  var searchQuery = '';
+
+  // --- animation state ---
+  var animating = false;
+  var animFrom = null;
+  var animTo = null;
+  var animStart = 0;
+  var ANIM_DURATION = 600; // ms
 
   // --- canvas ---
   var canvas = document.getElementById('canvas');
@@ -316,6 +329,54 @@
       }
     }
 
+    // --- search highlights ---
+    if (searchMatches && searchMatches.size > 0) {
+      // dim non-matching points by drawing a semi-transparent overlay
+      ctx.globalAlpha = dark ? 0.6 : 0.5;
+      ctx.fillStyle = dark ? '#050505' : '#f5f5f0';
+      ctx.fillRect(0, 0, W, H);
+
+      // redraw matched points brighter
+      ctx.globalAlpha = 1;
+      searchMatches.forEach(function(i) {
+        var px = pointsX[i], py = pointsY[i];
+        if (px < xMin || px > xMax || py < yMin || py > yMax) return;
+        var sx = cx + px * scale, sy = cy + py * scale;
+        var pi = platformIdx[i];
+        if (useGlow) {
+          var spr = sprites[pi].hover;
+          ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
+        } else {
+          var dot = dotSprites[pi];
+          ctx.drawImage(dot, sx - dot.width / (2 * dpr), sy - dot.height / (2 * dpr), dot.width / dpr, dot.height / dpr);
+        }
+      });
+
+      // draw search centroid marker
+      if (searchCenter) {
+        var mx = cx + searchCenter.x * scale, my = cy + searchCenter.y * scale;
+        // crosshair
+        ctx.strokeStyle = dark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(mx - 12, my); ctx.lineTo(mx + 12, my);
+        ctx.moveTo(mx, my - 12); ctx.lineTo(mx, my + 12);
+        ctx.stroke();
+        // ring
+        ctx.beginPath();
+        ctx.arc(mx, my, 6, 0, Math.PI * 2);
+        ctx.strokeStyle = dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // label
+        ctx.font = '10px monospace';
+        ctx.fillStyle = dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('"' + searchQuery + '"', mx + 12, my - 6);
+      }
+    }
+
     // --- labels (no shadowBlur — uses strokeText outline instead) ---
     ctx.globalAlpha = 1;
     ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
@@ -365,7 +426,28 @@
   }
 
   // --- animation loop ---
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+  function tickAnimation() {
+    if (!animating) return;
+    var t = Math.min(1, (Date.now() - animStart) / ANIM_DURATION);
+    var e = easeOutCubic(t);
+    view.zoom = animFrom.zoom + (animTo.zoom - animFrom.zoom) * e;
+    view.panX = animFrom.panX + (animTo.panX - animFrom.panX) * e;
+    view.panY = animFrom.panY + (animTo.panY - animFrom.panY) * e;
+    view.dirty = true;
+    if (t >= 1) animating = false;
+  }
+
+  function animateTo(targetX, targetY, targetZoom) {
+    animFrom = { zoom: view.zoom, panX: view.panX, panY: view.panY };
+    animTo = { zoom: targetZoom, panX: -targetX, panY: -targetY };
+    animStart = Date.now();
+    animating = true;
+  }
+
   function loop() {
+    tickAnimation();
     render();
     requestAnimationFrame(loop);
   }
@@ -528,9 +610,9 @@
   }
 
   function loadData() {
-    fetch('constellation.json')
+    fetch('atlas.json')
       .then(function(r) {
-        if (!r.ok) throw new Error('failed to load constellation.json: ' + r.status);
+        if (!r.ok) throw new Error('failed to load atlas.json: ' + r.status);
         return r.json();
       })
       .then(function(d) {
@@ -546,6 +628,11 @@
           pointsX[i] = d.points[i].x;
           pointsY[i] = d.points[i].y;
           platformIdx[i] = platMap[d.points[i].platform] !== undefined ? platMap[d.points[i].platform] : otherIdx;
+        }
+        // build URI → index map for search matching
+        uriToIndex = new Map();
+        for (var i = 0; i < n; i++) {
+          uriToIndex.set(d.points[i].uri, i);
         }
         buildSpatialIndex();
         renderLegend();
@@ -567,7 +654,125 @@
   loadData();
   loop();
 
-  window.constellation = {
+  // --- search ---
+  var API_URL = 'https://leaflet-search-backend.fly.dev';
+  var searchInput = document.getElementById('search-input');
+  var searchForm = document.getElementById('search-form');
+  var searchStatusEl = null;
+
+  function setSearchStatus(msg) {
+    if (!searchStatusEl) {
+      searchStatusEl = document.createElement('span');
+      searchStatusEl.className = 'search-status';
+      searchForm.appendChild(searchStatusEl);
+    }
+    searchStatusEl.textContent = msg;
+  }
+
+  function clearSearch() {
+    searchMatches = null;
+    searchCenter = null;
+    searchQuery = '';
+    setSearchStatus('');
+    view.dirty = true;
+  }
+
+  function doSearch(query) {
+    if (!query || !data || !uriToIndex) return;
+    searchQuery = query;
+    setSearchStatus('searching...');
+
+    fetch(API_URL + '/search?mode=semantic&limit=20&format=v2&q=' + encodeURIComponent(query))
+      .then(function(r) {
+        if (!r.ok) throw new Error('search failed: ' + r.status);
+        return r.json();
+      })
+      .then(function(resp) {
+        var results = resp.results || [];
+        if (results.length === 0) {
+          setSearchStatus('no results');
+          searchMatches = null;
+          searchCenter = null;
+          view.dirty = true;
+          return;
+        }
+
+        // match result URIs to atlas points
+        var matches = new Set();
+        var weightedX = 0, weightedY = 0, totalWeight = 0;
+        for (var i = 0; i < results.length; i++) {
+          var uri = results[i].uri;
+          if (uriToIndex.has(uri)) {
+            var idx = uriToIndex.get(uri);
+            matches.add(idx);
+            // weight by rank (higher rank = more weight)
+            var w = results.length - i;
+            weightedX += pointsX[idx] * w;
+            weightedY += pointsY[idx] * w;
+            totalWeight += w;
+          }
+        }
+
+        if (matches.size === 0) {
+          setSearchStatus(results.length + ' results, 0 on map');
+          searchMatches = null;
+          searchCenter = null;
+          view.dirty = true;
+          return;
+        }
+
+        searchMatches = matches;
+        searchCenter = { x: weightedX / totalWeight, y: weightedY / totalWeight };
+        setSearchStatus(matches.size + ' of ' + results.length + ' on map');
+
+        // compute spread to determine zoom level
+        var maxDist = 0;
+        matches.forEach(function(idx) {
+          var dx = pointsX[idx] - searchCenter.x;
+          var dy = pointsY[idx] - searchCenter.y;
+          var d = Math.sqrt(dx * dx + dy * dy);
+          if (d > maxDist) maxDist = d;
+        });
+
+        // zoom to fit the spread with some padding
+        // at zoom=1, visible radius in data coords is ~1.0 (since range is [-1,1])
+        // we want maxDist to fit in ~40% of the viewport
+        var targetZoom = maxDist > 0 ? Math.min(view.maxZoom, 0.4 / maxDist) : 4;
+        targetZoom = Math.max(2, Math.min(8, targetZoom)); // clamp to reasonable range
+
+        animateTo(searchCenter.x, searchCenter.y, targetZoom);
+      })
+      .catch(function(err) {
+        setSearchStatus('error');
+        console.error(err);
+      });
+  }
+
+  searchForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var q = searchInput.value.trim();
+    if (q) doSearch(q);
+    else clearSearch();
+  });
+
+  searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      searchInput.blur();
+      clearSearch();
+    }
+  });
+
+  // cmd+k / ctrl+k to focus search
+  window.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+  });
+
+  window.atlas = {
     setDirty: function() {
       sprites = null;
       dotSprites = null;

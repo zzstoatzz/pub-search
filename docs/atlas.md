@@ -1,12 +1,12 @@
-# constellation
+# atlas
 
 2D semantic map of the document index. each document is a point on a canvas, positioned by semantic similarity and colored by platform.
 
-**live:** [pub-search.waow.tech/constellation](https://pub-search.waow.tech/constellation)
+**live:** [pub-search.waow.tech/atlas](https://pub-search.waow.tech/atlas)
 
 ## data pipeline
 
-`scripts/build-constellation` is a batch python script (uv inline dependencies) that:
+`scripts/build-atlas` is a batch python script (uv inline dependencies) that:
 
 1. **exports vectors** from turbopuffer — paginated query with `rank_by: ["id", "asc"]`, fetches all ~12k vectors + metadata
 2. **PCA 1024 → 50** — denoising pass, typically captures ~60% variance
@@ -16,18 +16,18 @@
    - fine: `min_cluster_size=20` (~160 clusters, zoomed-in labels)
    - outliers assigned to nearest cluster centroid
 5. **c-TF-IDF** on document titles per cluster → 3-term labels
-6. **outputs** `site/constellation.json` (~3MB, gitignored)
+6. **outputs** `site/atlas.json` (~3MB, gitignored)
 
 run time: ~20s. dependencies: `umap-learn`, `hdbscan`, `scikit-learn`, `httpx`, `numpy`, `pydantic-settings`.
 
 ```bash
-./scripts/build-constellation              # writes site/constellation.json
-./scripts/build-constellation -o out.json  # custom output path
+./scripts/build-atlas              # writes site/atlas.json
+./scripts/build-atlas -o out.json  # custom output path
 ```
 
 ## frontend
 
-`site/constellation.html` + `site/constellation.js` + `site/constellation.css`
+`site/atlas.html` + `site/atlas.js` + `site/atlas.css`
 
 - **canvas 2D** renderer — no libraries, sprite-based (pre-rendered offscreen canvas per platform)
 - **pan/zoom** via wheel, drag, touch/pinch (max 15×)
@@ -38,10 +38,10 @@ run time: ~20s. dependencies: `umap-learn`, `hdbscan`, `scikit-learn`, `httpx`, 
 
 ## recomputing
 
-the constellation is a point-in-time snapshot. rerun the build script when the index changes meaningfully:
+the atlas is a point-in-time snapshot. rerun the build script when the index changes meaningfully:
 
 ```bash
-./scripts/build-constellation
+./scripts/build-atlas
 cd site && wrangler pages deploy . --project-name leaflet-search
 ```
 

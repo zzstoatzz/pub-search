@@ -4,14 +4,14 @@
 # dependencies = ["httpx", "numpy", "scikit-learn", "umap-learn", "hdbscan", "pydantic-settings"]
 # ///
 """
-Build constellation.json — 2D semantic map of the document index.
+Build atlas.json — 2D semantic map of the document index.
 
 Exports vectors from turbopuffer, projects to 2D via PCA+UMAP,
 clusters with HDBSCAN at two granularities, labels via c-TF-IDF.
 
 Usage:
-    ./scripts/build-constellation           # writes site/constellation.json
-    ./scripts/build-constellation --output out.json
+    ./scripts/build-atlas           # writes site/atlas.json
+    ./scripts/build-atlas --output out.json
 """
 
 import argparse
@@ -150,11 +150,11 @@ def assign_outliers(coords_2d: np.ndarray, labels: np.ndarray, centroids: dict[i
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build constellation.json")
+    parser = argparse.ArgumentParser(description="Build atlas.json")
     parser.add_argument(
         "--output", "-o",
-        default=str(Path(__file__).resolve().parent.parent / "site" / "constellation.json"),
-        help="Output path (default: site/constellation.json)",
+        default=str(Path(__file__).resolve().parent.parent / "site" / "atlas.json"),
+        help="Output path (default: site/atlas.json)",
     )
     args = parser.parse_args()
 
@@ -175,7 +175,7 @@ def main():
     log(f"  got {len(rows)} documents")
 
     if len(rows) < 10:
-        print("too few documents to build constellation", file=sys.stderr)
+        print("too few documents to build atlas", file=sys.stderr)
         sys.exit(1)
 
     # parse into arrays
