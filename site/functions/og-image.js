@@ -111,149 +111,287 @@ const PLATFORM_DOTS = [
   { color: "#9ca3af", label: "other" },
 ];
 
-// deterministic "random" positions for atlas dots
-function atlasDots() {
+// seeded PRNG (mulberry32) for deterministic constellation
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// box-muller gaussian from uniform random
+function gaussian(rng) {
+  const u1 = rng(), u2 = rng();
+  return Math.sqrt(-2 * Math.log(u1 + 0.0001)) * Math.cos(2 * Math.PI * u2);
+}
+
+// platform weights matching real index distribution
+const PLATFORM_WEIGHTS = [0.45, 0.20, 0.08, 0.05, 0.07, 0.15];
+
+function pickPlatform(rng) {
+  let r = rng(), acc = 0;
+  for (let i = 0; i < PLATFORM_WEIGHTS.length; i++) {
+    acc += PLATFORM_WEIGHTS[i];
+    if (r < acc) return i;
+  }
+  return 0;
+}
+
+function atlasConstellation() {
+  const rng = mulberry32(42);
   const dots = [];
-  const positions = [
-    [180, 200], [340, 150], [520, 280], [700, 180], [850, 250],
-    [240, 350], [450, 180], [620, 340], [780, 300], [950, 200],
-    [300, 260], [500, 400], [680, 220], [400, 320], [560, 160],
-    [820, 380], [200, 420], [730, 400], [900, 340], [380, 220],
-    [150, 300], [480, 250], [650, 380], [770, 160], [920, 420],
+  // center of the constellation, offset right to leave space for text
+  const cx = 740, cy = 310;
+
+  // generate ~180 dots with organic cluster shape
+  for (let i = 0; i < 180; i++) {
+    const pi = pickPlatform(rng);
+    const platform = PLATFORM_DOTS[pi];
+
+    // gaussian distribution with elliptical stretch
+    let dx = gaussian(rng) * 140;
+    let dy = gaussian(rng) * 120;
+
+    // slight rotation to feel organic
+    const angle = 0.3;
+    const rx = dx * Math.cos(angle) - dy * Math.sin(angle);
+    const ry = dx * Math.sin(angle) + dy * Math.cos(angle);
+
+    let x = cx + rx;
+    let y = cy + ry;
+
+    // clamp to image bounds with padding
+    x = Math.max(20, Math.min(1170, x));
+    y = Math.max(20, Math.min(610, y));
+
+    // distance from center determines size and brightness
+    const dist = Math.sqrt(rx * rx + ry * ry);
+    const isCore = dist < 100;
+    const isMid = dist < 180;
+
+    // size: core dots slightly larger, some random "bright stars"
+    const isStar = rng() < 0.06;
+    let size;
+    if (isStar) size = 6 + Math.floor(rng() * 5);
+    else if (isCore) size = 2 + Math.floor(rng() * 3);
+    else size = 2 + Math.floor(rng() * 2);
+
+    // opacity: denser and brighter in core
+    let opacity;
+    if (isStar) opacity = 0.85 + rng() * 0.15;
+    else if (isCore) opacity = 0.5 + rng() * 0.3;
+    else if (isMid) opacity = 0.3 + rng() * 0.25;
+    else opacity = 0.15 + rng() * 0.2;
+
+    const style = {
+      position: "absolute",
+      left: `${Math.round(x)}px`,
+      top: `${Math.round(y)}px`,
+      width: `${size}px`,
+      height: `${size}px`,
+      borderRadius: "50%",
+      background: platform.color,
+      opacity: opacity,
+    };
+
+    // bright stars get a glow
+    if (isStar) {
+      style.boxShadow = `0 0 ${size * 2}px ${platform.color}`;
+    }
+
+    dots.push({
+      type: "div",
+      props: { style, children: "" },
+    });
+  }
+
+  // add a few distant outlier dots for depth
+  const outliers = [
+    [120, 180], [90, 400], [1050, 120], [1100, 480],
+    [200, 520], [1020, 80], [350, 100], [950, 530],
   ];
-  for (let i = 0; i < positions.length; i++) {
-    const platform = PLATFORM_DOTS[i % PLATFORM_DOTS.length];
-    const size = 4 + (i % 3) * 2;
-    const opacity = 0.4 + (i % 4) * 0.15;
+  for (let i = 0; i < outliers.length; i++) {
+    const pi = pickPlatform(rng);
     dots.push({
       type: "div",
       props: {
         style: {
           position: "absolute",
-          left: `${positions[i][0]}px`,
-          top: `${positions[i][1]}px`,
-          width: `${size}px`,
-          height: `${size}px`,
+          left: `${outliers[i][0]}px`,
+          top: `${outliers[i][1]}px`,
+          width: "3px",
+          height: "3px",
           borderRadius: "50%",
-          background: platform.color,
-          opacity: opacity,
+          background: PLATFORM_DOTS[pi].color,
+          opacity: 0.25 + rng() * 0.15,
         },
         children: "",
       },
     });
   }
+
   return dots;
 }
 
 function buildConstellationImage(docCount) {
   const children = [];
 
-  // scattered dots as background decoration
-  children.push(...atlasDots());
+  // dense constellation as background
+  children.push(...atlasConstellation());
 
-  // header
+  // subtle center glow behind the cluster
   children.push({
     type: "div",
     props: {
       style: {
-        color: "#888",
-        fontSize: "28px",
-        fontFamily: '"JetBrains Mono", monospace',
-        marginBottom: "8px",
+        position: "absolute",
+        left: "540px",
+        top: "110px",
+        width: "400px",
+        height: "400px",
+        borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(74,222,128,0.04) 0%, rgba(74,222,128,0.01) 40%, transparent 70%)",
       },
-      children: "pub search",
+      children: "",
     },
   });
 
-  // title
+  // text container on the left with subtle gradient fade
   children.push({
     type: "div",
     props: {
       style: {
-        color: "#fff",
-        fontSize: "48px",
-        fontFamily: '"JetBrains Mono", monospace',
-        marginTop: "16px",
+        position: "absolute",
+        left: "0",
+        top: "0",
+        bottom: "0",
+        width: "520px",
+        background: "linear-gradient(to right, #050505 60%, transparent 100%)",
       },
-      children: "atlas",
+      children: "",
     },
   });
 
-  // subtitle
+  // text content (positioned above the gradient)
   children.push({
     type: "div",
     props: {
       style: {
-        color: "#555",
-        fontSize: "24px",
-        fontFamily: '"JetBrains Mono", monospace',
-        marginTop: "12px",
-      },
-      children: "2d semantic map of the document index",
-    },
-  });
-
-  // platform legend
-  children.push({
-    type: "div",
-    props: {
-      style: {
+        position: "relative",
         display: "flex",
-        gap: "16px",
-        marginTop: "32px",
+        flexDirection: "column",
+        height: "100%",
+        padding: "0",
+        maxWidth: "440px",
       },
-      children: PLATFORM_DOTS.slice(0, 5).map((p) => ({
-        type: "div",
-        props: {
-          style: {
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
+      children: [
+        // header
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#666",
+              fontSize: "26px",
+              fontFamily: '"JetBrains Mono", monospace',
+            },
+            children: "pub search",
           },
-          children: [
-            {
-              type: "div",
-              props: {
-                style: {
-                  width: "8px",
-                  height: "8px",
-                  borderRadius: "50%",
-                  background: p.color,
-                },
-                children: "",
-              },
-            },
-            {
-              type: "div",
-              props: {
-                style: {
-                  color: "#666",
-                  fontSize: "18px",
-                  fontFamily: '"JetBrains Mono", monospace',
-                },
-                children: p.label,
-              },
-            },
-          ],
         },
-      })),
-    },
-  });
-
-  // footer
-  const footerText = docCount
-    ? `${docCount.toLocaleString()} documents · explore the index`
-    : "explore the index";
-  children.push({
-    type: "div",
-    props: {
-      style: {
-        color: "#555",
-        fontSize: "20px",
-        fontFamily: '"JetBrains Mono", monospace',
-        marginTop: "auto",
-      },
-      children: footerText,
+        // title
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#fff",
+              fontSize: "52px",
+              fontFamily: '"JetBrains Mono", monospace',
+              marginTop: "16px",
+              letterSpacing: "2px",
+            },
+            children: "atlas",
+          },
+        },
+        // subtitle
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#555",
+              fontSize: "20px",
+              fontFamily: '"JetBrains Mono", monospace',
+              marginTop: "14px",
+              lineHeight: "1.5",
+            },
+            children: "2d semantic map of atproto publishing platforms",
+          },
+        },
+        // platform legend
+        {
+          type: "div",
+          props: {
+            style: {
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "12px",
+              marginTop: "36px",
+            },
+            children: PLATFORM_DOTS.slice(0, 5).map((p) => ({
+              type: "div",
+              props: {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                },
+                children: [
+                  {
+                    type: "div",
+                    props: {
+                      style: {
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "50%",
+                        background: p.color,
+                        boxShadow: `0 0 6px ${p.color}`,
+                      },
+                      children: "",
+                    },
+                  },
+                  {
+                    type: "div",
+                    props: {
+                      style: {
+                        color: "#555",
+                        fontSize: "16px",
+                        fontFamily: '"JetBrains Mono", monospace',
+                      },
+                      children: p.label,
+                    },
+                  },
+                ],
+              },
+            })),
+          },
+        },
+        // footer
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#444",
+              fontSize: "18px",
+              fontFamily: '"JetBrains Mono", monospace',
+              marginTop: "auto",
+            },
+            children: docCount
+              ? `${docCount.toLocaleString()} documents`
+              : "explore the index",
+          },
+        },
+      ],
     },
   });
 
@@ -269,6 +407,7 @@ function buildConstellationImage(docCount) {
         background: "#050505",
         padding: "48px 56px",
         fontFamily: '"JetBrains Mono", monospace',
+        overflow: "hidden",
       },
       children,
     },
