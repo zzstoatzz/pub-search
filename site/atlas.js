@@ -506,7 +506,7 @@
     if (dragging) {
       if (Math.abs(e.clientX - dragStartX) < 4 && Math.abs(e.clientY - dragStartY) < 4 && hoveredIndex >= 0) {
         var p = data.points[hoveredIndex];
-        var url = atUriToUrl(p.uri, p.basePath, p.platform);
+        var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
         if (url) window.open(url, '_blank');
       }
       dragging = false;
@@ -590,11 +590,18 @@
     canvas.style.cursor = dragging ? 'grabbing' : 'grab';
   }
 
-  function atUriToUrl(uri, basePath, platform) {
+  function atUriToUrl(uri, basePath, platform, path) {
     var m = uri.match(/^at:\/\/(did:[^/]+)\/([^/]+)\/(.+)$/);
     if (!m) return null;
     var did = m[1], collection = m[2], rkey = m[3];
     if (platform === 'whitewind' || collection.startsWith('com.whtwnd.')) return 'https://whtwnd.com/' + did + '/' + rkey;
+    // leaflet uses rkey directly
+    if (platform === 'leaflet' && basePath) return 'https://' + basePath + '/' + rkey;
+    // other platforms (pckt, offprint, etc.) use path slug when available
+    if (basePath && path) {
+      var sep = path.charAt(0) === '/' ? '' : '/';
+      return 'https://' + basePath + sep + path;
+    }
     if (basePath) return 'https://' + basePath + '/' + rkey;
     return 'https://pds.pub/at/' + encodeURIComponent(uri);
   }

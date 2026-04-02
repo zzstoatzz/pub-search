@@ -60,7 +60,7 @@ def tpuf_export(client: httpx.Client, settings: Settings) -> list[dict]:
         "Authorization": f"Bearer {settings.turbopuffer_api_key}",
         "Content-Type": "application/json",
     }
-    attrs = ["uri", "title", "platform", "base_path", "did", "vector"]
+    attrs = ["uri", "title", "platform", "base_path", "path", "did", "vector"]
     all_rows = []
     last_id = None
 
@@ -191,6 +191,7 @@ def main():
             "title": row.get("title", ""),
             "platform": row.get("platform", "other"),
             "basePath": row.get("base_path", ""),
+            "path": row.get("path", ""),
             "did": row.get("did", ""),
         })
 
@@ -303,6 +304,7 @@ def main():
             "title": meta["title"],
             "platform": meta["platform"],
             "basePath": meta["basePath"],
+            "path": meta["path"],
             "clusterCoarse": int(labels_coarse[i]),
             "clusterFine": int(labels_fine[i]),
         })
