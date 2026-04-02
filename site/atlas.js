@@ -355,25 +355,33 @@
       // draw search centroid marker
       if (searchCenter) {
         var mx = cx + searchCenter.x * scale, my = cy + searchCenter.y * scale;
-        // crosshair
-        ctx.strokeStyle = dark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)';
-        ctx.lineWidth = 1;
+        var accent = dark ? 'rgba(250,200,80,' : 'rgba(200,120,0,';
+        // outer ring — pulsing glow
         ctx.beginPath();
-        ctx.moveTo(mx - 12, my); ctx.lineTo(mx + 12, my);
-        ctx.moveTo(mx, my - 12); ctx.lineTo(mx, my + 12);
+        ctx.arc(mx, my, 18, 0, Math.PI * 2);
+        ctx.strokeStyle = accent + '0.25)';
+        ctx.lineWidth = 3;
         ctx.stroke();
-        // ring
-        ctx.beginPath();
-        ctx.arc(mx, my, 6, 0, Math.PI * 2);
-        ctx.strokeStyle = dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.5)';
+        // crosshair lines
+        ctx.strokeStyle = accent + '0.8)';
         ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(mx - 20, my); ctx.lineTo(mx - 8, my);
+        ctx.moveTo(mx + 8, my); ctx.lineTo(mx + 20, my);
+        ctx.moveTo(mx, my - 20); ctx.lineTo(mx, my - 8);
+        ctx.moveTo(mx, my + 8); ctx.lineTo(mx, my + 20);
         ctx.stroke();
-        // label
-        ctx.font = '10px monospace';
-        ctx.fillStyle = dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)';
+        // center dot
+        ctx.beginPath();
+        ctx.arc(mx, my, 3, 0, Math.PI * 2);
+        ctx.fillStyle = accent + '0.9)';
+        ctx.fill();
+        // label with outline
+        ctx.font = '12px monospace';
         ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText('"' + searchQuery + '"', mx + 12, my - 6);
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = accent + '0.9)';
+        drawLabel('"' + searchQuery + '"', mx + 24, my, dark);
       }
     }
 
@@ -850,9 +858,9 @@
 
         // zoom to fit the spread with some padding
         // at zoom=1, visible radius in data coords is ~1.0 (since range is [-1,1])
-        // we want maxDist to fit in ~40% of the viewport
-        var targetZoom = maxDist > 0 ? Math.min(view.maxZoom, 0.4 / maxDist) : 4;
-        targetZoom = Math.max(2, Math.min(8, targetZoom)); // clamp to reasonable range
+        // we want maxDist to fit in ~30% of the viewport
+        var targetZoom = maxDist > 0 ? Math.min(view.maxZoom, 0.3 / maxDist) : 6;
+        targetZoom = Math.max(4, Math.min(15, targetZoom));
 
         animateTo(searchCenter.x, searchCenter.y, targetZoom);
       })
