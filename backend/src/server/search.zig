@@ -132,7 +132,7 @@ fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, bas
     }
     // universal fallback → AT Protocol record viewer
     if (did.len > 0 and rkey.len > 0) {
-        return std.fmt.allocPrint(alloc, "https://atproto.at/at://{s}/site.standard.document/{s}", .{ did, rkey }) catch "";
+        return std.fmt.allocPrint(alloc, "https://pdsls.dev/at/{s}/site.standard.document/{s}", .{ did, rkey }) catch "";
     }
     return "";
 }

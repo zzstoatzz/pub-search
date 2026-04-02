@@ -664,13 +664,16 @@
     if (platform === 'whitewind' || collection.startsWith('com.whtwnd.')) return 'https://whtwnd.com/' + did + '/' + rkey;
     // leaflet uses rkey directly
     if (platform === 'leaflet' && basePath) return 'https://' + basePath + '/' + rkey;
+    // leaflet without basePath
+    if (platform === 'leaflet') return 'https://leaflet.pub/p/' + did + '/' + rkey;
     // other platforms (pckt, offprint, etc.) use path slug when available
     if (basePath && path) {
       var sep = path.charAt(0) === '/' ? '' : '/';
       return 'https://' + basePath + sep + path;
     }
     if (basePath) return 'https://' + basePath + '/' + rkey;
-    return 'https://atproto.at/at://' + did + '/' + collection + '/' + rkey;
+    // universal fallback — AT Protocol record viewer
+    return 'https://pdsls.dev/at/' + did + '/' + collection + '/' + rkey;
   }
 
   function renderLegend() {
