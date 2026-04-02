@@ -603,7 +603,7 @@
       return 'https://' + basePath + sep + path;
     }
     if (basePath) return 'https://' + basePath + '/' + rkey;
-    return 'https://pds.pub/at/' + encodeURIComponent(uri);
+    return 'https://atproto.at/at://' + did + '/' + collection + '/' + rkey;
   }
 
   function renderLegend() {

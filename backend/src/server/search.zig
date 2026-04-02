@@ -130,6 +130,10 @@ fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, bas
     if (std.mem.eql(u8, platform, "whitewind") and did.len > 0 and rkey.len > 0) {
         return std.fmt.allocPrint(alloc, "https://whtwnd.com/{s}/{s}", .{ did, rkey }) catch "";
     }
+    // universal fallback → AT Protocol record viewer
+    if (did.len > 0 and rkey.len > 0) {
+        return std.fmt.allocPrint(alloc, "https://atproto.at/at://{s}/site.standard.document/{s}", .{ did, rkey }) catch "";
+    }
     return "";
 }
 
