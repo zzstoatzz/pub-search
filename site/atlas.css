@@ -245,9 +245,9 @@ canvas:active {
   .header .nav { gap: 8px; font-size: 10px; }
   #search-input { width: 90px; font-size: 10px; padding: 4px 6px; }
   #search-input:focus { width: 130px; }
-  .legend { bottom: 8px; left: 10px; gap: 6px; font-size: 9px; }
-  .stats { bottom: 8px; right: 10px; font-size: 9px; }
-  .tooltip { max-width: 240px; font-size: 11px; }
+  .legend { bottom: 24px; left: 10px; right: 10px; gap: 6px; font-size: 9px; }
+  .stats { bottom: 8px; left: 10px; right: 10px; text-align: center; font-size: 9px; }
+  .tooltip { max-width: 260px; font-size: 11px; }
   .tooltip .meta { font-size: 10px; }
   .tooltip .platform-badge { font-size: 9px; }
 }

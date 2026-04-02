@@ -31,7 +31,7 @@
   }
 
   // --- view state ---
-  var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 15, dirty: true };
+  var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 30, dirty: true };
 
   // --- data ---
   var data = null;
@@ -377,50 +377,71 @@
       }
     }
 
-    // --- labels (no shadowBlur — uses strokeText outline instead) ---
+    // --- labels with collision avoidance ---
     ctx.globalAlpha = 1;
     ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     var small = W < 600;
+    // placed label bounding boxes for collision detection
+    var placed = []; // [{x, y, hw, hh}] — center + half-width/half-height
+    var PAD = small ? 2 : 4; // padding between labels
+
+    function canPlace(lx, ly, tw, th) {
+      var hw = tw / 2 + PAD, hh = th / 2 + PAD;
+      for (var k = 0; k < placed.length; k++) {
+        var p = placed[k];
+        if (Math.abs(lx - p.x) < hw + p.hw && Math.abs(ly - p.y) < hh + p.hh) return false;
+      }
+      placed.push({ x: lx, y: ly, hw: hw, hh: hh });
+      return true;
+    }
+
     if (zoom < 2) {
-      // coarse labels
+      // coarse labels — sort by cluster size so biggest labels win
       ctx.font = (small ? '9px' : '12px') + ' monospace';
       ctx.globalAlpha = 0.85;
-      for (var c = 0; c < data.clusters.coarse.length; c++) {
-        var cl = data.clusters.coarse[c];
-        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
+      var fontSize = small ? 9 : 12;
+      var sorted = data.clusters.coarse.slice().sort(function(a, b) { return b.count - a.count; });
+      for (var c = 0; c < sorted.length; c++) {
+        var cl = sorted[c];
+        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - Math.sqrt(cl.count) * 1.5;
         if (sx < -50 || sx > W + 50 || sy < -20 || sy > H + 20) continue;
-        drawLabel(cl.label, sx, sy - Math.sqrt(cl.count) * 1.5, dark);
+        var tw = ctx.measureText(cl.label).width;
+        if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
     } else if (zoom < 5) {
-      // fine labels
+      // fine labels — sort by size
       ctx.font = (small ? '8px' : '11px') + ' monospace';
       ctx.globalAlpha = 0.75;
-      for (var c = 0; c < data.clusters.fine.length; c++) {
-        var cl = data.clusters.fine[c];
+      var fontSize = small ? 8 : 11;
+      var sorted = data.clusters.fine.slice().sort(function(a, b) { return b.count - a.count; });
+      for (var c = 0; c < sorted.length; c++) {
+        var cl = sorted[c];
         if (cl.cx < xMin || cl.cx > xMax || cl.cy < yMin || cl.cy > yMax) continue;
-        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
+        var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - 14;
         if (sx < -50 || sx > W + 50 || sy < -20 || sy > H + 20) continue;
-        drawLabel(cl.label, sx, sy - 14, dark);
+        var tw = ctx.measureText(cl.label).width;
+        if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
     } else {
       // document titles
       ctx.font = (small ? '9px' : '11px') + ' monospace';
       ctx.globalAlpha = 0.7;
-      var shown = 0, maxLabels = small ? 25 : 50;
-      var truncLen = small ? 30 : 45;
+      var fontSize = small ? 9 : 11;
+      var shown = 0, maxLabels = small ? 20 : 50;
+      var truncLen = small ? 25 : 45;
       for (var i = 0; i < n && shown < maxLabels; i++) {
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
         var title = data.points[i].title;
         if (!title) continue;
-        var sx = cx + px * scale, sy = cy + py * scale;
+        var sx = cx + px * scale, sy = cy + py * scale - 10;
         if (sx < 0 || sx > W || sy < 0 || sy > H) continue;
         if (title.length > truncLen) title = title.substring(0, truncLen - 2) + '\u2026';
-        drawLabel(title, sx, sy - 10, dark);
-        shown++;
+        var tw = ctx.measureText(title).width;
+        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(title, sx, sy, dark); shown++; }
       }
     }
 
