@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     turbopuffer_api_key: str
     turbopuffer_namespace: str = "leaflet-search"
 
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, **kwargs):
+        """Dotenv file wins over environment variables."""
+        return (
+            kwargs["init_settings"],
+            kwargs["dotenv_settings"],
+            kwargs["env_settings"],
+            kwargs["file_secret_settings"],
+        )
+
 
 async def resolve_pds(
     client: httpx.AsyncClient, did: str, semaphore: asyncio.Semaphore

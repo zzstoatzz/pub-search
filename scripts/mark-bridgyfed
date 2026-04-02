@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     turso_url: str
     turso_token: str
 
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, **kwargs):
+        """Dotenv file wins over environment variables."""
+        return (
+            kwargs["init_settings"],
+            kwargs["dotenv_settings"],
+            kwargs["env_settings"],
+            kwargs["file_secret_settings"],
+        )
+
     @property
     def turso_host(self) -> str:
         url = self.turso_url
