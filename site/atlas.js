@@ -383,9 +383,10 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
+    var small = W < 600;
     if (zoom < 2) {
-      // coarse labels — fixed 12px screen size
-      ctx.font = '12px monospace';
+      // coarse labels
+      ctx.font = (small ? '9px' : '12px') + ' monospace';
       ctx.globalAlpha = 0.85;
       for (var c = 0; c < data.clusters.coarse.length; c++) {
         var cl = data.clusters.coarse[c];
@@ -394,8 +395,8 @@
         drawLabel(cl.label, sx, sy - Math.sqrt(cl.count) * 1.5, dark);
       }
     } else if (zoom < 5) {
-      // fine labels — fixed 11px screen size
-      ctx.font = '11px monospace';
+      // fine labels
+      ctx.font = (small ? '8px' : '11px') + ' monospace';
       ctx.globalAlpha = 0.75;
       for (var c = 0; c < data.clusters.fine.length; c++) {
         var cl = data.clusters.fine[c];
@@ -405,10 +406,11 @@
         drawLabel(cl.label, sx, sy - 14, dark);
       }
     } else {
-      // document titles — fixed 11px, readable at any zoom
-      ctx.font = '11px monospace';
+      // document titles
+      ctx.font = (small ? '9px' : '11px') + ' monospace';
       ctx.globalAlpha = 0.7;
-      var shown = 0, maxLabels = 50;
+      var shown = 0, maxLabels = small ? 25 : 50;
+      var truncLen = small ? 30 : 45;
       for (var i = 0; i < n && shown < maxLabels; i++) {
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
@@ -416,7 +418,7 @@
         if (!title) continue;
         var sx = cx + px * scale, sy = cy + py * scale;
         if (sx < 0 || sx > W || sy < 0 || sy > H) continue;
-        if (title.length > 45) title = title.substring(0, 43) + '\u2026';
+        if (title.length > truncLen) title = title.substring(0, truncLen - 2) + '\u2026';
         drawLabel(title, sx, sy - 10, dark);
         shown++;
       }
@@ -456,10 +458,15 @@
   var hoveredIndex = -1;
   var mouseX = 0, mouseY = 0;
 
+  // --- mobile detection ---
+  var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  var HIT_RADIUS = isMobile ? 40 : 20;
+
   // --- interaction state ---
   var dragging = false;
   var dragStartX, dragStartY, dragStartPanX, dragStartPanY;
   var pinchStartDist = 0, pinchStartZoom = 1;
+  var pinchMidX = 0, pinchMidY = 0, pinchStartPanX = 0, pinchStartPanY = 0;
 
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
@@ -493,7 +500,7 @@
       return;
     }
     cacheTransform();
-    var idx = findNearest(mouseX, mouseY, 20);
+    var idx = findNearest(mouseX, mouseY, HIT_RADIUS);
     if (idx !== hoveredIndex) {
       hoveredIndex = idx;
       view.dirty = true;
@@ -515,6 +522,8 @@
 
   // --- touch ---
   var touches = {};
+  var touchMoved = false;
+  var selectedIndex = -1; // for tap-to-select, tap-again-to-open
 
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
@@ -522,6 +531,7 @@
       var t = e.changedTouches[i];
       touches[t.identifier] = { x: t.clientX, y: t.clientY };
     }
+    touchMoved = false;
     var ids = Object.keys(touches);
     if (ids.length === 1) {
       dragging = true;
@@ -532,6 +542,10 @@
       var a = touches[ids[0]], b = touches[ids[1]];
       pinchStartDist = Math.hypot(a.x - b.x, a.y - b.y);
       pinchStartZoom = view.zoom;
+      pinchMidX = (a.x + b.x) / 2;
+      pinchMidY = (a.y + b.y) / 2;
+      pinchStartPanX = view.panX;
+      pinchStartPanY = view.panY;
     }
   }, { passive: false });
 
@@ -541,23 +555,69 @@
       var t = e.changedTouches[i];
       touches[t.identifier] = { x: t.clientX, y: t.clientY };
     }
+    touchMoved = true;
     var ids = Object.keys(touches);
     if (ids.length === 1 && dragging) {
       cacheTransform();
       view.panX = dragStartPanX + (touches[ids[0]].x - dragStartX) / scale;
       view.panY = dragStartPanY + (touches[ids[0]].y - dragStartY) / scale;
       view.dirty = true;
+      hideTooltip();
+      selectedIndex = -1;
     } else if (ids.length === 2) {
       var a = touches[ids[0]], b = touches[ids[1]];
       var dist = Math.hypot(a.x - b.x, a.y - b.y);
-      view.zoom = Math.max(view.minZoom, Math.min(view.maxZoom, pinchStartZoom * (dist / pinchStartDist)));
+      var newZoom = Math.max(view.minZoom, Math.min(view.maxZoom, pinchStartZoom * (dist / pinchStartDist)));
+      // zoom toward pinch midpoint
+      var midDataOld = screenToData(pinchMidX, pinchMidY);
+      view.zoom = newZoom;
+      cacheTransform();
+      var midDataNew = screenToData(pinchMidX, pinchMidY);
+      view.panX += midDataNew[0] - midDataOld[0];
+      view.panY += midDataNew[1] - midDataOld[1];
       view.dirty = true;
     }
   }, { passive: false });
 
   canvas.addEventListener('touchend', function(e) {
-    for (var i = 0; i < e.changedTouches.length; i++) delete touches[e.changedTouches[i].identifier];
-    if (Object.keys(touches).length === 0) dragging = false;
+    var endedTouches = [];
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      endedTouches.push(e.changedTouches[i]);
+      delete touches[e.changedTouches[i].identifier];
+    }
+    var remaining = Object.keys(touches).length;
+    if (remaining === 0) {
+      dragging = false;
+      // tap detection — didn't drag significantly
+      if (!touchMoved || (endedTouches.length === 1 &&
+          Math.abs(endedTouches[0].clientX - dragStartX) < 10 &&
+          Math.abs(endedTouches[0].clientY - dragStartY) < 10)) {
+        var tx = endedTouches[0].clientX, ty = endedTouches[0].clientY;
+        cacheTransform();
+        var idx = findNearest(tx, ty, HIT_RADIUS);
+        if (idx >= 0) {
+          if (idx === selectedIndex) {
+            // second tap on same point — open URL
+            var p = data.points[idx];
+            var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
+            if (url) window.open(url, '_blank');
+            selectedIndex = -1;
+            hideTooltip();
+          } else {
+            // first tap — show tooltip
+            selectedIndex = idx;
+            hoveredIndex = idx;
+            showTooltip(idx, tx, ty);
+            view.dirty = true;
+          }
+        } else {
+          // tapped empty space — dismiss
+          selectedIndex = -1;
+          hideTooltip();
+          view.dirty = true;
+        }
+      }
+    }
   });
 
   // --- tooltip ---
@@ -576,11 +636,18 @@
     tooltipPlatform.style.color = c.core;
     tooltip.style.display = 'block';
     var tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
-    var tx = sx + 16, ty = sy - th - 8;
-    if (tx + tw > W - 10) tx = sx - tw - 16;
-    if (ty < 10) ty = sy + 16;
-    tooltip.style.left = tx + 'px';
-    tooltip.style.top = ty + 'px';
+    if (isMobile) {
+      // on mobile, anchor tooltip at top center of screen
+      var tx = Math.max(8, Math.min(W - tw - 8, (W - tw) / 2));
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top = '48px';
+    } else {
+      var tx = sx + 16, ty = sy - th - 8;
+      if (tx + tw > W - 10) tx = sx - tw - 16;
+      if (ty < 10) ty = sy + 16;
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top = ty + 'px';
+    }
     canvas.style.cursor = 'pointer';
   }
 
