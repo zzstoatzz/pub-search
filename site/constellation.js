@@ -372,7 +372,6 @@
 
   // --- hover state ---
   var hoveredIndex = -1;
-  var hoverTimer = null;
   var mouseX = 0, mouseY = 0;
 
   // --- interaction state ---
@@ -411,17 +410,14 @@
       hideTooltip();
       return;
     }
-    clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(function() {
-      cacheTransform();
-      var idx = findNearest(mouseX, mouseY, 20);
-      if (idx !== hoveredIndex) {
-        hoveredIndex = idx;
-        view.dirty = true;
-        if (idx >= 0) showTooltip(idx, mouseX, mouseY);
-        else hideTooltip();
-      }
-    }, 100);
+    cacheTransform();
+    var idx = findNearest(mouseX, mouseY, 20);
+    if (idx !== hoveredIndex) {
+      hoveredIndex = idx;
+      view.dirty = true;
+      if (idx >= 0) showTooltip(idx, mouseX, mouseY);
+      else hideTooltip();
+    }
   });
 
   window.addEventListener('mouseup', function(e) {
