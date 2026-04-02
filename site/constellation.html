@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>pub search / constellation</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='2' fill='%231B7340'/><circle cx='8' cy='10' r='1.5' fill='%231B7340' opacity='.6'/><circle cx='24' cy='8' r='1' fill='%231B7340' opacity='.4'/><circle cx='22' cy='22' r='1.5' fill='%231B7340' opacity='.5'/><circle cx='6' cy='24' r='1' fill='%231B7340' opacity='.3'/></svg>">
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'dark';
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="constellation.css">
+</head>
+<body>
+  <div class="loading-overlay" id="loading">
+    <div class="spinner">loading constellation...</div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <div class="header">
+    <h1><a href="/">pub search</a> <span class="dim">/ constellation</span></h1>
+    <div class="nav">
+      <a href="/dashboard.html">stats</a>
+      <span class="theme-toggle" id="theme-toggle"></span>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip">
+    <div class="title" id="tooltip-title"></div>
+    <div class="meta" id="tooltip-meta"></div>
+    <div class="platform-badge" id="tooltip-platform"></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <div class="stats" id="stats"></div>
+
+  <script>
+    var currentTheme = localStorage.getItem('theme') || 'dark';
+    function applyTheme(theme) {
+      currentTheme = theme;
+      localStorage.setItem('theme', theme);
+      var resolved = theme;
+      if (theme === 'system') resolved = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', resolved);
+      renderThemeToggle();
+      if (window.constellation) window.constellation.setDirty();
+    }
+    var THEME_ICONS = { dark: '\u263E', light: '\u263C', system: '\u25D1' };
+    var THEME_CYCLE = ['dark', 'light', 'system'];
+    function cycleTheme() {
+      var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3];
+      applyTheme(next);
+    }
+    function renderThemeToggle() {
+      var el = document.getElementById('theme-toggle');
+      if (!el) return;
+      el.innerHTML = '<span onclick="cycleTheme()" title="' + currentTheme + '">' + THEME_ICONS[currentTheme] + '</span>';
+    }
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
+      if (currentTheme === 'system') applyTheme('system');
+    });
+    renderThemeToggle();
+  </script>
+  <script src="constellation.js"></script>
+</body>
+</html>

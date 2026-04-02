@@ -1,0 +1,356 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "numpy", "scikit-learn", "umap-learn", "hdbscan", "pydantic-settings"]
+# ///
+"""
+Build constellation.json — 2D semantic map of the document index.
+
+Exports vectors from turbopuffer, projects to 2D via PCA+UMAP,
+clusters with HDBSCAN at two granularities, labels via c-TF-IDF.
+
+Usage:
+    ./scripts/build-constellation           # writes site/constellation.json
+    ./scripts/build-constellation --output out.json
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+
+import httpx
+import numpy as np
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turbopuffer_api_key: str
+    turbopuffer_namespace: str = "leaflet-search"
+
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, **kwargs):
+        """Dotenv file wins over environment variables."""
+        return (
+            kwargs["init_settings"],
+            kwargs["dotenv_settings"],
+            kwargs["env_settings"],
+            kwargs["file_secret_settings"],
+        )
+
+
+def tpuf_export(client: httpx.Client, settings: Settings) -> list[dict]:
+    """Export all vectors from turbopuffer via paginated query."""
+    url = f"https://api.turbopuffer.com/v2/namespaces/{settings.turbopuffer_namespace}/query"
+    headers = {
+        "Authorization": f"Bearer {settings.turbopuffer_api_key}",
+        "Content-Type": "application/json",
+    }
+    attrs = ["uri", "title", "platform", "base_path", "did", "vector"]
+    all_rows = []
+    last_id = None
+
+    while True:
+        body: dict = {
+            "rank_by": ["id", "asc"],
+            "limit": 10000,
+            "include_attributes": attrs,
+        }
+        if last_id is not None:
+            body["filters"] = ["id", "Gt", last_id]
+
+        resp = client.post(url, headers=headers, json=body, timeout=120)
+        resp.raise_for_status()
+        rows = resp.json().get("rows", [])
+        if not rows:
+            break
+
+        all_rows.extend(rows)
+        last_id = rows[-1]["id"]
+        log(f"  fetched {len(all_rows)} vectors so far...")
+
+        if len(rows) < 10000:
+            break
+
+    return all_rows
+
+
+def extract_terms(title: str) -> list[str]:
+    """Extract lowercase alphanumeric tokens from a title."""
+    if not title:
+        return []
+    return [t for t in re.findall(r"[a-z0-9]+", title.lower()) if len(t) > 1]
+
+
+def cluster_labels(titles_per_cluster: dict[int, list[str]], n_terms: int = 3) -> dict[int, str]:
+    """Compute c-TF-IDF labels for clusters from document titles."""
+    cluster_ids = sorted(titles_per_cluster.keys())
+    if not cluster_ids:
+        return {}
+
+    # build one "document" per cluster: concatenated titles
+    docs = []
+    for cid in cluster_ids:
+        docs.append(" ".join(titles_per_cluster[cid]))
+
+    # TF-IDF across cluster pseudo-documents
+    vectorizer = TfidfVectorizer(
+        max_features=5000,
+        stop_words="english",
+        token_pattern=r"[a-z0-9]{2,}",
+        lowercase=True,
+    )
+    try:
+        tfidf = vectorizer.fit_transform(docs)
+    except ValueError:
+        return {cid: f"cluster {cid}" for cid in cluster_ids}
+
+    feature_names = vectorizer.get_feature_names_out()
+    labels = {}
+    for i, cid in enumerate(cluster_ids):
+        row = tfidf[i].toarray().flatten()
+        top_idx = row.argsort()[-n_terms:][::-1]
+        top_terms = [feature_names[j] for j in top_idx if row[j] > 0]
+        labels[cid] = " ".join(top_terms) if top_terms else f"cluster {cid}"
+
+    return labels
+
+
+def assign_outliers(coords_2d: np.ndarray, labels: np.ndarray, centroids: dict[int, np.ndarray]) -> np.ndarray:
+    """Assign outlier points (label == -1) to nearest cluster centroid."""
+    result = labels.copy()
+    outlier_mask = result == -1
+    if not outlier_mask.any() or not centroids:
+        return result
+
+    centroid_ids = sorted(centroids.keys())
+    centroid_arr = np.array([centroids[c] for c in centroid_ids])
+    outlier_coords = coords_2d[outlier_mask]
+
+    # nearest centroid for each outlier
+    dists = np.linalg.norm(outlier_coords[:, None] - centroid_arr[None, :], axis=2)
+    nearest = dists.argmin(axis=1)
+    result[outlier_mask] = np.array(centroid_ids)[nearest]
+
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build constellation.json")
+    parser.add_argument(
+        "--output", "-o",
+        default=str(Path(__file__).resolve().parent.parent / "site" / "constellation.json"),
+        help="Output path (default: site/constellation.json)",
+    )
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURBOPUFFER_API_KEY", file=sys.stderr)
+        sys.exit(1)
+
+    t_start = time.monotonic()
+
+    # --- step 1: export vectors from turbopuffer ---
+    log("exporting vectors from turbopuffer...")
+    client = httpx.Client()
+    rows = tpuf_export(client, settings)
+    client.close()
+    log(f"  got {len(rows)} documents")
+
+    if len(rows) < 10:
+        print("too few documents to build constellation", file=sys.stderr)
+        sys.exit(1)
+
+    # parse into arrays
+    vectors = []
+    metadata = []
+    for row in rows:
+        vec = row.get("vector")
+        if not vec:
+            continue
+        vectors.append(vec)
+        metadata.append({
+            "uri": row.get("uri", row.get("id", "")),
+            "title": row.get("title", ""),
+            "platform": row.get("platform", "other"),
+            "basePath": row.get("base_path", ""),
+            "did": row.get("did", ""),
+        })
+
+    X = np.array(vectors, dtype=np.float32)
+    log(f"  {X.shape[0]} vectors, {X.shape[1]} dims")
+
+    # --- step 2: dimensionality reduction ---
+    log("PCA 1024 → 50...")
+    n_components_pca = min(50, X.shape[0] - 1, X.shape[1])
+    pca = PCA(n_components=n_components_pca, random_state=42)
+    X_pca = pca.fit_transform(X)
+    log(f"  variance explained: {pca.explained_variance_ratio_.sum():.2%}")
+
+    log("UMAP 50 → 2...")
+    import umap
+    reducer = umap.UMAP(
+        n_components=2,
+        metric="cosine",
+        n_neighbors=15,
+        min_dist=0.1,
+        random_state=42,
+    )
+    X_2d = reducer.fit_transform(X_pca)
+
+    # normalize to [-1, 1] range
+    for dim in range(2):
+        lo, hi = X_2d[:, dim].min(), X_2d[:, dim].max()
+        if hi > lo:
+            X_2d[:, dim] = 2 * (X_2d[:, dim] - lo) / (hi - lo) - 1
+
+    log(f"  2D range: x=[{X_2d[:,0].min():.2f}, {X_2d[:,0].max():.2f}] y=[{X_2d[:,1].min():.2f}, {X_2d[:,1].max():.2f}]")
+
+    # --- step 3: clustering ---
+    import hdbscan
+
+    log("HDBSCAN coarse (min_cluster_size=100)...")
+    clusterer_coarse = hdbscan.HDBSCAN(min_cluster_size=100, min_samples=5)
+    labels_coarse_raw = clusterer_coarse.fit_predict(X_2d)
+    n_coarse = len(set(labels_coarse_raw)) - (1 if -1 in labels_coarse_raw else 0)
+    n_outliers_coarse = (labels_coarse_raw == -1).sum()
+    log(f"  {n_coarse} clusters, {n_outliers_coarse} outliers")
+
+    # compute centroids for coarse
+    coarse_centroids = {}
+    for cid in set(labels_coarse_raw):
+        if cid == -1:
+            continue
+        mask = labels_coarse_raw == cid
+        coarse_centroids[cid] = X_2d[mask].mean(axis=0)
+
+    labels_coarse = assign_outliers(X_2d, labels_coarse_raw, coarse_centroids)
+    # recompute centroids after outlier assignment
+    for cid in set(labels_coarse):
+        mask = labels_coarse == cid
+        coarse_centroids[cid] = X_2d[mask].mean(axis=0)
+
+    log("HDBSCAN fine (min_cluster_size=20)...")
+    clusterer_fine = hdbscan.HDBSCAN(min_cluster_size=20, min_samples=3)
+    labels_fine_raw = clusterer_fine.fit_predict(X_2d)
+    n_fine = len(set(labels_fine_raw)) - (1 if -1 in labels_fine_raw else 0)
+    n_outliers_fine = (labels_fine_raw == -1).sum()
+    log(f"  {n_fine} clusters, {n_outliers_fine} outliers")
+
+    fine_centroids = {}
+    for cid in set(labels_fine_raw):
+        if cid == -1:
+            continue
+        mask = labels_fine_raw == cid
+        fine_centroids[cid] = X_2d[mask].mean(axis=0)
+
+    labels_fine = assign_outliers(X_2d, labels_fine_raw, fine_centroids)
+    for cid in set(labels_fine):
+        mask = labels_fine == cid
+        fine_centroids[cid] = X_2d[mask].mean(axis=0)
+
+    # --- step 4: labels via c-TF-IDF ---
+    log("computing cluster labels (c-TF-IDF on titles)...")
+
+    coarse_titles: dict[int, list[str]] = {}
+    fine_titles: dict[int, list[str]] = {}
+    for i, meta in enumerate(metadata):
+        title = meta.get("title", "")
+        if title:
+            coarse_titles.setdefault(int(labels_coarse[i]), []).append(title)
+            fine_titles.setdefault(int(labels_fine[i]), []).append(title)
+
+    coarse_labels = cluster_labels(coarse_titles)
+    fine_labels = cluster_labels(fine_titles)
+
+    # map fine clusters to their parent coarse cluster (majority vote)
+    fine_to_coarse = {}
+    for fine_id in set(labels_fine):
+        fine_mask = labels_fine == fine_id
+        coarse_for_fine = labels_coarse[fine_mask]
+        counts = Counter(coarse_for_fine)
+        fine_to_coarse[int(fine_id)] = int(counts.most_common(1)[0][0])
+
+    log(f"  coarse: {len(coarse_labels)} labels")
+    log(f"  fine: {len(fine_labels)} labels")
+
+    # --- step 5: build output ---
+    log("building output...")
+
+    points = []
+    for i, meta in enumerate(metadata):
+        points.append({
+            "x": round(float(X_2d[i, 0]), 4),
+            "y": round(float(X_2d[i, 1]), 4),
+            "uri": meta["uri"],
+            "title": meta["title"],
+            "platform": meta["platform"],
+            "basePath": meta["basePath"],
+            "clusterCoarse": int(labels_coarse[i]),
+            "clusterFine": int(labels_fine[i]),
+        })
+
+    coarse_clusters = []
+    for cid in sorted(coarse_centroids.keys()):
+        count = int((labels_coarse == cid).sum())
+        coarse_clusters.append({
+            "id": int(cid),
+            "label": coarse_labels.get(int(cid), f"cluster {cid}"),
+            "cx": round(float(coarse_centroids[cid][0]), 4),
+            "cy": round(float(coarse_centroids[cid][1]), 4),
+            "count": count,
+        })
+
+    fine_clusters = []
+    for cid in sorted(fine_centroids.keys()):
+        count = int((labels_fine == cid).sum())
+        fine_clusters.append({
+            "id": int(cid),
+            "label": fine_labels.get(int(cid), f"cluster {cid}"),
+            "cx": round(float(fine_centroids[cid][0]), 4),
+            "cy": round(float(fine_centroids[cid][1]), 4),
+            "count": count,
+            "parent": fine_to_coarse.get(int(cid), 0),
+        })
+
+    output = {
+        "points": points,
+        "clusters": {
+            "coarse": coarse_clusters,
+            "fine": fine_clusters,
+        },
+        "meta": {
+            "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "nDocuments": len(points),
+        },
+    }
+
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(output, separators=(",", ":")))
+
+    size_kb = out_path.stat().st_size / 1024
+    elapsed = time.monotonic() - t_start
+    log(f"\nwrote {out_path} ({size_kb:.0f} KB, {len(points)} points)")
+    log(f"done in {elapsed:.1f}s")
+
+
+if __name__ == "__main__":
+    main()

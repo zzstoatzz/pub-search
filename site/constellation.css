@@ -1,0 +1,205 @@
+:root, [data-theme="dark"] {
+  --bg: #050505;
+  --bg-subtle: #111;
+  --text: #ccc;
+  --text-bright: #fff;
+  --text-secondary: #888;
+  --text-dim: #555;
+  --text-muted: #444;
+  --tooltip-bg: rgba(10, 10, 10, 0.92);
+  --tooltip-border: #333;
+  --overlay-bg: rgba(5, 5, 5, 0.85);
+}
+
+[data-theme="light"] {
+  --bg: #f5f5f0;
+  --bg-subtle: #eee;
+  --text: #333;
+  --text-bright: #111;
+  --text-secondary: #555;
+  --text-dim: #888;
+  --text-muted: #999;
+  --tooltip-bg: rgba(245, 245, 240, 0.92);
+  --tooltip-border: #ccc;
+  --overlay-bg: rgba(245, 245, 240, 0.85);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: monospace;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+canvas:active {
+  cursor: grabbing;
+}
+
+/* header overlay */
+.header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 16px;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header > * {
+  pointer-events: auto;
+}
+
+.header h1 {
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.header h1 a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.header h1 a:hover {
+  color: var(--text-bright);
+}
+
+.header .dim {
+  color: var(--text-dim);
+}
+
+.header .nav {
+  font-size: 11px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.header .nav a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.header .nav a:hover {
+  color: var(--text-secondary);
+}
+
+.theme-toggle {
+  cursor: pointer;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.theme-toggle:hover {
+  color: var(--text-secondary);
+}
+
+/* tooltip */
+.tooltip {
+  display: none;
+  position: fixed;
+  z-index: 20;
+  background: var(--tooltip-bg);
+  border: 1px solid var(--tooltip-border);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 320px;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.tooltip .title {
+  color: var(--text-bright);
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tooltip .meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tooltip .platform-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-top: 2px;
+}
+
+/* loading overlay */
+.loading-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 30;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  transition: opacity 0.4s;
+}
+
+.loading-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-overlay .spinner {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* legend */
+.legend {
+  position: fixed;
+  bottom: 12px;
+  left: 16px;
+  z-index: 10;
+  font-size: 10px;
+  color: var(--text-dim);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* stats */
+.stats {
+  position: fixed;
+  bottom: 12px;
+  right: 16px;
+  z-index: 10;
+  font-size: 10px;
+  color: var(--text-muted);
+}
