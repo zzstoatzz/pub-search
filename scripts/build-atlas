@@ -498,13 +498,11 @@ def main():
     unique_dids = {p["did"] for p in publications if p["did"]}
     log(f"  resolving avatars for {len(unique_dids)} unique authors...")
     did_avatars: dict[str, str] = {}
-    batch_size = 25
     did_list = list(unique_dids)
-    for i in range(0, len(did_list), batch_size):
-        batch = did_list[i : i + batch_size]
-        for did in batch:
+    with httpx.Client() as avatar_client:
+        for did in did_list:
             try:
-                resp = client.get(
+                resp = avatar_client.get(
                     f"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={did}",
                     timeout=10,
                 )
