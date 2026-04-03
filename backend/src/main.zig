@@ -90,6 +90,9 @@ fn initServices(allocator: std.mem.Allocator) void {
     tpuf.init();
     tpuf.startKeepalive(allocator);
 
+    // keep turso connection warm (avoids ~1s TLS handshake on first query after idle)
+    db.startKeepalive();
+
     // start reconciler (verifies documents still exist at source PDS)
     ingest.reconciler.start(allocator);
 

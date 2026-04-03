@@ -60,6 +60,10 @@ pub fn getClient() ?*Client {
     return null;
 }
 
+pub fn startKeepalive() void {
+    if (client) |*c| c.startKeepalive();
+}
+
 /// Get local db if ready (synced and available)
 pub fn getLocalDb() ?*LocalDb {
     if (local_db) |*l| {

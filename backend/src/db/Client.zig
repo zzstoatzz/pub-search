@@ -317,3 +317,25 @@ fn truncateSql(sql: []const u8) []const u8 {
     const max_len = 100;
     return if (sql.len > max_len) sql[0..max_len] else sql;
 }
+
+// --- keepalive ---
+
+const KEEPALIVE_INTERVAL_NS: u64 = 3 * 60 * std.time.ns_per_s; // 3 minutes
+
+pub fn startKeepalive(self: *Client) void {
+    const thread = std.Thread.spawn(.{}, keepaliveLoop, .{self}) catch |err| {
+        logfire.warn("turso: failed to start keepalive thread: {}", .{err});
+        return;
+    };
+    thread.detach();
+    logfire.info("turso: keepalive started (interval=3m)", .{});
+}
+
+fn keepaliveLoop(self: *Client) void {
+    while (true) {
+        std.Thread.sleep(KEEPALIVE_INTERVAL_NS);
+        _ = self.exec("SELECT 1", .{}) catch |err| {
+            logfire.debug("turso: keepalive ping failed: {}", .{err});
+        };
+    }
+}
