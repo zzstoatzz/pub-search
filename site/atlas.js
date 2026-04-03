@@ -783,9 +783,10 @@
   function findNearestPub(sx, sy) {
     if (!pubData || pubData.length === 0) return -1;
     cacheTransform();
+    var z = view.zoom;
     for (var i = 0; i < pubData.length; i++) {
       var pub = pubData[i];
-      var pr = Math.min(40, Math.sqrt(pub.count) * zoom * 0.5);
+      var pr = Math.min(40, Math.sqrt(pub.count) * z * 0.5);
       if (pr < 4) continue;
       var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
       var dx = sx - psx, dy = sy - psy;
