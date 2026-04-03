@@ -777,7 +777,51 @@
 
   // --- hover state ---
   var hoveredIndex = -1;
+  var hoveredPub = -1; // index into pubData
   var mouseX = 0, mouseY = 0;
+
+  function findNearestPub(sx, sy) {
+    if (!pubData || pubData.length === 0) return -1;
+    cacheTransform();
+    for (var i = 0; i < pubData.length; i++) {
+      var pub = pubData[i];
+      var pr = Math.min(40, Math.sqrt(pub.count) * zoom * 0.5);
+      if (pr < 4) continue;
+      var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
+      var dx = sx - psx, dy = sy - psy;
+      if (dx * dx + dy * dy <= pr * pr) return i;
+    }
+    return -1;
+  }
+
+  function pubUrl(pub) {
+    if (pub.basePath) return 'https://' + pub.basePath;
+    return null;
+  }
+
+  function showPubTooltip(pubIdx, sx, sy) {
+    var pub = pubData[pubIdx];
+    tooltipTitle.textContent = pub.name || pub.basePath;
+    tooltipMeta.textContent = pub.count + ' documents';
+    tooltipPlatform.textContent = pub.platform || 'other';
+    var c = frameColors[pub.platform] || frameColors.other;
+    tooltipPlatform.style.background = c.edge;
+    tooltipPlatform.style.color = c.core;
+    tooltip.style.display = 'block';
+    var tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+    if (isMobile) {
+      var tx = Math.max(8, Math.min(W - tw - 8, (W - tw) / 2));
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top = '48px';
+    } else {
+      var tx = sx + 16, ty = sy - th - 8;
+      if (tx + tw > W - 10) tx = sx - tw - 16;
+      if (ty < 10) ty = sy + 16;
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top = ty + 'px';
+    }
+    canvas.style.cursor = 'pointer';
+  }
 
   // --- mobile detection ---
   var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -821,6 +865,18 @@
       return;
     }
     cacheTransform();
+    // check publications first (rendered on top of points)
+    var pi = findNearestPub(mouseX, mouseY);
+    if (pi >= 0) {
+      if (hoveredPub !== pi) {
+        hoveredPub = pi;
+        hoveredIndex = -1;
+        markDirty();
+        showPubTooltip(pi, mouseX, mouseY);
+      }
+      return;
+    }
+    hoveredPub = -1;
     var idx = findNearest(mouseX, mouseY, HIT_RADIUS);
     if (idx !== hoveredIndex) {
       hoveredIndex = idx;
@@ -832,10 +888,16 @@
 
   window.addEventListener('mouseup', function(e) {
     if (dragging) {
-      if (Math.abs(e.clientX - dragStartX) < 4 && Math.abs(e.clientY - dragStartY) < 4 && hoveredIndex >= 0) {
-        var p = data.points[hoveredIndex];
-        var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
-        if (url) window.open(url, '_blank');
+      if (Math.abs(e.clientX - dragStartX) < 4 && Math.abs(e.clientY - dragStartY) < 4) {
+        // check publication click first
+        if (hoveredPub >= 0) {
+          var url = pubUrl(pubData[hoveredPub]);
+          if (url) window.open(url, '_blank');
+        } else if (hoveredIndex >= 0) {
+          var p = data.points[hoveredIndex];
+          var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
+          if (url) window.open(url, '_blank');
+        }
       }
       dragging = false;
     }
@@ -915,27 +977,33 @@
           Math.abs(endedTouches[0].clientY - dragStartY) < 10)) {
         var tx = endedTouches[0].clientX, ty = endedTouches[0].clientY;
         cacheTransform();
-        var idx = findNearest(tx, ty, HIT_RADIUS);
-        if (idx >= 0) {
-          if (idx === selectedIndex) {
-            // second tap on same point — open URL
-            var p = data.points[idx];
-            var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
-            if (url) window.open(url, '_blank');
-            selectedIndex = -1;
-            hideTooltip();
-          } else {
-            // first tap — show tooltip
-            selectedIndex = idx;
-            hoveredIndex = idx;
-            showTooltip(idx, tx, ty);
-            markDirty();
-          }
-        } else {
-          // tapped empty space — dismiss
+        // check publications first
+        var pi = findNearestPub(tx, ty);
+        if (pi >= 0) {
+          var url = pubUrl(pubData[pi]);
+          if (url) window.open(url, '_blank');
           selectedIndex = -1;
           hideTooltip();
-          markDirty();
+        } else {
+          var idx = findNearest(tx, ty, HIT_RADIUS);
+          if (idx >= 0) {
+            if (idx === selectedIndex) {
+              var p = data.points[idx];
+              var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
+              if (url) window.open(url, '_blank');
+              selectedIndex = -1;
+              hideTooltip();
+            } else {
+              selectedIndex = idx;
+              hoveredIndex = idx;
+              showTooltip(idx, tx, ty);
+              markDirty();
+            }
+          } else {
+            selectedIndex = -1;
+            hideTooltip();
+            markDirty();
+          }
         }
       }
     }
@@ -975,6 +1043,7 @@
   function hideTooltip() {
     tooltip.style.display = 'none';
     hoveredIndex = -1;
+    hoveredPub = -1;
     canvas.style.cursor = dragging ? 'grabbing' : 'grab';
   }
 
