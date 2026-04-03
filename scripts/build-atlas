@@ -107,13 +107,13 @@ def turso_query_publications(settings: Settings) -> dict[str, dict]:
                 "type": "execute",
                 "stmt": {
                     "sql": (
-                        "SELECT p.name, p.base_path, p.did, ci.cover_image "
+                        "SELECT p.name, p.base_path, p.did, c.cover_image "
                         "FROM publications p "
                         "LEFT JOIN ("
-                        "  SELECT publication_uri, cover_image, "
-                        "  ROW_NUMBER() OVER (PARTITION BY publication_uri) AS rn "
-                        "  FROM documents WHERE cover_image IS NOT NULL"
-                        ") ci ON ci.publication_uri = p.uri AND ci.rn = 1"
+                        "  SELECT publication_uri, MIN(cover_image) as cover_image "
+                        "  FROM documents WHERE cover_image IS NOT NULL "
+                        "  GROUP BY publication_uri"
+                        ") c ON c.publication_uri = p.uri"
                     )
                 },
             },
@@ -124,15 +124,17 @@ def turso_query_publications(settings: Settings) -> dict[str, dict]:
     try:
         resp = httpx.post(url, headers=headers, json=body, timeout=30)
         resp.raise_for_status()
-    except Exception as e:
-        log(f"  warning: turso query failed: {e}")
+        results = resp.json().get("results", [])
+        if not results or "response" not in results[0]:
+            return {}
+        rows = results[0]["response"]["result"]["rows"]
+        cols = [c["name"] for c in results[0]["response"]["result"]["cols"]]
+    except httpx.HTTPError as e:
+        log(f"  warning: turso request failed: {e}")
         return {}
-    results = resp.json().get("results", [])
-    if not results or "response" not in results[0]:
+    except (KeyError, IndexError) as e:
+        log(f"  warning: unexpected turso response: {e}")
         return {}
-
-    rows = results[0]["response"]["result"]["rows"]
-    cols = [c["name"] for c in results[0]["response"]["result"]["cols"]]
     lookup = {}
     for row in rows:
         values = {cols[i]: (row[i]["value"] if row[i]["type"] != "null" else None) for i in range(len(cols))}
