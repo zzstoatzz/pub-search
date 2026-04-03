@@ -21,17 +21,61 @@
 
   var PLATFORMS = ['leaflet', 'whitewind', 'pckt', 'offprint', 'greengale', 'other'];
 
-  function getColors() {
-    return document.documentElement.getAttribute('data-theme') === 'light'
-      ? PLATFORM_COLORS_LIGHT : PLATFORM_COLORS;
+  // --- precomputed color cache (rebuilt once per frame) ---
+  var frameColors = null; // current platform colors object
+  var frameDark = true;   // current theme
+  var frameRgba = null;   // { platform: { core_XX: 'rgba(...)' } } — precomputed rgba strings
+
+  function parseHex(hex) {
+    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
   }
 
-  function isDark() {
-    return document.documentElement.getAttribute('data-theme') !== 'light';
+  // build all rgba strings we'll need this frame
+  function cacheFrameColors() {
+    var dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    frameDark = dark;
+    frameColors = dark ? PLATFORM_COLORS : PLATFORM_COLORS_LIGHT;
+    frameRgba = {};
+    var alphas = [0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.14, 0.18, 0.25, 0.40, 0.70, 1.0];
+    for (var p = 0; p < PLATFORMS.length; p++) {
+      var name = PLATFORMS[p];
+      var c = frameColors[name];
+      var entry = {};
+      var parts = { core: parseHex(c.core), mid: parseHex(c.mid), edge: parseHex(c.edge) };
+      for (var key in parts) {
+        var rgb = parts[key];
+        for (var a = 0; a < alphas.length; a++) {
+          entry[key + '_' + alphas[a]] = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alphas[a] + ')';
+        }
+      }
+      frameRgba[name] = entry;
+    }
+  }
+
+  function hexToRgba(hex, a) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
   }
 
   // --- view state ---
   var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 30, dirty: true };
+
+  // --- demand-driven frame scheduling ---
+  var frameRequested = false;
+
+  function scheduleFrame() {
+    if (!frameRequested) {
+      frameRequested = true;
+      requestAnimationFrame(loop);
+    }
+  }
+
+  function markDirty() {
+    view.dirty = true;
+    scheduleFrame();
+  }
 
   // --- data ---
   var data = null;
@@ -40,6 +84,7 @@
   var platformIdx = null;
   var gridIndex = null;
   var uriToIndex = null; // Map<uri, index> for search matching
+  var clusterFineArr = null; // Uint8Array of fine cluster IDs per point
 
   // --- search state ---
   var searchMatches = null; // Set of point indices matching current search
@@ -65,16 +110,17 @@
   var spriteTheme = null;
 
   function buildSprites(radius) {
+    // quantize radius to 0.5px steps to avoid rebuilding during smooth zoom
+    radius = Math.round(radius * 2) / 2;
     var size = Math.ceil(radius * 6 * dpr) + 2;
     if (size < 4) size = 4;
-    var theme = isDark() ? 'dark' : 'light';
+    var theme = frameDark ? 'dark' : 'light';
     if (sprites && spriteSize === size && spriteTheme === theme) return;
     spriteSize = size;
     spriteTheme = theme;
-    var colors = getColors();
     sprites = [];
     for (var p = 0; p < PLATFORMS.length; p++) {
-      var c = colors[PLATFORMS[p]];
+      var c = frameColors[PLATFORMS[p]];
       sprites.push({
         normal: makeSprite(size, radius * dpr, c, 0.7),
         hover:  makeSprite(size * 2, radius * dpr * 2, c, 1.0),
@@ -109,23 +155,65 @@
   var dotTheme = null;
 
   function buildDotSprites() {
-    var theme = isDark() ? 'dark' : 'light';
+    var theme = frameDark ? 'dark' : 'light';
     if (dotSprites && dotTheme === theme) return;
     dotTheme = theme;
-    var colors = getColors();
     dotSprites = [];
     var s = Math.max(4, Math.ceil(3 * dpr));
     for (var p = 0; p < PLATFORMS.length; p++) {
       var cv = document.createElement('canvas');
       cv.width = s; cv.height = s;
       var c = cv.getContext('2d');
-      c.fillStyle = colors[PLATFORMS[p]].mid;
+      c.fillStyle = frameColors[PLATFORMS[p]].mid;
       c.globalAlpha = 0.7;
       c.beginPath();
       c.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2);
       c.fill();
       dotSprites.push(cv);
     }
+  }
+
+  // --- nebula halo sprite cache ---
+  var haloSprites = null; // { theme, entries: { 'platform_bucket': canvas } }
+  var HALO_BUCKETS = [20, 50, 100, 200, 400]; // radius pixel buckets
+
+  function getHaloBucket(radiusPx) {
+    for (var i = 0; i < HALO_BUCKETS.length; i++) {
+      if (radiusPx <= HALO_BUCKETS[i]) return HALO_BUCKETS[i];
+    }
+    return HALO_BUCKETS[HALO_BUCKETS.length - 1];
+  }
+
+  function buildHaloSprite(platform, bucket) {
+    var size = bucket * 2 + 4;
+    var cv = document.createElement('canvas');
+    cv.width = size; cv.height = size;
+    var c = cv.getContext('2d');
+    var half = size / 2;
+    var nc = frameColors[platform];
+    var grad = c.createRadialGradient(half, half, 0, half, half, bucket);
+    grad.addColorStop(0, hexToRgba(nc.core, 1));
+    grad.addColorStop(0.3, hexToRgba(nc.mid, 0.5));
+    grad.addColorStop(0.7, hexToRgba(nc.edge, 0.2));
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = grad;
+    c.beginPath();
+    c.arc(half, half, bucket, 0, Math.PI * 2);
+    c.fill();
+    return cv;
+  }
+
+  function getHaloSprite(platform, radiusPx) {
+    var theme = frameDark ? 'dark' : 'light';
+    if (!haloSprites || haloSprites.theme !== theme) {
+      haloSprites = { theme: theme, entries: {} };
+    }
+    var bucket = getHaloBucket(radiusPx);
+    var key = platform + '_' + bucket;
+    if (!haloSprites.entries[key]) {
+      haloSprites.entries[key] = buildHaloSprite(platform, bucket);
+    }
+    return { sprite: haloSprites.entries[key], bucket: bucket };
   }
 
   function resizeCanvas() {
@@ -138,7 +226,8 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     sprites = null;
     dotSprites = null;
-    view.dirty = true;
+    haloSprites = null;
+    markDirty();
   }
 
   // --- coordinate transforms (inlined for hot path) ---
@@ -202,12 +291,45 @@
     ctx.fillText(text, x, y);
   }
 
+  // --- smooth transition helpers ---
+  function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+  function fadeIn(zoom, start, range) { return clamp01((zoom - start) / range); }
+  function fadeOut(zoom, start, range) { return 1 - clamp01((zoom - start) / range); }
+
+  // --- connection line buffers (pre-allocated, reused each frame) ---
+  var connBufSize = 6000;
+  var connBufs = null; // [platform][bucket] = Float32Array
+  var connBufLens = null; // [platform][bucket] = current length
+
+  function initConnBuffers() {
+    connBufs = [];
+    connBufLens = [];
+    for (var p = 0; p < PLATFORMS.length; p++) {
+      connBufs.push([
+        new Float32Array(connBufSize),
+        new Float32Array(connBufSize),
+        new Float32Array(connBufSize)
+      ]);
+      connBufLens.push([0, 0, 0]);
+    }
+  }
+
+  function resetConnBuffers() {
+    for (var p = 0; p < PLATFORMS.length; p++) {
+      connBufLens[p][0] = 0;
+      connBufLens[p][1] = 0;
+      connBufLens[p][2] = 0;
+    }
+  }
+
   // --- rendering ---
   function render() {
     if (!data || !view.dirty) return;
     view.dirty = false;
 
-    var dark = isDark();
+    // cache theme + colors once per frame
+    cacheFrameColors();
+    var dark = frameDark;
     var zoom = view.zoom;
     var n = data.points.length;
 
@@ -225,40 +347,46 @@
     var xMin = tl[0] - pad, xMax = br[0] + pad;
     var yMin = tl[1] - pad, yMax = br[1] + pad;
 
-    // --- cluster glows (zoomed out) ---
-    if (zoom < 4) {
+    // --- cluster nebula halos (colored by dominant platform) ---
+    // continuous alpha curve: full at zoom<2, fades gradually, floor at 25% of base
+    var haloAlphaFactor = zoom < 2 ? 1.0 : Math.max(0.25, 1 - (zoom - 2) / 8);
+    if (haloAlphaFactor > 0.01) {
       var clusters = zoom < 2 ? data.clusters.coarse : data.clusters.fine;
-      ctx.globalAlpha = zoom < 2 ? 0.6 : 0.3;
+      var baseAlpha = dark ? (zoom < 2 ? 0.06 : 0.04) : (zoom < 2 ? 0.05 : 0.03);
+      baseAlpha *= haloAlphaFactor;
       for (var c = 0; c < clusters.length; c++) {
         var cl = clusters[c];
+        var r = (cl.radius || 0.05) * scale;
+        if (r < 2) continue;
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
-        if (sx < -100 || sx > W + 100 || sy < -100 || sy > H + 100) continue;
-        var r = Math.sqrt(cl.count) * 2;
-        var grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
-        grad.addColorStop(0, dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)');
-        grad.addColorStop(1, 'transparent');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fill();
+        if (sx + r < 0 || sx - r > W || sy + r < 0 || sy - r > H) continue;
+        var platform = cl.dominantPlatform || 'other';
+        var halo = getHaloSprite(platform, r);
+        var spriteScale = r / halo.bucket;
+        var drawSize = halo.sprite.width * spriteScale;
+        ctx.globalAlpha = baseAlpha * 2; // match original: gradient center was baseAlpha*2
+        ctx.drawImage(halo.sprite, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
       }
     }
 
-    // --- connection lines (batched by opacity bucket) ---
-    if (zoom >= 3 && gridIndex) {
+    // --- connection lines (intra-cluster, colored by platform) ---
+    // smooth fade-in over zoom 2.5–3.5
+    var connAlphaFactor = fadeIn(zoom, 2.5, 1.0);
+    if (connAlphaFactor > 0 && gridIndex && clusterFineArr) {
+      if (!connBufs) initConnBuffers();
+      resetConnBuffers();
+
       var connRadius = 0.025;
       var cs = gridIndex.cellSize;
       var maxLines = 1500;
       var lineCount = 0;
-
-      // batch into 3 opacity buckets to minimize style changes
-      var buckets = [[], [], []]; // near, mid, far
 
       for (var i = 0; i < n && lineCount < maxLines; i++) {
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
 
         var sx1 = cx + px * scale, sy1 = cy + py * scale;
+        var ci = clusterFineArr[i];
         var gxMin2 = Math.floor((px - connRadius) / cs);
         var gxMax2 = Math.floor((px + connRadius) / cs);
         var gyMin2 = Math.floor((py - connRadius) / cs);
@@ -271,34 +399,46 @@
             for (var k = 0; k < cell.length && lineCount < maxLines; k++) {
               var j = cell[k];
               if (j <= i) continue;
+              if (clusterFineArr[j] !== ci) continue;
               var dx = pointsX[j] - px, dy = pointsY[j] - py;
               var dist2 = dx * dx + dy * dy;
               if (dist2 > connRadius * connRadius || dist2 < 0.0001) continue;
-              var t = Math.sqrt(dist2) / connRadius; // 0=close, 1=far
+              var t = Math.sqrt(dist2) / connRadius;
               var bucket = t < 0.33 ? 0 : t < 0.66 ? 1 : 2;
-              buckets[bucket].push(sx1, sy1, cx + pointsX[j] * scale, cy + pointsY[j] * scale);
+              var pi = platformIdx[i];
+              var buf = connBufs[pi][bucket];
+              var len = connBufLens[pi][bucket];
+              if (len + 4 <= buf.length) {
+                buf[len] = sx1;
+                buf[len + 1] = sy1;
+                buf[len + 2] = cx + pointsX[j] * scale;
+                buf[len + 3] = cy + pointsY[j] * scale;
+                connBufLens[pi][bucket] = len + 4;
+              }
               lineCount++;
             }
           }
         }
       }
 
-      // draw each bucket in one path
-      var opacities = dark
-        ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.06)', 'rgba(255,255,255,0.03)']
-        : ['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.05)', 'rgba(0,0,0,0.02)'];
+      // draw each platform × distance bucket
+      var connAlphas = dark ? [0.18, 0.10, 0.05] : [0.14, 0.08, 0.03];
       ctx.lineWidth = 0.5;
-      for (var b = 0; b < 3; b++) {
-        var buf = buckets[b];
-        if (!buf.length) continue;
-        ctx.beginPath();
-        for (var l = 0; l < buf.length; l += 4) {
-          ctx.moveTo(buf[l], buf[l + 1]);
-          ctx.lineTo(buf[l + 2], buf[l + 3]);
+      for (var p = 0; p < PLATFORMS.length; p++) {
+        var cc = frameColors[PLATFORMS[p]];
+        for (var b = 0; b < 3; b++) {
+          var len = connBufLens[p][b];
+          if (!len) continue;
+          var buf = connBufs[p][b];
+          ctx.beginPath();
+          for (var l = 0; l < len; l += 4) {
+            ctx.moveTo(buf[l], buf[l + 1]);
+            ctx.lineTo(buf[l + 2], buf[l + 3]);
+          }
+          ctx.strokeStyle = hexToRgba(cc.mid, connAlphas[b] * connAlphaFactor);
+          ctx.globalAlpha = 1;
+          ctx.stroke();
         }
-        ctx.strokeStyle = opacities[b];
-        ctx.globalAlpha = 1;
-        ctx.stroke();
       }
     }
 
@@ -420,10 +560,18 @@
     // label margin: keep labels inside viewport with some padding
     var LABEL_MARGIN = small ? 8 : 12;
 
-    if (zoom < 2) {
-      // coarse labels — sort by cluster size so biggest labels win
+    // smooth label transitions:
+    // coarse labels: full opacity zoom<1.7, fade out 1.7–2.3
+    // fine labels: fade in 1.7–2.3, full opacity 2.3–4.5, fade out 4.5–5.5
+    // titles: fade in 4.5–5.5, full opacity 5.5+
+    var coarseAlpha = fadeOut(zoom, 1.7, 0.6);
+    var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 4.5, 1.0);
+    var titleAlpha = fadeIn(zoom, 4.5, 1.0);
+
+    if (coarseAlpha > 0.01) {
       ctx.font = (small ? '9px' : '12px') + ' monospace';
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = 0.85 * coarseAlpha;
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
       var fontSize = small ? 9 : 12;
       var sorted = data.clusters.coarse.slice().sort(function(a, b) { return b.count - a.count; });
       for (var c = 0; c < sorted.length; c++) {
@@ -432,15 +580,16 @@
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
         var halfW = tw / 2;
-        // clamp horizontally so label stays in viewport
         if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
         if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
         if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
-    } else if (zoom < 5) {
-      // fine labels — sort by size
+    }
+
+    if (fineAlpha > 0.01) {
       ctx.font = (small ? '8px' : '11px') + ' monospace';
-      ctx.globalAlpha = 0.75;
+      ctx.globalAlpha = 0.75 * fineAlpha;
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
       var fontSize = small ? 8 : 11;
       var sorted = data.clusters.fine.slice().sort(function(a, b) { return b.count - a.count; });
       for (var c = 0; c < sorted.length; c++) {
@@ -454,10 +603,12 @@
         if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
         if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
-    } else {
-      // document titles
+    }
+
+    if (titleAlpha > 0.01) {
       ctx.font = (small ? '9px' : '11px') + ' monospace';
-      ctx.globalAlpha = 0.7;
+      ctx.globalAlpha = 0.7 * titleAlpha;
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
       var fontSize = small ? 9 : 11;
       var shown = 0, maxLabels = small ? 20 : 50;
       var truncLen = small ? 25 : 45;
@@ -499,12 +650,17 @@
     animTo = { zoom: targetZoom, panX: -targetX, panY: -targetY };
     animStart = Date.now();
     animating = true;
+    scheduleFrame();
   }
 
   function loop() {
+    frameRequested = false;
     tickAnimation();
     render();
-    requestAnimationFrame(loop);
+    // keep looping only while animating
+    if (animating) {
+      scheduleFrame();
+    }
   }
 
   // --- hover state ---
@@ -532,7 +688,7 @@
     var d2 = screenToData(e.clientX, e.clientY);
     view.panX += d2[0] - d[0];
     view.panY += d2[1] - d[1];
-    view.dirty = true;
+    markDirty();
   }, { passive: false });
 
   canvas.addEventListener('mousedown', function(e) {
@@ -548,7 +704,7 @@
       cacheTransform();
       view.panX = dragStartPanX + (e.clientX - dragStartX) / scale;
       view.panY = dragStartPanY + (e.clientY - dragStartY) / scale;
-      view.dirty = true;
+      markDirty();
       hideTooltip();
       return;
     }
@@ -556,7 +712,7 @@
     var idx = findNearest(mouseX, mouseY, HIT_RADIUS);
     if (idx !== hoveredIndex) {
       hoveredIndex = idx;
-      view.dirty = true;
+      markDirty();
       if (idx >= 0) showTooltip(idx, mouseX, mouseY);
       else hideTooltip();
     }
@@ -614,7 +770,7 @@
       cacheTransform();
       view.panX = dragStartPanX + (touches[ids[0]].x - dragStartX) / scale;
       view.panY = dragStartPanY + (touches[ids[0]].y - dragStartY) / scale;
-      view.dirty = true;
+      markDirty();
       hideTooltip();
       selectedIndex = -1;
     } else if (ids.length === 2) {
@@ -628,7 +784,7 @@
       var midDataNew = screenToData(pinchMidX, pinchMidY);
       view.panX += midDataNew[0] - midDataOld[0];
       view.panY += midDataNew[1] - midDataOld[1];
-      view.dirty = true;
+      markDirty();
     }
   }, { passive: false });
 
@@ -661,13 +817,13 @@
             selectedIndex = idx;
             hoveredIndex = idx;
             showTooltip(idx, tx, ty);
-            view.dirty = true;
+            markDirty();
           }
         } else {
           // tapped empty space — dismiss
           selectedIndex = -1;
           hideTooltip();
-          view.dirty = true;
+          markDirty();
         }
       }
     }
@@ -684,7 +840,7 @@
     tooltipTitle.textContent = p.title || '(untitled)';
     tooltipMeta.textContent = p.basePath || p.uri;
     tooltipPlatform.textContent = p.platform;
-    var c = getColors()[p.platform] || getColors().other;
+    var c = frameColors[p.platform] || frameColors.other;
     tooltipPlatform.style.background = c.edge;
     tooltipPlatform.style.color = c.core;
     tooltip.style.display = 'block';
@@ -736,12 +892,12 @@
 
   function renderLegend() {
     var el = document.getElementById('legend');
-    var colors = getColors();
+    if (!frameColors) cacheFrameColors();
     var html = '';
     for (var i = 0; i < PLATFORMS.length; i++) {
       var p = PLATFORMS[i];
       var dimmed = activePlatforms && !activePlatforms.has(p) ? ' dimmed' : '';
-      html += '<div class="legend-item' + dimmed + '" data-platform="' + p + '"><span class="legend-dot" style="background:' + colors[p].mid + '"></span>' + p + '</div>';
+      html += '<div class="legend-item' + dimmed + '" data-platform="' + p + '"><span class="legend-dot" style="background:' + frameColors[p].mid + '"></span>' + p + '</div>';
     }
     el.innerHTML = html;
     // attach click handlers
@@ -767,7 +923,7 @@
       if (activePlatforms.size === PLATFORMS.length) activePlatforms = null;
     }
     renderLegend();
-    view.dirty = true;
+    markDirty();
   }
 
   function loadData() {
@@ -795,6 +951,63 @@
         for (var i = 0; i < n; i++) {
           uriToIndex.set(d.points[i].uri, i);
         }
+        // build cluster metadata: fine cluster array, dominant platform, spatial radius
+        clusterFineArr = new Uint8Array(n);
+        var coarsePlatCounts = {};
+        var finePlatCounts = {};
+        for (var i = 0; i < n; i++) {
+          var cc = d.points[i].clusterCoarse;
+          var cf = d.points[i].clusterFine;
+          clusterFineArr[i] = cf;
+          if (!coarsePlatCounts[cc]) coarsePlatCounts[cc] = new Uint16Array(PLATFORMS.length);
+          if (!finePlatCounts[cf]) finePlatCounts[cf] = new Uint16Array(PLATFORMS.length);
+          coarsePlatCounts[cc][platformIdx[i]]++;
+          finePlatCounts[cf][platformIdx[i]]++;
+        }
+        function dominantPlatform(counts) {
+          if (!counts) return 'other';
+          var best = 0, bestP = 0;
+          for (var p = 0; p < PLATFORMS.length; p++) {
+            if (counts[p] > best) { best = counts[p]; bestP = p; }
+          }
+          return PLATFORMS[bestP];
+        }
+        var coarseById = {};
+        for (var c = 0; c < d.clusters.coarse.length; c++) {
+          var cl = d.clusters.coarse[c];
+          cl.dominantPlatform = dominantPlatform(coarsePlatCounts[cl.id]);
+          cl._distSum = 0; cl._distN = 0;
+          coarseById[cl.id] = cl;
+        }
+        var fineById = {};
+        for (var c = 0; c < d.clusters.fine.length; c++) {
+          var cl = d.clusters.fine[c];
+          cl.dominantPlatform = dominantPlatform(finePlatCounts[cl.id]);
+          cl._distSum = 0; cl._distN = 0;
+          fineById[cl.id] = cl;
+        }
+        for (var i = 0; i < n; i++) {
+          var ccl = coarseById[d.points[i].clusterCoarse];
+          if (ccl) {
+            var dx = pointsX[i] - ccl.cx, dy = pointsY[i] - ccl.cy;
+            ccl._distSum += Math.sqrt(dx * dx + dy * dy);
+            ccl._distN++;
+          }
+          var fcl = fineById[d.points[i].clusterFine];
+          if (fcl) {
+            var dx = pointsX[i] - fcl.cx, dy = pointsY[i] - fcl.cy;
+            fcl._distSum += Math.sqrt(dx * dx + dy * dy);
+            fcl._distN++;
+          }
+        }
+        for (var c = 0; c < d.clusters.coarse.length; c++) {
+          var cl = d.clusters.coarse[c];
+          cl.radius = cl._distN > 0 ? (cl._distSum / cl._distN) * 2 : 0.05;
+        }
+        for (var c = 0; c < d.clusters.fine.length; c++) {
+          var cl = d.clusters.fine[c];
+          cl.radius = cl._distN > 0 ? (cl._distSum / cl._distN) * 2 : 0.02;
+        }
         buildSpatialIndex();
         renderLegend();
         document.getElementById('stats').textContent =
@@ -802,7 +1015,7 @@
           d.clusters.coarse.length + ' regions \u00B7 ' +
           d.clusters.fine.length + ' clusters';
         document.getElementById('loading').classList.add('hidden');
-        view.dirty = true;
+        markDirty();
         // jump to specific document by URI (from "view on atlas" links)
         if (pendingUri) {
           var idx = uriToIndex.get(pendingUri);
@@ -861,7 +1074,7 @@
       .catch(function() { return null; });
   }
   loadData();
-  loop();
+  scheduleFrame();
 
   function setSearchStatus(msg) {
     if (!searchStatusEl) {
@@ -882,7 +1095,7 @@
       url.searchParams.delete('q');
       history.replaceState(null, '', url);
     }
-    view.dirty = true;
+    markDirty();
   }
 
   function applySearchResults(resp, query) {
@@ -892,7 +1105,7 @@
       setSearchStatus('no results');
       searchMatches = null;
       searchCenter = null;
-      view.dirty = true;
+      markDirty();
       return;
     }
 
@@ -915,7 +1128,7 @@
       setSearchStatus(results.length + ' results, 0 on map');
       searchMatches = null;
       searchCenter = null;
-      view.dirty = true;
+      markDirty();
       return;
     }
 
@@ -985,8 +1198,9 @@
     setDirty: function() {
       sprites = null;
       dotSprites = null;
+      haloSprites = null;
       renderLegend();
-      view.dirty = true;
+      markDirty();
     }
   };
 })();
