@@ -94,16 +94,20 @@
   var PUB_MAX_CONCURRENT = 6;
   var pubLoadCount = 0;
 
-  function pubImageUrl(did, cid) {
-    if (!did || !cid) return null;
-    return 'https://cdn.bsky.app/img/feed_thumbnail/plain/' + did + '/' + cid + '@jpeg';
+  function pubImageUrl(pub) {
+    // prefer cover image, fall back to author avatar
+    if (pub.did && pub.coverImage) {
+      return 'https://cdn.bsky.app/img/feed_thumbnail/plain/' + pub.did + '/' + pub.coverImage + '@jpeg';
+    }
+    if (pub.avatar) return pub.avatar;
+    return null;
   }
 
   function loadPubImage(pub) {
     var key = pub.basePath;
     if (pubImages[key] || pubFailed[key] || pubLoading[key]) return;
     if (pubLoadCount >= PUB_MAX_CONCURRENT) return;
-    var url = pubImageUrl(pub.did, pub.coverImage);
+    var url = pubImageUrl(pub);
     if (!url) { pubFailed[key] = true; return; }
     pubLoading[key] = true;
     pubLoadCount++;
@@ -479,17 +483,15 @@
     }
 
     // --- publication circles ---
-    // radius = sqrt(count) * zoom * 0.5, no floor — small pubs vanish at low zoom
-    // at zoom 1: sqrt(50)≈7 → 3.5px (visible), sqrt(10)≈3 → 1.5px (culled)
-    // at zoom 3: sqrt(10)≈3 → 4.5px (appears), sqrt(4)=2 → 3px (culled)
-    // at zoom 6: sqrt(4)=2 → 6px (appears)
-    // result: ~25 visible at overview, hundreds at deep zoom, all smooth
+    // radius = sqrt(count) * zoom * 0.35, capped at 28px
+    // at zoom 1: sqrt(236)≈15 → 5.4px (visible), sqrt(30)≈5.5 → 1.9px (culled)
+    // smaller than before — publications accent the map, not dominate it
     if (pubData && pubData.length > 0) {
       var pubLabelZoom = 3;
       var pubRendered = 0;
       for (var pi2 = 0; pi2 < pubData.length; pi2++) {
         var pub = pubData[pi2];
-        var pr = Math.min(40, Math.sqrt(pub.count) * zoom * 0.5);
+        var pr = Math.min(28, Math.sqrt(pub.count) * zoom * 0.35);
         if (pr < 4) continue; // natural culling — small pubs disappear
         var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
         // cull off-screen (with padding for labels)
@@ -786,7 +788,7 @@
     var z = view.zoom;
     for (var i = 0; i < pubData.length; i++) {
       var pub = pubData[i];
-      var pr = Math.min(40, Math.sqrt(pub.count) * z * 0.5);
+      var pr = Math.min(28, Math.sqrt(pub.count) * z * 0.35);
       if (pr < 4) continue;
       var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
       var dx = sx - psx, dy = sy - psy;

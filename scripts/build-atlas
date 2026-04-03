@@ -466,10 +466,18 @@ def main():
         coords = X_2d[indices]
         centroid = coords.mean(axis=0)
         info = pub_lookup.get(bp, {})
+        # get DID from turso lookup first, fall back to documents
+        did = info.get("did", "")
+        if not did:
+            for idx in indices:
+                d = metadata[idx].get("did", "")
+                if d:
+                    did = d
+                    break
         pub = {
             "name": info.get("name") or bp,
             "basePath": bp,
-            "did": info.get("did", ""),
+            "did": did,
             "cx": round(float(centroid[0]), 4),
             "cy": round(float(centroid[1]), 4),
             "count": len(indices),
@@ -485,6 +493,32 @@ def main():
 
     publications.sort(key=lambda p: p["count"], reverse=True)
     log(f"  {len(publications)} publications with 2+ documents")
+
+    # fetch author avatars for publications (fallback when no cover image)
+    unique_dids = {p["did"] for p in publications if p["did"]}
+    log(f"  resolving avatars for {len(unique_dids)} unique authors...")
+    did_avatars: dict[str, str] = {}
+    batch_size = 25
+    did_list = list(unique_dids)
+    for i in range(0, len(did_list), batch_size):
+        batch = did_list[i : i + batch_size]
+        for did in batch:
+            try:
+                resp = client.get(
+                    f"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={did}",
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    avatar = resp.json().get("avatar", "")
+                    if avatar:
+                        did_avatars[did] = avatar
+            except Exception:
+                pass
+    log(f"  resolved {len(did_avatars)} avatars")
+
+    # attach avatar URLs to publications
+    for pub in publications:
+        pub["avatar"] = did_avatars.get(pub["did"], "")
 
     # --- step 6: build output ---
     log("building output...")
