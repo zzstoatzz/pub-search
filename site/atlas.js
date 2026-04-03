@@ -86,6 +86,43 @@
   var uriToIndex = null; // Map<uri, index> for search matching
   var clusterFineArr = null; // Uint8Array of fine cluster IDs per point
 
+  // --- publication state ---
+  var pubData = null; // array from atlas.json
+  var pubImages = {}; // basePath → HTMLImageElement (loaded)
+  var pubFailed = {}; // basePath → true (failed to load)
+  var pubLoading = {}; // basePath → true (currently loading)
+  var PUB_MAX_CONCURRENT = 6;
+  var pubLoadCount = 0;
+
+  function pubImageUrl(did, cid) {
+    if (!did || !cid) return null;
+    return 'https://cdn.bsky.app/img/feed_thumbnail/plain/' + did + '/' + cid + '@jpeg';
+  }
+
+  function loadPubImage(pub) {
+    var key = pub.basePath;
+    if (pubImages[key] || pubFailed[key] || pubLoading[key]) return;
+    if (pubLoadCount >= PUB_MAX_CONCURRENT) return;
+    var url = pubImageUrl(pub.did, pub.coverImage);
+    if (!url) { pubFailed[key] = true; return; }
+    pubLoading[key] = true;
+    pubLoadCount++;
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function() {
+      pubImages[key] = img;
+      delete pubLoading[key];
+      pubLoadCount--;
+      markDirty();
+    };
+    img.onerror = function() {
+      pubFailed[key] = true;
+      delete pubLoading[key];
+      pubLoadCount--;
+    };
+    img.src = url;
+  }
+
   // --- search state ---
   var searchMatches = null; // Set of point indices matching current search
   var searchCenter = null; // {x, y} weighted centroid of matches
@@ -440,6 +477,82 @@
           ctx.stroke();
         }
       }
+    }
+
+    // --- publication circles ---
+    // radius = sqrt(count) * zoom * 0.5, no floor — small pubs vanish at low zoom
+    // at zoom 1: sqrt(50)≈7 → 3.5px (visible), sqrt(10)≈3 → 1.5px (culled)
+    // at zoom 3: sqrt(10)≈3 → 4.5px (appears), sqrt(4)=2 → 3px (culled)
+    // at zoom 6: sqrt(4)=2 → 6px (appears)
+    // result: ~25 visible at overview, hundreds at deep zoom, all smooth
+    if (pubData && pubData.length > 0) {
+      var pubLabelZoom = 3;
+      var pubRendered = 0;
+      for (var pi2 = 0; pi2 < pubData.length; pi2++) {
+        var pub = pubData[pi2];
+        var pr = Math.min(40, Math.sqrt(pub.count) * zoom * 0.5);
+        if (pr < 4) continue; // natural culling — small pubs disappear
+        var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
+        // cull off-screen (with padding for labels)
+        if (psx < -60 || psx > W + 60 || psy < -60 || psy > H + 60) continue;
+        pubRendered++;
+        var pPlatform = pub.platform || 'other';
+        var pColors = frameColors[pPlatform] || frameColors.other;
+
+        // lazy-load image for visible, large-enough publications
+        if (pr >= 12) loadPubImage(pub);
+
+        var img = pubImages[pub.basePath];
+        if (img) {
+          // clipped circle with cover image
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.beginPath();
+          ctx.arc(psx, psy, pr, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(img, psx - pr, psy - pr, pr * 2, pr * 2);
+          ctx.restore();
+        } else {
+          // fallback: filled circle with first letter
+          ctx.globalAlpha = 0.7;
+          ctx.beginPath();
+          ctx.arc(psx, psy, pr, 0, Math.PI * 2);
+          ctx.fillStyle = pColors.edge;
+          ctx.fill();
+          // letter only when circle is large enough to read
+          if (pr >= 10) {
+            var letter = (pub.name || '?').charAt(0).toUpperCase();
+            var letterSize = Math.max(8, pr * 0.9);
+            ctx.font = 'bold ' + Math.round(letterSize) + 'px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = pColors.core;
+            ctx.globalAlpha = 0.9;
+            ctx.fillText(letter, psx, psy);
+          }
+        }
+
+        // border ring
+        ctx.globalAlpha = 0.6;
+        ctx.beginPath();
+        ctx.arc(psx, psy, pr, 0, Math.PI * 2);
+        ctx.strokeStyle = pColors.mid;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // name label at higher zoom
+        if (zoom >= pubLabelZoom && pr >= 10) {
+          var labelSize = Math.max(8, Math.min(12, pr * 0.5));
+          ctx.font = Math.round(labelSize) + 'px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.globalAlpha = Math.min(0.8, fadeIn(zoom, pubLabelZoom, 1.0));
+          ctx.fillStyle = dark ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)';
+          var pubLabel = pub.name.length > 20 ? pub.name.substring(0, 18) + '\u2026' : pub.name;
+          drawLabel(pubLabel, psx, psy + pr + 4, dark);
+        }
+      }
+      ctx.globalAlpha = 1;
     }
 
     // --- points: sprite-stamped ---
@@ -1008,12 +1121,15 @@
           var cl = d.clusters.fine[c];
           cl.radius = cl._distN > 0 ? (cl._distSum / cl._distN) * 2 : 0.02;
         }
+        // load publication data
+        pubData = d.publications || [];
         buildSpatialIndex();
         renderLegend();
-        document.getElementById('stats').textContent =
-          n.toLocaleString() + ' documents \u00B7 ' +
+        var statsText = n.toLocaleString() + ' documents \u00B7 ' +
           d.clusters.coarse.length + ' regions \u00B7 ' +
           d.clusters.fine.length + ' clusters';
+        if (pubData.length > 0) statsText += ' \u00B7 ' + pubData.length + ' publications';
+        document.getElementById('stats').textContent = statsText;
         document.getElementById('loading').classList.add('hidden');
         markDirty();
         // jump to specific document by URI (from "view on atlas" links)

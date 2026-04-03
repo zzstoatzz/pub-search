@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script --quiet
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["httpx", "numpy", "scikit-learn", "umap-learn", "hdbscan", "pydantic-settings"]
+# dependencies = ["httpx", "numpy", "scikit-learn", "umap-learn", "hdbscan", "pydantic-settings", "anthropic"]
 # ///
 """
 Build atlas.json — 2D semantic map of the document index.
@@ -41,6 +41,9 @@ class Settings(BaseSettings):
 
     turbopuffer_api_key: str
     turbopuffer_namespace: str = "leaflet-search"
+    anthropic_api_key: str = ""  # optional: enables LLM-refined cluster labels
+    turso_url: str = ""  # optional: enables publication data (e.g. https://leaf-....turso.io)
+    turso_token: str = ""
 
     @classmethod
     def settings_customise_sources(cls, settings_cls, **kwargs):
@@ -89,6 +92,58 @@ def tpuf_export(client: httpx.Client, settings: Settings) -> list[dict]:
     return all_rows
 
 
+def turso_query_publications(settings: Settings) -> dict[str, dict]:
+    """Fetch publication metadata from Turso. Returns basePath → {name, did, coverImage}."""
+    if not settings.turso_url or not settings.turso_token:
+        return {}
+
+    host = settings.turso_url.replace("https://", "").replace("http://", "").replace("libsql://", "")
+    url = f"https://{host}/v3/pipeline"
+    headers = {"Authorization": f"Bearer {settings.turso_token}"}
+
+    body = {
+        "requests": [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": (
+                        "SELECT p.name, p.base_path, p.did, "
+                        "(SELECT d.cover_image FROM documents d "
+                        "WHERE d.publication_uri = p.uri AND d.cover_image IS NOT NULL "
+                        "LIMIT 1) as cover_image "
+                        "FROM publications p"
+                    )
+                },
+            },
+            {"type": "close"},
+        ]
+    }
+
+    try:
+        resp = httpx.post(url, headers=headers, json=body, timeout=30)
+        resp.raise_for_status()
+    except (httpx.ConnectError, httpx.HTTPStatusError) as e:
+        log(f"  warning: turso query failed: {e}")
+        return {}
+    results = resp.json().get("results", [])
+    if not results or "response" not in results[0]:
+        return {}
+
+    rows = results[0]["response"]["result"]["rows"]
+    cols = [c["name"] for c in results[0]["response"]["result"]["cols"]]
+    lookup = {}
+    for row in rows:
+        values = {cols[i]: (row[i]["value"] if row[i]["type"] != "null" else None) for i in range(len(cols))}
+        bp = values.get("base_path")
+        if bp:
+            lookup[bp] = {
+                "name": values.get("name") or bp,
+                "did": values.get("did") or "",
+                "coverImage": values.get("cover_image") or "",
+            }
+    return lookup
+
+
 def extract_terms(title: str) -> list[str]:
     """Extract lowercase alphanumeric tokens from a title."""
     if not title:
@@ -128,6 +183,81 @@ def cluster_labels(titles_per_cluster: dict[int, list[str]], n_terms: int = 3) -
         labels[cid] = " ".join(top_terms) if top_terms else f"cluster {cid}"
 
     return labels
+
+
+def llm_refine_labels(
+    tfidf_labels: dict[int, str],
+    titles_per_cluster: dict[int, list[str]],
+    cluster_counts: dict[int, int],
+    api_key: str,
+    tier: str = "coarse",
+    batch_size: int = 15,
+) -> dict[int, str]:
+    """Refine c-TF-IDF labels with Claude Haiku for human-readable topic names."""
+    import asyncio
+    from anthropic import AsyncAnthropic
+
+    client = AsyncAnthropic(api_key=api_key)
+    rng = np.random.default_rng(42)
+
+    cluster_ids = sorted(tfidf_labels.keys())
+    batches = [cluster_ids[i : i + batch_size] for i in range(0, len(cluster_ids), batch_size)]
+
+    async def label_batch(batch: list[int]) -> dict[int, str]:
+        parts = []
+        for cid in batch:
+            titles = titles_per_cluster.get(cid, [])
+            sample = list(rng.choice(titles, size=min(12, len(titles)), replace=False)) if titles else []
+            parts.append(
+                f"Cluster {cid} ({cluster_counts.get(cid, 0)} docs):\n"
+                f"  Keywords: {tfidf_labels[cid]}\n"
+                f"  Sample titles: {', '.join(repr(t) for t in sample)}"
+            )
+
+        prompt = (
+            "You are labeling topic clusters for a document atlas — a 2D map where each cluster "
+            "represents a group of semantically similar blog posts and articles.\n\n"
+            "For each cluster below, write a short descriptive label (2-4 lowercase words) that "
+            "captures the theme. The label should read like a topic name on a map.\n\n"
+            "Good labels: \"ai language models\", \"bluesky development\", \"personal journals\", "
+            "\"spanish poetry\", \"game reviews\", \"home cooking\"\n"
+            "Bad labels: \"ai llms llm\", \"results april june\", \"39 let english\"\n\n"
+            + "\n\n".join(parts)
+            + "\n\nRespond with ONLY a JSON object mapping cluster ID (as string) to label. No other text."
+        )
+
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        # extract JSON from response (handle markdown code fences)
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        try:
+            parsed = json.loads(text)
+            return {int(k): str(v) for k, v in parsed.items()}
+        except (json.JSONDecodeError, ValueError):
+            log(f"  warning: failed to parse LLM response for batch, using TF-IDF fallback")
+            return {}
+
+    async def run_all():
+        results = await asyncio.gather(*[label_batch(b) for b in batches])
+        merged = {}
+        for r in results:
+            merged.update(r)
+        return merged
+
+    log(f"  refining {tier} labels with LLM ({len(batches)} batches, {len(cluster_ids)} clusters)...")
+    refined = asyncio.run(run_all())
+
+    # merge: use LLM labels where available, fall back to c-TF-IDF
+    final = {}
+    for cid in cluster_ids:
+        final[cid] = refined.get(cid, tfidf_labels[cid])
+    log(f"  {tier}: {len(refined)}/{len(cluster_ids)} labels refined by LLM")
+    return final
 
 
 def assign_outliers(coords_2d: np.ndarray, labels: np.ndarray, centroids: dict[int, np.ndarray]) -> np.ndarray:
@@ -267,7 +397,7 @@ def main():
         mask = labels_fine == cid
         fine_centroids[cid] = X_2d[mask].mean(axis=0)
 
-    # --- step 4: labels via c-TF-IDF ---
+    # --- step 4: labels via c-TF-IDF + optional LLM refinement ---
     log("computing cluster labels (c-TF-IDF on titles)...")
 
     coarse_titles: dict[int, list[str]] = {}
@@ -281,6 +411,24 @@ def main():
     coarse_labels = cluster_labels(coarse_titles)
     fine_labels = cluster_labels(fine_titles)
 
+    if settings.anthropic_api_key:
+        log("refining labels with LLM...")
+        coarse_counts = {int(cid): int((labels_coarse == cid).sum()) for cid in set(labels_coarse)}
+        fine_counts = {int(cid): int((labels_fine == cid).sum()) for cid in set(labels_fine)}
+        try:
+            coarse_labels = llm_refine_labels(
+                coarse_labels, coarse_titles, coarse_counts,
+                settings.anthropic_api_key, tier="coarse",
+            )
+            fine_labels = llm_refine_labels(
+                fine_labels, fine_titles, fine_counts,
+                settings.anthropic_api_key, tier="fine",
+            )
+        except Exception as e:
+            log(f"  LLM labeling failed, using c-TF-IDF fallback: {e}")
+    else:
+        log("  (no ANTHROPIC_API_KEY — using c-TF-IDF labels only)")
+
     # map fine clusters to their parent coarse cluster (majority vote)
     fine_to_coarse = {}
     for fine_id in set(labels_fine):
@@ -292,7 +440,49 @@ def main():
     log(f"  coarse: {len(coarse_labels)} labels")
     log(f"  fine: {len(fine_labels)} labels")
 
-    # --- step 5: build output ---
+    # --- step 5: publication centroids ---
+    log("computing publication centroids...")
+    pub_lookup = turso_query_publications(settings)
+    if pub_lookup:
+        log(f"  fetched {len(pub_lookup)} publications from turso")
+    else:
+        log("  (no TURSO_URL/TURSO_TOKEN — using basePath grouping only)")
+
+    # group documents by basePath → list of 2D positions
+    bp_groups: dict[str, list[int]] = {}
+    for i, meta in enumerate(metadata):
+        bp = meta.get("basePath", "")
+        if bp:
+            bp_groups.setdefault(bp, []).append(i)
+
+    publications = []
+    for bp, indices in bp_groups.items():
+        if len(indices) < 2:
+            continue
+        coords = X_2d[indices]
+        centroid = coords.mean(axis=0)
+        info = pub_lookup.get(bp, {})
+        pub = {
+            "name": info.get("name") or bp,
+            "basePath": bp,
+            "did": info.get("did", ""),
+            "cx": round(float(centroid[0]), 4),
+            "cy": round(float(centroid[1]), 4),
+            "count": len(indices),
+            "coverImage": info.get("coverImage", ""),
+        }
+        # determine dominant platform for this publication
+        plat_counts: dict[str, int] = {}
+        for idx in indices:
+            p = metadata[idx].get("platform", "other")
+            plat_counts[p] = plat_counts.get(p, 0) + 1
+        pub["platform"] = max(plat_counts, key=plat_counts.get)  # type: ignore
+        publications.append(pub)
+
+    publications.sort(key=lambda p: p["count"], reverse=True)
+    log(f"  {len(publications)} publications with 2+ documents")
+
+    # --- step 6: build output ---
     log("building output...")
 
     points = []
@@ -338,9 +528,11 @@ def main():
             "coarse": coarse_clusters,
             "fine": fine_clusters,
         },
+        "publications": publications,
         "meta": {
             "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "nDocuments": len(points),
+            "nPublications": len(publications),
         },
     }
 
