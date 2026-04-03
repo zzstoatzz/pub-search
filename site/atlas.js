@@ -717,7 +717,11 @@
     if (platform === 'whitewind' || collection.startsWith('com.whtwnd.')) return 'https://whtwnd.com/' + did + '/' + rkey;
     // skip non-document-serving hosts (blento is a card portal, not a document platform)
     var usableBase = basePath && !basePath.startsWith('blento.app');
-    // leaflet uses rkey directly
+    // leaflet: prefer path slug when available, fall back to rkey
+    if (platform === 'leaflet' && usableBase && path) {
+      var sep = path.charAt(0) === '/' ? '' : '/';
+      return 'https://' + basePath + sep + path;
+    }
     if (platform === 'leaflet' && usableBase) return 'https://' + basePath + '/' + rkey;
     // leaflet without basePath
     if (platform === 'leaflet') return 'https://leaflet.pub/p/' + did + '/' + rkey;
@@ -803,8 +807,29 @@
           d.clusters.fine.length + ' clusters';
         document.getElementById('loading').classList.add('hidden');
         view.dirty = true;
+        // jump to specific document by URI (from "view on atlas" links)
+        if (pendingUri) {
+          var idx = uriToIndex.get(pendingUri);
+          if (idx !== undefined) {
+            searchMatches = new Set([idx]);
+            searchCenter = { x: pointsX[idx], y: pointsY[idx] };
+            searchQuery = d.points[idx].title || '';
+            setSearchStatus('1 document');
+            animateTo(searchCenter.x, searchCenter.y, 12);
+            // show tooltip after animation
+            setTimeout(function() {
+              cacheTransform();
+              var sx = cx + pointsX[idx] * scale;
+              var sy = cy + pointsY[idx] * scale;
+              hoveredIndex = idx;
+              selectedIndex = idx;
+              showTooltip(idx, sx, sy);
+            }, ANIM_DURATION + 50);
+          }
+          pendingUri = null;
+        }
         // apply prefetched search results (fired in parallel with atlas.json)
-        if (pendingSearchResults) {
+        else if (pendingSearchResults) {
           pendingSearchResults.then(function(resp) {
             pendingSearchResults = null;
             if (resp) applySearchResults(resp, searchInput.value);
@@ -817,11 +842,23 @@
       });
   }
 
+  // --- search ---
+  var API_URL = 'https://leaflet-search-backend.fly.dev';
+  var searchInput = document.getElementById('search-input');
+  var searchForm = document.getElementById('search-form');
+  var searchStatusEl = null;
+  var pendingSearchResults = null; // promise for prefetched search results
+  var pendingUri = null; // URI to jump to after data loads (from "view on atlas" links)
+
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
-  // prefetch search results in parallel with atlas.json when ?q= is present
-  var urlQ = new URLSearchParams(window.location.search).get('q');
-  if (urlQ) {
+  // jump to specific document by URI, or prefetch search results
+  var urlParams = new URLSearchParams(window.location.search);
+  var urlUri = urlParams.get('uri');
+  var urlQ = urlParams.get('q');
+  if (urlUri) {
+    pendingUri = urlUri;
+  } else if (urlQ) {
     searchInput.value = urlQ;
     pendingSearchResults = fetch(API_URL + '/search?mode=semantic&limit=20&format=v2&q=' + encodeURIComponent(urlQ))
       .then(function(r) { return r.ok ? r.json() : null; })
@@ -829,13 +866,6 @@
   }
   loadData();
   loop();
-
-  // --- search ---
-  var API_URL = 'https://leaflet-search-backend.fly.dev';
-  var searchInput = document.getElementById('search-input');
-  var searchForm = document.getElementById('search-form');
-  var searchStatusEl = null;
-  var pendingSearchResults = null; // promise for prefetched search results
 
   function setSearchStatus(msg) {
     if (!searchStatusEl) {

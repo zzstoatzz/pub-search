@@ -690,6 +690,31 @@
       object-fit: cover;
     }
 
+    .atlas-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      margin-left: 6px;
+      display: inline-flex;
+      align-items: center;
+      vertical-align: middle;
+      opacity: 0.5;
+      transition: opacity 0.15s;
+    }
+
+    .atlas-link:hover {
+      opacity: 1;
+      color: var(--text-secondary);
+    }
+
+    .atlas-link svg { display: block; }
+
+    /* touch-active feedback */
+    @media (hover: none) and (pointer: coarse) {
+      .result:active {
+        background: var(--result-hover);
+      }
+    }
+
     /* mobile improvements */
     @media (max-width: 600px) {
       body {
@@ -1024,7 +1049,7 @@
               <div class="result-meta" ${doc.did ? `data-did="${escapeHtml(doc.did)}"` : ''}>
                 ${date ? `${date} | ` : ''}<span class="author-name"></span>${platformHome.url
                   ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
-                  : platformHome.label}
+                  : platformHome.label}<a href="/atlas.html?uri=${encodeURIComponent(doc.uri || '')}" class="atlas-link" title="view on atlas"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="3" cy="4" r="1.2" fill="currentColor"/><circle cx="8" cy="3" r="1" fill="currentColor" opacity=".6"/><circle cx="6" cy="8" r="1.2" fill="currentColor"/><circle cx="10" cy="7" r=".8" fill="currentColor" opacity=".4"/></svg></a>
               </div>
             </div>
           `;
