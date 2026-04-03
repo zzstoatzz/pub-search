@@ -717,11 +717,7 @@
     if (platform === 'whitewind' || collection.startsWith('com.whtwnd.')) return 'https://whtwnd.com/' + did + '/' + rkey;
     // skip non-document-serving hosts (blento is a card portal, not a document platform)
     var usableBase = basePath && !basePath.startsWith('blento.app');
-    // leaflet: prefer path slug when available, fall back to rkey
-    if (platform === 'leaflet' && usableBase && path) {
-      var sep = path.charAt(0) === '/' ? '' : '/';
-      return 'https://' + basePath + sep + path;
-    }
+    // leaflet uses rkey directly
     if (platform === 'leaflet' && usableBase) return 'https://' + basePath + '/' + rkey;
     // leaflet without basePath
     if (platform === 'leaflet') return 'https://leaflet.pub/p/' + did + '/' + rkey;
