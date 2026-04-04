@@ -28,10 +28,8 @@ pub const Data = struct {
     traffic_json: []const u8,
 };
 
-const compat = @import("../compat.zig");
-
 fn getRelayUrl() []const u8 {
-    return compat.getenv("TAP_RELAY_URL") orelse "unknown";
+    return if (std.c.getenv("TAP_RELAY_URL")) |p| std.mem.span(p) else "unknown";
 }
 
 // all dashboard queries batched into one request

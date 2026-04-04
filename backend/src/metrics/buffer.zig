@@ -2,9 +2,9 @@
 //! Follows activity.zig pattern: instant local writes, periodic remote sync
 
 const std = @import("std");
+const Io = std.Io;
 const db = @import("../db.zig");
 const logfire = @import("logfire");
-const compat = @import("../compat.zig");
 
 const SYNC_INTERVAL_MS = 5000; // 5 seconds
 const MAX_PENDING_SEARCHES = 256;
@@ -27,14 +27,17 @@ var cache_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(fals
 var pending_searches: [MAX_PENDING_SEARCHES]?[]const u8 = .{null} ** MAX_PENDING_SEARCHES;
 var search_write_idx: usize = 0;
 var search_read_idx: usize = 0;
-var search_mutex: compat.Mutex = .{};
+var search_mutex: Io.Mutex = Io.Mutex.init;
+var global_io: ?Io = null;
 
 // allocator for search string copies
 const search_allocator = std.heap.smp_allocator;
 
 var sync_thread: ?std.Thread = null;
 
-pub fn init() void {
+pub fn init(io: Io) void {
+    global_io = io;
+
     // seed cache immediately (so first /stats request is fast)
     if (db.getClient()) |c| {
         refreshCachedStats(c);
@@ -69,9 +72,10 @@ pub fn recordCacheMiss() void {
 // queue popular search (best effort, drops if full)
 pub fn queuePopularSearch(query: []const u8) void {
     if (query.len < 2) return;
+    const io = global_io.?;
 
-    search_mutex.lock();
-    defer search_mutex.unlock();
+    search_mutex.lockUncancelable(io);
+    defer search_mutex.unlock(io);
 
     // check if buffer is full
     const next_write = (search_write_idx + 1) % MAX_PENDING_SEARCHES;
@@ -128,8 +132,9 @@ pub fn getCachedStats() ?CachedStats {
 }
 
 fn syncLoop() void {
+    const io = global_io.?;
     while (true) {
-        compat.sleepMs(SYNC_INTERVAL_MS);
+        io.sleep(Io.Duration.fromMilliseconds(SYNC_INTERVAL_MS), .awake) catch {};
         syncToTurso();
     }
 }
@@ -214,8 +219,9 @@ fn syncStatsDelta(c: *db.Client, searches: i64, errors: i64, cache_hits: i64, ca
 }
 
 fn syncPopularSearches(c: *db.Client) void {
-    search_mutex.lock();
-    defer search_mutex.unlock();
+    const io = global_io.?;
+    search_mutex.lockUncancelable(io);
+    defer search_mutex.unlock(io);
 
     var synced: usize = 0;
     while (search_read_idx != search_write_idx) {

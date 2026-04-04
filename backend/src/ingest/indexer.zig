@@ -1,7 +1,7 @@
 const std = @import("std");
+const Io = std.Io;
 const logfire = @import("logfire");
 const db = @import("../db.zig");
-const compat = @import("../compat.zig");
 
 /// Hash title+content for cross-platform dedup.
 /// Returns a 16-char hex string (wyhash of "title\x00content").
@@ -284,12 +284,16 @@ pub fn insertPublication(
     ) catch {};
 }
 
+fn currentTimestamp(io: Io) i64 {
+    return @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
+}
+
 pub fn deleteDocument(uri: []const u8) void {
     const c = db.getClient() orelse return;
 
     // record tombstone
     var ts_buf: [20]u8 = undefined;
-    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{compat.timestamp()}) catch "0";
+    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
     c.exec(
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'document', ?)",
         &.{ uri, ts },
@@ -305,7 +309,7 @@ pub fn deletePublication(uri: []const u8) void {
 
     // record tombstone
     var ts_buf: [20]u8 = undefined;
-    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{compat.timestamp()}) catch "0";
+    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
     c.exec(
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'publication', ?)",
         &.{ uri, ts },

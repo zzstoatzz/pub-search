@@ -13,32 +13,38 @@ const http = std.http;
 const json = std.json;
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const Io = std.Io;
 const logfire = @import("logfire");
-const compat = @import("../compat.zig");
 const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
 const indexer = @import("indexer.zig");
 
 // config (env vars with defaults)
+fn getenv(key: [*:0]const u8) ?[]const u8 {
+    return if (std.c.getenv(key)) |p| std.mem.span(p) else null;
+}
+
 fn getIntervalSecs() u64 {
-    const val = compat.getenv("RECONCILE_INTERVAL_SECS") orelse "1800";
+    const val = getenv("RECONCILE_INTERVAL_SECS") orelse "1800";
     return std.fmt.parseInt(u64, val, 10) catch 1800;
 }
 
 fn getBatchSize() usize {
-    const val = compat.getenv("RECONCILE_BATCH_SIZE") orelse "50";
+    const val = getenv("RECONCILE_BATCH_SIZE") orelse "50";
     return std.fmt.parseInt(usize, val, 10) catch 50;
 }
 
 fn getReverifyDays() u64 {
-    const val = compat.getenv("RECONCILE_REVERIFY_DAYS") orelse "7";
+    const val = getenv("RECONCILE_REVERIFY_DAYS") orelse "7";
     return std.fmt.parseInt(u64, val, 10) catch 7;
 }
 
 fn isEnabled() bool {
-    const val = compat.getenv("RECONCILE_ENABLED") orelse "true";
+    const val = getenv("RECONCILE_ENABLED") orelse "true";
     return !mem.eql(u8, val, "false") and !mem.eql(u8, val, "0");
 }
+
+var global_io: ?Io = null;
 
 /// AT-URI components parsed from "at://{did}/{collection}/{rkey}"
 const UriParts = struct {
@@ -65,13 +71,14 @@ fn parseAtUri(uri: []const u8) ?UriParts {
 }
 
 /// Start the reconciler background worker.
-pub fn start(allocator: Allocator) void {
+pub fn start(allocator: Allocator, io: Io) void {
     if (!isEnabled()) {
         logfire.info("reconcile: disabled via RECONCILE_ENABLED", .{});
         return;
     }
 
-    const thread = std.Thread.spawn(.{}, worker, .{allocator}) catch |err| {
+    global_io = io;
+    const thread = std.Thread.spawn(.{}, worker, .{ allocator, io }) catch |err| {
         logfire.err("reconcile: failed to start thread: {}", .{err});
         return;
     };
@@ -79,9 +86,9 @@ pub fn start(allocator: Allocator) void {
     logfire.info("reconcile: background worker started", .{});
 }
 
-fn worker(allocator: Allocator) void {
+fn worker(allocator: Allocator, io: Io) void {
     // wait for db to be ready
-    compat.sleep(10 * std.time.ns_per_s);
+    io.sleep(Io.Duration.fromSeconds(10), .awake) catch {};
 
     // PDS cache: DID → PDS endpoint URL (persists across cycles)
     var pds_cache = std.StringHashMap([]const u8).init(allocator);
@@ -109,11 +116,11 @@ fn worker(allocator: Allocator) void {
         }
 
         const interval = getIntervalSecs();
-        const backoff: u64 = if (consecutive_errors > 0)
+        const backoff_secs: u64 = if (consecutive_errors > 0)
             @min(interval * consecutive_errors, 3600)
         else
             interval;
-        compat.sleep(backoff * std.time.ns_per_s);
+        io.sleep(Io.Duration.fromSeconds(@intCast(backoff_secs)), .awake) catch {};
     }
 }
 
@@ -136,7 +143,9 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
     var batch_str: [10]u8 = undefined;
     const batch_str_val = std.fmt.bufPrint(&batch_str, "{d}", .{batch_size}) catch "50";
 
-    const cutoff_ts = formatTimestamp(compat.timestamp() - @as(i64, @intCast(reverify_days * 86400)));
+    const io = global_io.?;
+    const now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
+    const cutoff_ts = formatTimestamp(now_s - @as(i64, @intCast(reverify_days * 86400)));
     const cutoff = cutoff_ts.slice();
 
     var result = try client.query(
@@ -220,7 +229,7 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
         }
 
         // rate limit: 200ms between PDS requests
-        compat.sleep(200 * std.time.ns_per_ms);
+        io.sleep(Io.Duration.fromMilliseconds(200), .awake) catch {};
     }
 
     // batch delete from tpuf
@@ -245,7 +254,8 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
 }
 
 fn updateVerifiedAt(client: *db.Client, uri: []const u8) void {
-    const now = formatTimestamp(compat.timestamp());
+    const ts: i64 = @intCast(@divFloor(Io.Timestamp.now(global_io.?, .real).nanoseconds, std.time.ns_per_s));
+    const now = formatTimestamp(ts);
     client.exec(
         "UPDATE documents SET verified_at = ? WHERE uri = ?",
         &.{ now.slice(), uri },
@@ -294,7 +304,7 @@ fn checkRecord(allocator: Allocator, pds: []const u8, did: []const u8, collectio
         return .error_skip;
     };
 
-    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
+    var http_client: http.Client = .{ .allocator = allocator, .io = global_io.? };
     defer http_client.deinit();
 
     var response_body: std.Io.Writer.Allocating = .init(allocator);
@@ -336,7 +346,7 @@ fn resolvePdsHttp(allocator: Allocator, did: []const u8) ?[]const u8 {
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://plc.directory/{s}", .{did}) catch return null;
 
-    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
+    var http_client: http.Client = .{ .allocator = allocator, .io = global_io.? };
     defer http_client.deinit();
 
     var response_body: std.Io.Writer.Allocating = .init(allocator);

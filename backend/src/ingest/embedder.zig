@@ -8,11 +8,11 @@ const http = std.http;
 const json = std.json;
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const Io = std.Io;
 const logfire = @import("logfire");
 const zql = @import("zql");
 const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
-const compat = @import("../compat.zig");
 
 // voyage-4-lite limits
 const MAX_BATCH_SIZE = 20; // conservative batch size for reliability
@@ -33,13 +33,13 @@ const DocsNeedingEmbeddings = zql.Query(
 );
 
 /// Start the embedder background worker
-pub fn start(allocator: Allocator) void {
-    const api_key = compat.getenv("VOYAGE_API_KEY") orelse {
+pub fn start(allocator: Allocator, io: Io) void {
+    const api_key = if (std.c.getenv("VOYAGE_API_KEY")) |p| std.mem.span(p) else {
         logfire.info("embedder: VOYAGE_API_KEY not set, embeddings disabled", .{});
         return;
     };
 
-    const thread = std.Thread.spawn(.{}, worker, .{ allocator, api_key }) catch |err| {
+    const thread = std.Thread.spawn(.{}, worker, .{ allocator, api_key, io }) catch |err| {
         logfire.err("embedder: failed to start thread: {}", .{err});
         return;
     };
@@ -47,18 +47,18 @@ pub fn start(allocator: Allocator) void {
     logfire.info("embedder: background worker started", .{});
 }
 
-fn worker(allocator: Allocator, api_key: []const u8) void {
+fn worker(allocator: Allocator, api_key: []const u8, io: Io) void {
     // wait for db to be ready
-    compat.sleep(5 * std.time.ns_per_s);
+    io.sleep(Io.Duration.fromSeconds(5), .awake) catch {};
 
     var consecutive_errors: u32 = 0;
 
     while (true) {
-        const processed = processNextBatch(allocator, api_key) catch |err| {
+        const processed = processNextBatch(allocator, api_key, io) catch |err| {
             consecutive_errors += 1;
             const backoff: u64 = @min(ERROR_BACKOFF_SECS * consecutive_errors, 3600);
             logfire.warn("embedder: error {}, backing off {d}s", .{ err, backoff });
-            compat.sleep(backoff * std.time.ns_per_s);
+            io.sleep(Io.Duration.fromSeconds(@intCast(backoff)), .awake) catch {};
             continue;
         };
 
@@ -71,7 +71,7 @@ fn worker(allocator: Allocator, api_key: []const u8) void {
 
         // no work, sleep
         consecutive_errors = 0;
-        compat.sleep(POLL_INTERVAL_SECS * std.time.ns_per_s);
+        io.sleep(Io.Duration.fromSeconds(@intCast(POLL_INTERVAL_SECS)), .awake) catch {};
     }
 }
 
@@ -105,7 +105,7 @@ const DocToEmbed = struct {
     }
 };
 
-fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
+fn processNextBatch(allocator: Allocator, api_key: []const u8, io: Io) !usize {
     const span = logfire.span("embedder.process_batch", .{});
     defer span.end();
 
@@ -133,7 +133,7 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     if (docs.items.len == 0) return 0;
 
     // call Voyage API
-    const embeddings = try callVoyageApi(allocator, api_key, docs.items);
+    const embeddings = try callVoyageApi(allocator, api_key, docs.items, io);
     defer {
         for (embeddings) |e| allocator.free(e);
         allocator.free(embeddings);
@@ -176,7 +176,7 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
 
     // mark docs as embedded in turso
     // generate timestamp in Zig (avoids any strftime/pipeline API quirks)
-    const now_ts = compat.timestamp();
+    const now_ts: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
     const epoch_secs: u64 = @intCast(now_ts);
     const epoch = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
     const day = epoch.getDaySeconds();
@@ -241,13 +241,13 @@ fn sanitizeUtf8(text: []u8) void {
     }
 }
 
-fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToEmbed) ![][]f32 {
+fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToEmbed, io: Io) ![][]f32 {
     const span = logfire.span("embedder.voyage_api", .{
         .batch_size = @as(i64, @intCast(docs.len)),
     });
     defer span.end();
 
-    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
     defer http_client.deinit();
 
     // build request body

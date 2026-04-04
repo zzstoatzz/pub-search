@@ -7,7 +7,6 @@ const tpuf = @import("tpuf.zig");
 const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
-const compat = @import("compat.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -21,20 +20,19 @@ pub fn main() !void {
     // init Io backend for networking
     threaded_io = Io.Threaded.init(allocator, .{});
     const io = threaded_io.io();
-    compat.initIo(io);
 
     // configure logfire (reads LOGFIRE_WRITE_TOKEN from env)
     _ = logfire.configure(.{
         .service_name = "leaflet-search",
         .service_version = "0.1.0",
-        .environment = compat.getenv("FLY_APP_NAME") orelse "development",
+        .environment = if (std.c.getenv("FLY_APP_NAME")) |p| std.mem.span(p) else "development",
     }) catch |err| {
         std.debug.print("logfire init failed: {}, continuing without observability\n", .{err});
     };
 
     // start http server FIRST so Fly proxy doesn't timeout
     const port: u16 = blk: {
-        const port_str = compat.getenv("PORT") orelse "3000";
+        const port_str = if (std.c.getenv("PORT")) |p| std.mem.span(p) else "3000";
         break :blk std.fmt.parseInt(u16, port_str, 10) catch 3000;
     };
 
@@ -45,14 +43,14 @@ pub fn main() !void {
     };
     defer listener.deinit(io);
 
-    const app_name = compat.getenv("APP_NAME") orelse "leaflet-search";
+    const app_name = if (std.c.getenv("APP_NAME")) |p| std.mem.span(p) else "leaflet-search";
     logfire.info("{s} listening on port {d}", .{ app_name, port });
 
     // init turso client synchronously (fast, needed for search fallback)
     try db.initTurso(io);
 
     // init local db and other services in background (slow)
-    const init_thread = try Thread.spawn(.{}, initServices, .{allocator});
+    const init_thread = try Thread.spawn(.{}, initServices, .{ allocator, io });
     init_thread.detach();
 
     // thread-per-connection (Thread.Pool removed in 0.16)
@@ -66,7 +64,7 @@ pub fn main() !void {
             logfire.warn("failed to set socket timeout: {}", .{err});
         };
 
-        const accepted_at = compat.microTimestamp();
+        const accepted_at = Io.Timestamp.now(io, .real).toMicroseconds();
         const thread = Thread.spawn(.{}, server.handleConnection, .{ stream, io, accepted_at }) catch |err| {
             logfire.err("spawn error: {}", .{err});
             stream.close(io);
@@ -76,35 +74,38 @@ pub fn main() !void {
     }
 }
 
-fn initServices(allocator: std.mem.Allocator) void {
+fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // run schema migrations first (idempotent, but may be slow if turso is laggy)
     db.initSchema();
 
     // init local db (slow - turso already initialized)
-    db.initLocalDb();
-    db.startSync();
+    db.initLocalDb(io);
+    db.startSync(io);
 
     // start activity tracker
-    metrics.activity.init();
+    metrics.activity.init(io);
 
     // start stats buffer (background sync to Turso)
-    metrics.buffer.init();
+    metrics.buffer.init(io);
+
+    // init timing module
+    metrics.timing.setIo(io);
 
     // init vector store (reads TURBOPUFFER_API_KEY from env)
-    tpuf.init();
+    tpuf.init(io);
     tpuf.startKeepalive(allocator);
 
     // keep turso connection warm (avoids ~1s TLS handshake on first query after idle)
     db.startKeepalive();
 
     // start reconciler (verifies documents still exist at source PDS)
-    ingest.reconciler.start(allocator);
+    ingest.reconciler.start(allocator, io);
 
     // start embedder (voyage-4-lite, 1024 dims, 1 worker)
-    ingest.embedder.start(allocator);
+    ingest.embedder.start(allocator, io);
 
     // start tap consumer
-    ingest.tap.consumer(allocator);
+    ingest.tap.consumer(allocator, io);
 }
 
 fn setSocketTimeout(fd: std.posix.fd_t, secs: u32) !void {

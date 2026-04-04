@@ -2,11 +2,11 @@
 //! Full sync on startup, incremental sync periodically
 
 const std = @import("std");
+const Io = std.Io;
 const zqlite = @import("zqlite");
 const Allocator = std.mem.Allocator;
 const Client = @import("Client.zig");
 const LocalDb = @import("LocalDb.zig");
-const compat = @import("../compat.zig");
 
 const BATCH_SIZE = 500;
 
@@ -191,7 +191,8 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         local.lock();
         defer local.unlock();
         var ts_buf: [20]u8 = undefined;
-        const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{compat.timestamp()}) catch "0";
+        const now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(turso.io, .real).nanoseconds, std.time.ns_per_s));
+        const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{now_s}) catch "0";
         conn.exec(
             "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync', ?)",
             .{ts_str},
@@ -296,7 +297,8 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
 
         // update sync time
         var ts_buf: [20]u8 = undefined;
-        const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{compat.timestamp()}) catch "0";
+        const inc_now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(turso.io, .real).nanoseconds, std.time.ns_per_s));
+        const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{inc_now_s}) catch "0";
         conn.exec(
             "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync', ?)",
             .{ts_str},

@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../compat.zig");
+const Io = std.Io;
 
 /// endpoints we track latency for
 pub const Endpoint = enum {
@@ -78,12 +78,29 @@ pub const EndpointStats = struct {
 
 var buffers: [ENDPOINT_COUNT]LatencyBuffer = [_]LatencyBuffer{.{}} ** ENDPOINT_COUNT;
 var hourly: [ENDPOINT_COUNT][HOURS_TO_KEEP]HourlyBucket = [_][HOURS_TO_KEEP]HourlyBucket{[_]HourlyBucket{.{}} ** HOURS_TO_KEEP} ** ENDPOINT_COUNT;
-var mutex: compat.Mutex = .{};
+var mutex: Io.Mutex = Io.Mutex.init;
+var global_io: ?Io = null;
 var initialized: bool = false;
 
+pub fn setIo(io: Io) void {
+    global_io = io;
+}
+
+fn getIo() Io {
+    return global_io.?;
+}
+
 fn getCurrentHour() i64 {
-    const now_s = @divFloor(compat.timestamp(), 3600) * 3600;
+    const now_s = @divFloor(timestamp(), 3600) * 3600;
     return now_s;
+}
+
+fn timestamp() i64 {
+    return @intCast(@divFloor(Io.Timestamp.now(getIo(), .real).nanoseconds, std.time.ns_per_s));
+}
+
+fn microTimestamp() i64 {
+    return Io.Timestamp.now(getIo(), .real).toMicroseconds();
 }
 
 fn getHourIndex(hour: i64) usize {
@@ -93,13 +110,14 @@ fn getHourIndex(hour: i64) usize {
 
 /// record a request latency (call after request completes)
 pub fn record(endpoint: Endpoint, start_time: i64) void {
-    const now = compat.microTimestamp();
+    const io = getIo();
+    const now = microTimestamp();
     const elapsed_us: u32 = @intCast(@max(0, now - start_time));
     const current_hour = getCurrentHour();
     const hour_idx = getHourIndex(current_hour);
 
-    mutex.lock();
-    defer mutex.unlock();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
 
     ensureInitialized();
 
@@ -221,8 +239,9 @@ fn ensureInitialized() void {
 
 /// get stats for a specific endpoint
 pub fn getStats(endpoint: Endpoint) EndpointStats {
-    mutex.lock();
-    defer mutex.unlock();
+    const io = getIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
 
     ensureInitialized();
 
@@ -259,8 +278,9 @@ pub fn getAllStats() [ENDPOINT_COUNT]EndpointStats {
 
 /// get time series for an endpoint (last 24 hours, for latency charts)
 pub fn getTimeSeries(endpoint: Endpoint) [LATENCY_HISTORY_HOURS]TimeSeriesPoint {
-    mutex.lock();
-    defer mutex.unlock();
+    const io = getIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
 
     ensureInitialized();
 
@@ -306,8 +326,9 @@ pub const TrafficPoint = struct {
 
 /// get aggregate traffic series (all endpoints summed, last 720 hours)
 pub fn getTrafficSeries() [HOURS_TO_KEEP]TrafficPoint {
-    mutex.lock();
-    defer mutex.unlock();
+    const io = getIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
 
     ensureInitialized();
 

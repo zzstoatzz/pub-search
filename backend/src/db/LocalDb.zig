@@ -2,24 +2,25 @@
 //! Provides fast FTS5 queries while Turso remains source of truth
 
 const std = @import("std");
+const Io = std.Io;
 const zqlite = @import("zqlite");
 const Allocator = std.mem.Allocator;
 const logfire = @import("logfire");
-const compat = @import("../compat.zig");
 
 const LocalDb = @This();
 
 conn: ?zqlite.Conn = null,
 read_conn: ?zqlite.Conn = null, // separate read connection — never blocked by writes in WAL mode
 allocator: Allocator,
+io: Io,
 is_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 needs_resync: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-mutex: compat.Mutex = .{}, // protects write conn only
+mutex: Io.Mutex = Io.Mutex.init, // protects write conn only
 path: []const u8 = "",
 consecutive_errors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-pub fn init(allocator: Allocator) LocalDb {
-    return .{ .allocator = allocator };
+pub fn init(allocator: Allocator, io: Io) LocalDb {
+    return .{ .allocator = allocator, .io = io };
 }
 
 /// Check database integrity and return false if corrupt
@@ -62,7 +63,7 @@ fn unlinkPath(path: []const u8) void {
 }
 
 pub fn open(self: *LocalDb) !void {
-    const path_env = compat.getenv("LOCAL_DB_PATH") orelse "/data/local.db";
+    const path_env = if (std.c.getenv("LOCAL_DB_PATH")) |p| std.mem.span(p) else "/data/local.db";
     self.path = path_env;
 
     try self.openDb(path_env, false);
@@ -306,8 +307,8 @@ pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
 
 /// Execute a statement (INSERT, UPDATE, DELETE)
 pub fn exec(self: *LocalDb, comptime sql: []const u8, args: anytype) !void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
 
     const c = self.conn orelse return error.NotOpen;
     c.exec(sql, args) catch |e| {
@@ -323,12 +324,12 @@ pub fn getConn(self: *LocalDb) ?zqlite.Conn {
 
 /// Lock for batch operations
 pub fn lock(self: *LocalDb) void {
-    self.mutex.lock();
+    self.mutex.lockUncancelable(self.io);
 }
 
 /// Unlock after batch operations
 pub fn unlock(self: *LocalDb) void {
-    self.mutex.unlock();
+    self.mutex.unlock(self.io);
 }
 
 fn truncateSql(sql: []const u8) []const u8 {

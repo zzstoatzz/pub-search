@@ -8,7 +8,6 @@ const json = std.json;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
-const compat = @import("../compat.zig");
 
 const result = @import("result.zig");
 pub const Result = result.Result;
@@ -29,15 +28,16 @@ const AUTH_BUF_SIZE = 512;
 allocator: Allocator,
 url: []const u8,
 token: []const u8,
-mutex: compat.Mutex = .{},
+mutex: Io.Mutex = Io.Mutex.init,
+io: Io,
 http_client: http.Client,
 
 pub fn init(allocator_param: Allocator, io: Io) !Client {
-    const url = compat.getenv("TURSO_URL") orelse {
+    const url = if (std.c.getenv("TURSO_URL")) |p| std.mem.span(p) else {
         std.debug.print("TURSO_URL not set\n", .{});
         return error.MissingEnv;
     };
-    const token = compat.getenv("TURSO_TOKEN") orelse {
+    const token = if (std.c.getenv("TURSO_TOKEN")) |p| std.mem.span(p) else {
         std.debug.print("TURSO_TOKEN not set\n", .{});
         return error.MissingEnv;
     };
@@ -54,6 +54,7 @@ pub fn init(allocator_param: Allocator, io: Io) !Client {
         .allocator = allocator_param,
         .url = host,
         .token = token,
+        .io = io,
         .http_client = .{ .allocator = allocator_param, .io = io },
     };
 }
@@ -125,8 +126,8 @@ fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const
     });
     defer span.end();
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
 
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
@@ -179,8 +180,8 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
     });
     defer span.end();
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
 
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
@@ -335,7 +336,7 @@ pub fn startKeepalive(self: *Client) void {
 
 fn keepaliveLoop(self: *Client) void {
     while (true) {
-        compat.sleep(KEEPALIVE_INTERVAL_NS);
+        self.io.sleep(Io.Duration.fromNanoseconds(KEEPALIVE_INTERVAL_NS), .awake) catch return;
         _ = self.exec("SELECT 1", .{}) catch |err| {
             logfire.debug("turso: keepalive ping failed: {}", .{err});
         };

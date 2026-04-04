@@ -7,7 +7,6 @@ const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
 const zat = @import("zat");
-const compat = @import("compat.zig");
 const db = @import("db.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
@@ -16,10 +15,14 @@ const dashboard = @import("server/dashboard.zig");
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
 
+fn microTimestamp(io: Io) i64 {
+    return Io.Timestamp.now(io, .real).toMicroseconds();
+}
+
 pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
     defer stream.close(io);
 
-    const queue_us = compat.microTimestamp() - accepted_at;
+    const queue_us = microTimestamp(io) - accepted_at;
     if (queue_us > 100_000) { // > 100ms
         logfire.warn("http.queue slow: {d}ms", .{@divTrunc(queue_us, 1000)});
     }
@@ -33,14 +36,14 @@ pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
     var server = http.Server.init(&reader.interface, &writer.interface);
 
     while (true) {
-        const recv_start = compat.microTimestamp();
+        const recv_start = microTimestamp(io);
         var request = server.receiveHead() catch |err| {
             if (err != error.HttpConnectionClosing and err != error.EndOfStream) {
                 logfire.debug("http receive error: {}", .{err});
             }
             return;
         };
-        const recv_us = compat.microTimestamp() - recv_start;
+        const recv_us = microTimestamp(io) - recv_start;
         const target = request.head.target;
 
         const req_span = logfire.span("http.request", .{
@@ -76,19 +79,19 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     if (mem.startsWith(u8, path, "/search")) {
         try handleSearch(request, target, io);
     } else if (mem.eql(u8, path, "/tags")) {
-        try handleTags(request, target);
+        try handleTags(request, target, io);
     } else if (mem.eql(u8, path, "/stats")) {
         try handleStats(request);
     } else if (mem.eql(u8, path, "/health")) {
         try sendJson(request, "{\"status\":\"ok\"}");
     } else if (mem.eql(u8, path, "/popular")) {
-        try handlePopular(request, target);
+        try handlePopular(request, target, io);
     } else if (mem.eql(u8, path, "/dashboard")) {
         try handleDashboard(request);
     } else if (mem.eql(u8, path, "/api/dashboard")) {
         try handleDashboardApi(request);
     } else if (mem.startsWith(u8, path, "/similar")) {
-        try handleSimilar(request, target);
+        try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
         try handleActivity(request);
     } else {
@@ -97,7 +100,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
 }
 
 fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void {
-    const start_time = compat.microTimestamp();
+    const start_time = microTimestamp(io);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -168,8 +171,8 @@ fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void
     }
 }
 
-fn handleTags(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = compat.microTimestamp();
+fn handleTags(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = microTimestamp(io);
     defer metrics.timing.record(.tags, start_time);
 
     const span = logfire.span("http.tags", .{});
@@ -190,8 +193,8 @@ fn handleTags(request: *http.Server.Request, target: []const u8) !void {
     }
 }
 
-fn handlePopular(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = compat.microTimestamp();
+fn handlePopular(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = microTimestamp(io);
     defer metrics.timing.record(.popular, start_time);
 
     const span = logfire.span("http.popular", .{});
@@ -448,7 +451,7 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
 }
 
 fn getDashboardUrl() []const u8 {
-    return compat.getenv("DASHBOARD_URL") orelse "https://pub-search.waow.tech/dashboard.html";
+    return if (std.c.getenv("DASHBOARD_URL")) |p| std.mem.span(p) else "https://pub-search.waow.tech/dashboard.html";
 }
 
 fn handleDashboard(request: *http.Server.Request) !void {
@@ -461,8 +464,8 @@ fn handleDashboard(request: *http.Server.Request) !void {
     });
 }
 
-fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = compat.microTimestamp();
+fn handleSimilar(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = microTimestamp(io);
     defer metrics.timing.record(.similar, start_time);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

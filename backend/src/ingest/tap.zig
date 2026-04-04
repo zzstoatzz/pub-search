@@ -7,8 +7,8 @@ const zat = @import("zat");
 const logfire = @import("logfire");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
+const Io = std.Io;
 const tpuf = @import("../tpuf.zig");
-const compat = @import("../compat.zig");
 
 // leaflet-specific collections
 const LEAFLET_DOCUMENT = "pub.leaflet.document";
@@ -33,11 +33,11 @@ fn isPublicationCollection(collection: []const u8) bool {
 }
 
 fn getTapHost() []const u8 {
-    return compat.getenv("TAP_HOST") orelse "leaflet-search-tap.fly.dev";
+    return if (std.c.getenv("TAP_HOST")) |p| std.mem.span(p) else "leaflet-search-tap.fly.dev";
 }
 
 fn getTapPort() u16 {
-    const port_str = compat.getenv("TAP_PORT") orelse "443";
+    const port_str = if (std.c.getenv("TAP_PORT")) |p| std.mem.span(p) else "443";
     return std.fmt.parseInt(u16, port_str, 10) catch 443;
 }
 
@@ -51,20 +51,21 @@ fn useTls() bool {
 const QUEUE_CAPACITY = 256;
 
 const ProcessQueue = struct {
-    mutex: compat.Mutex = .{},
-    cond: compat.Condition = .{},
+    mutex: Io.Mutex = Io.Mutex.init,
+    cond: Io.Condition = Io.Condition.init,
     items: [QUEUE_CAPACITY]?[]u8 = .{null} ** QUEUE_CAPACITY,
     head: usize = 0,
     tail: usize = 0,
     len: usize = 0,
     stopped: bool = false,
     allocator: Allocator,
+    io: Io,
     dropped: usize = 0,
     processed: usize = 0,
 
     fn push(self: *ProcessQueue, data: []u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.len == QUEUE_CAPACITY) {
             // queue full — drop oldest (already ACK'd)
@@ -82,15 +83,15 @@ const ProcessQueue = struct {
         self.items[self.tail] = data;
         self.tail = (self.tail + 1) % QUEUE_CAPACITY;
         self.len += 1;
-        self.cond.signal();
+        self.cond.signal(self.io);
     }
 
     fn pop(self: *ProcessQueue) ?[]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         while (self.len == 0 and !self.stopped) {
-            self.cond.wait(&self.mutex);
+            self.cond.waitUncancelable(self.io, &self.mutex);
         }
 
         if (self.len == 0) return null; // stopped with empty queue
@@ -103,15 +104,15 @@ const ProcessQueue = struct {
     }
 
     fn stop(self: *ProcessQueue) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         self.stopped = true;
-        self.cond.signal();
+        self.cond.signal(self.io);
     }
 
     fn drain(self: *ProcessQueue) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         for (&self.items) |*item| {
             if (item.*) |data| {
                 self.allocator.free(data);
@@ -128,19 +129,19 @@ fn processWorker(queue: *ProcessQueue) void {
         processMessage(queue.allocator, data) catch |err| {
             logfire.err("message processing error: {}", .{err});
         };
-        queue.mutex.lock();
+        queue.mutex.lockUncancelable(queue.io);
         queue.processed += 1;
-        queue.mutex.unlock();
+        queue.mutex.unlock(queue.io);
     }
     logfire.info("tap: process worker stopped (processed {d}, dropped {d})", .{ queue.processed, queue.dropped });
 }
 
-pub fn consumer(allocator: Allocator) void {
+pub fn consumer(allocator: Allocator, io: Io) void {
     var backoff: u64 = 1;
     const max_backoff: u64 = 30;
 
     while (true) {
-        const connected = connect(allocator);
+        const connected = connect(allocator, io);
         if (connected) |_| {
             // connection succeeded then closed - reset backoff
             backoff = 1;
@@ -148,7 +149,7 @@ pub fn consumer(allocator: Allocator) void {
         } else |err| {
             // connection failed - backoff
             logfire.warn("tap error: {}, reconnecting in {d}s", .{ err, backoff });
-            compat.sleepSecs(backoff);
+            io.sleep(Io.Duration.fromSeconds(@intCast(backoff)), .awake) catch {};
             backoff = @min(backoff * 2, max_backoff);
         }
     }
@@ -218,7 +219,7 @@ fn extractMessageId(allocator: Allocator, payload: []const u8) ?i64 {
     return zat.json.getInt(parsed.value, "id");
 }
 
-fn connect(allocator: Allocator) !void {
+fn connect(allocator: Allocator, io: Io) !void {
     const host = getTapHost();
     const port = getTapPort();
     const tls = useTls();
@@ -226,7 +227,7 @@ fn connect(allocator: Allocator) !void {
 
     logfire.info("connecting to {s}://{s}:{d}{s}", .{ if (tls) "wss" else "ws", host, port, path });
 
-    var client = websocket.Client.init(compat.getIo(), allocator, .{
+    var client = websocket.Client.init(io, allocator, .{
         .host = host,
         .port = port,
         .tls = tls,
@@ -249,14 +250,14 @@ fn connect(allocator: Allocator) !void {
 
     // processing queue + worker thread: decouples readLoop from turso writes
     // so a slow/hung turso request never blocks ACKs
-    var queue = ProcessQueue{ .allocator = allocator };
-    const worker = std.Thread.spawn(.{}, processWorker, .{&queue}) catch |err| {
+    var queue = ProcessQueue{ .allocator = allocator, .io = io };
+    const worker_thread = std.Thread.spawn(.{}, processWorker, .{&queue}) catch |err| {
         logfire.err("tap: failed to spawn process worker: {}", .{err});
         return err;
     };
     defer {
         queue.stop();
-        worker.join();
+        worker_thread.join();
         queue.drain();
     }
 
