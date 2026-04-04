@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 
 /// endpoints we track latency for
 pub const Endpoint = enum {
@@ -77,11 +78,11 @@ pub const EndpointStats = struct {
 
 var buffers: [ENDPOINT_COUNT]LatencyBuffer = [_]LatencyBuffer{.{}} ** ENDPOINT_COUNT;
 var hourly: [ENDPOINT_COUNT][HOURS_TO_KEEP]HourlyBucket = [_][HOURS_TO_KEEP]HourlyBucket{[_]HourlyBucket{.{}} ** HOURS_TO_KEEP} ** ENDPOINT_COUNT;
-var mutex: std.Thread.Mutex = .{};
+var mutex: compat.Mutex = .{};
 var initialized: bool = false;
 
 fn getCurrentHour() i64 {
-    const now_s = @divFloor(std.time.timestamp(), 3600) * 3600;
+    const now_s = @divFloor(compat.timestamp(), 3600) * 3600;
     return now_s;
 }
 
@@ -92,7 +93,7 @@ fn getHourIndex(hour: i64) usize {
 
 /// record a request latency (call after request completes)
 pub fn record(endpoint: Endpoint, start_time: i64) void {
-    const now = std.time.microTimestamp();
+    const now = compat.microTimestamp();
     const elapsed_us: u32 = @intCast(@max(0, now - start_time));
     const current_hour = getCurrentHour();
     const hour_idx = getHourIndex(current_hour);
@@ -112,12 +113,12 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
 }
 
 fn loadLocked() void {
-    const file = std.fs.openFileAbsolute(PERSIST_PATH, .{}) catch return;
-    defer file.close();
+    const fd = openForRead(PERSIST_PATH) orelse return;
+    defer _ = std.c.close(fd);
 
     // read entire file at once (small file, ~16KB per endpoint)
     var file_buf: [ENDPOINT_COUNT * (@sizeOf([SAMPLE_COUNT]u32) + @sizeOf(usize) * 2 + @sizeOf(u64))]u8 = undefined;
-    const bytes_read = file.readAll(&file_buf) catch return;
+    const bytes_read = readAll(fd, &file_buf) orelse return;
     if (bytes_read != file_buf.len) return; // incomplete file
 
     var offset: usize = 0;
@@ -138,26 +139,26 @@ fn loadLocked() void {
 }
 
 fn persistLocked() void {
-    const file = std.fs.createFileAbsolute(PERSIST_PATH, .{}) catch return;
-    defer file.close();
+    const fd = openForWrite(PERSIST_PATH) orelse return;
+    defer _ = std.c.close(fd);
 
     // write all buffers
     for (buffers) |buf| {
-        file.writeAll(std.mem.asBytes(&buf.samples)) catch return;
-        file.writeAll(std.mem.asBytes(&buf.count)) catch return;
-        file.writeAll(std.mem.asBytes(&buf.head)) catch return;
-        file.writeAll(std.mem.asBytes(&buf.total_count)) catch return;
+        writeAll(fd, std.mem.asBytes(&buf.samples));
+        writeAll(fd, std.mem.asBytes(&buf.count));
+        writeAll(fd, std.mem.asBytes(&buf.head));
+        writeAll(fd, std.mem.asBytes(&buf.total_count));
     }
 }
 
 fn loadHourlyLocked() void {
-    const file = std.fs.openFileAbsolute(PERSIST_PATH_HOURLY, .{}) catch return;
-    defer file.close();
+    const fd = openForRead(PERSIST_PATH_HOURLY) orelse return;
+    defer _ = std.c.close(fd);
 
     const bucket_size = @sizeOf(HourlyBucket);
     const total_size = ENDPOINT_COUNT * HOURS_TO_KEEP * bucket_size;
     var file_buf: [total_size]u8 = undefined;
-    const bytes_read = file.readAll(&file_buf) catch return;
+    const bytes_read = readAll(fd, &file_buf) orelse return;
     if (bytes_read != total_size) return;
 
     var offset: usize = 0;
@@ -170,13 +171,43 @@ fn loadHourlyLocked() void {
 }
 
 fn persistHourlyLocked() void {
-    const file = std.fs.createFileAbsolute(PERSIST_PATH_HOURLY, .{}) catch return;
-    defer file.close();
+    const fd = openForWrite(PERSIST_PATH_HOURLY) orelse return;
+    defer _ = std.c.close(fd);
 
     for (hourly) |ep_buckets| {
         for (ep_buckets) |bucket| {
-            file.writeAll(std.mem.asBytes(&bucket)) catch return;
+            writeAll(fd, std.mem.asBytes(&bucket));
         }
+    }
+}
+
+// C file helpers (std.fs removed in 0.16)
+fn openForRead(path: [*:0]const u8) ?std.c.fd_t {
+    const fd = std.c.open(path, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    return if (fd < 0) null else fd;
+}
+
+fn openForWrite(path: [*:0]const u8) ?std.c.fd_t {
+    const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+    return if (fd < 0) null else fd;
+}
+
+fn readAll(fd: std.c.fd_t, buf: []u8) ?usize {
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = std.c.read(fd, buf[total..].ptr, buf.len - total);
+        if (n <= 0) break;
+        total += @intCast(n);
+    }
+    return total;
+}
+
+fn writeAll(fd: std.c.fd_t, data: []const u8) void {
+    var total: usize = 0;
+    while (total < data.len) {
+        const n = std.c.write(fd, data[total..].ptr, data.len - total);
+        if (n <= 0) return;
+        total += @intCast(n);
     }
 }
 

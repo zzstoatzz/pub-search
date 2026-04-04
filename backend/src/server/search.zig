@@ -775,7 +775,10 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             while (bp_rows.next()) |row| {
                 const doc = Doc.fromLocalRow(row);
                 if (author_filter) |af| {
-                    if (!std.mem.eql(u8, doc.did, af)) { bp_count += 1; continue; }
+                    if (!std.mem.eql(u8, doc.did, af)) {
+                        bp_count += 1;
+                        continue;
+                    }
                 }
                 if (since_filter) |since| {
                     if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) {
@@ -810,7 +813,10 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             while (pub_rows.next()) |row| {
                 const pub_result = Pub.fromLocalRow(row);
                 if (author_filter) |af| {
-                    if (!std.mem.eql(u8, pub_result.did, af)) { pub_count += 1; continue; }
+                    if (!std.mem.eql(u8, pub_result.did, af)) {
+                        pub_count += 1;
+                        continue;
+                    }
                 }
                 try jw.write(pub_result.toJson(alloc));
                 pub_count += 1;

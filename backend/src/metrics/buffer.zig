@@ -4,6 +4,7 @@
 const std = @import("std");
 const db = @import("../db.zig");
 const logfire = @import("logfire");
+const compat = @import("../compat.zig");
 
 const SYNC_INTERVAL_MS = 5000; // 5 seconds
 const MAX_PENDING_SEARCHES = 256;
@@ -26,10 +27,10 @@ var cache_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(fals
 var pending_searches: [MAX_PENDING_SEARCHES]?[]const u8 = .{null} ** MAX_PENDING_SEARCHES;
 var search_write_idx: usize = 0;
 var search_read_idx: usize = 0;
-var search_mutex: std.Thread.Mutex = .{};
+var search_mutex: compat.Mutex = .{};
 
 // allocator for search string copies
-var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+const search_allocator = std.heap.smp_allocator;
 
 var sync_thread: ?std.Thread = null;
 
@@ -77,14 +78,14 @@ pub fn queuePopularSearch(query: []const u8) void {
     if (next_write == search_read_idx) {
         // buffer full, drop oldest
         if (pending_searches[search_read_idx]) |old| {
-            gpa.allocator().free(old);
+            search_allocator.free(old);
             pending_searches[search_read_idx] = null;
         }
         search_read_idx = (search_read_idx + 1) % MAX_PENDING_SEARCHES;
     }
 
     // allocate copy
-    const copy = gpa.allocator().dupe(u8, query) catch return;
+    const copy = search_allocator.dupe(u8, query) catch return;
     pending_searches[search_write_idx] = copy;
     search_write_idx = next_write;
 }
@@ -128,7 +129,7 @@ pub fn getCachedStats() ?CachedStats {
 
 fn syncLoop() void {
     while (true) {
-        std.Thread.sleep(SYNC_INTERVAL_MS * std.time.ns_per_ms);
+        compat.sleepMs(SYNC_INTERVAL_MS);
         syncToTurso();
     }
 }
@@ -226,7 +227,7 @@ fn syncPopularSearches(c: *db.Client) void {
             ) catch {};
 
             // free and clear
-            gpa.allocator().free(query);
+            search_allocator.free(query);
             pending_searches[search_read_idx] = null;
             synced += 1;
         }

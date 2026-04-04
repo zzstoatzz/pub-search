@@ -1,6 +1,5 @@
 const std = @import("std");
-const net = std.net;
-const posix = std.posix;
+const Io = std.Io;
 const Thread = std.Thread;
 const logfire = @import("logfire");
 const db = @import("db.zig");
@@ -8,67 +7,72 @@ const tpuf = @import("tpuf.zig");
 const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
+const compat = @import("compat.zig");
 
-const MAX_HTTP_WORKERS = 16;
 const SOCKET_TIMEOUT_SECS = 5;
 
+// multi-threaded debug_io — required for safe std.debug.print from worker threads
+var threaded_io: Io.Threaded = undefined;
+pub const std_options_debug_threaded_io: ?*Io.Threaded = &threaded_io;
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.heap.smp_allocator;
+
+    // init Io backend for networking
+    threaded_io = Io.Threaded.init(allocator, .{});
+    const io = threaded_io.io();
+    compat.initIo(io);
 
     // configure logfire (reads LOGFIRE_WRITE_TOKEN from env)
     _ = logfire.configure(.{
         .service_name = "leaflet-search",
         .service_version = "0.1.0",
-        .environment = posix.getenv("FLY_APP_NAME") orelse "development",
+        .environment = compat.getenv("FLY_APP_NAME") orelse "development",
     }) catch |err| {
         std.debug.print("logfire init failed: {}, continuing without observability\n", .{err});
     };
 
     // start http server FIRST so Fly proxy doesn't timeout
     const port: u16 = blk: {
-        const port_str = posix.getenv("PORT") orelse "3000";
+        const port_str = compat.getenv("PORT") orelse "3000";
         break :blk std.fmt.parseInt(u16, port_str, 10) catch 3000;
     };
 
-    const address = try net.Address.parseIp("0.0.0.0", port);
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
+    const address = Io.net.Ip4Address.unspecified(port);
+    var listener = (Io.net.IpAddress{ .ip4 = address }).listen(io, .{ .reuse_address = true }) catch |err| {
+        logfire.err("failed to listen on port {d}: {}", .{ port, err });
+        return err;
+    };
+    defer listener.deinit(io);
 
-    const app_name = posix.getenv("APP_NAME") orelse "leaflet-search";
-    logfire.info("{s} listening on port {d} (max {d} workers)", .{ app_name, port, MAX_HTTP_WORKERS });
+    const app_name = compat.getenv("APP_NAME") orelse "leaflet-search";
+    logfire.info("{s} listening on port {d}", .{ app_name, port });
 
     // init turso client synchronously (fast, needed for search fallback)
-    try db.initTurso();
-
-    // init thread pool for http connections
-    var pool: Thread.Pool = undefined;
-    try pool.init(.{
-        .allocator = allocator,
-        .n_jobs = MAX_HTTP_WORKERS,
-    });
-    defer pool.deinit();
+    try db.initTurso(io);
 
     // init local db and other services in background (slow)
     const init_thread = try Thread.spawn(.{}, initServices, .{allocator});
     init_thread.detach();
 
+    // thread-per-connection (Thread.Pool removed in 0.16)
     while (true) {
-        const conn = listener.accept() catch |err| {
+        const stream = listener.accept(io) catch |err| {
             logfire.err("accept error: {}", .{err});
             continue;
         };
 
-        setSocketTimeout(conn.stream.handle, SOCKET_TIMEOUT_SECS) catch |err| {
+        setSocketTimeout(stream.socket.handle, SOCKET_TIMEOUT_SECS) catch |err| {
             logfire.warn("failed to set socket timeout: {}", .{err});
         };
 
-        const accepted_at = std.time.microTimestamp();
-        pool.spawn(server.handleConnection, .{ conn, accepted_at }) catch |err| {
-            logfire.err("pool spawn error: {}", .{err});
-            conn.stream.close();
+        const accepted_at = compat.microTimestamp();
+        const thread = Thread.spawn(.{}, server.handleConnection, .{ stream, io, accepted_at }) catch |err| {
+            logfire.err("spawn error: {}", .{err});
+            stream.close(io);
+            continue;
         };
+        thread.detach();
     }
 }
 
@@ -103,11 +107,11 @@ fn initServices(allocator: std.mem.Allocator) void {
     ingest.tap.consumer(allocator);
 }
 
-fn setSocketTimeout(fd: posix.fd_t, secs: u32) !void {
-    const timeout = std.mem.toBytes(posix.timeval{
+fn setSocketTimeout(fd: std.posix.fd_t, secs: u32) !void {
+    const timeout = std.mem.toBytes(std.posix.timeval{
         .sec = @intCast(secs),
         .usec = 0,
     });
-    try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
-    try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    try std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, &timeout);
+    try std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, &timeout);
 }

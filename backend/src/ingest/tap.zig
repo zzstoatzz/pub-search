@@ -1,7 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
 const json = std.json;
-const posix = std.posix;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const zat = @import("zat");
@@ -9,6 +8,7 @@ const logfire = @import("logfire");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
 const tpuf = @import("../tpuf.zig");
+const compat = @import("../compat.zig");
 
 // leaflet-specific collections
 const LEAFLET_DOCUMENT = "pub.leaflet.document";
@@ -33,11 +33,11 @@ fn isPublicationCollection(collection: []const u8) bool {
 }
 
 fn getTapHost() []const u8 {
-    return posix.getenv("TAP_HOST") orelse "leaflet-search-tap.fly.dev";
+    return compat.getenv("TAP_HOST") orelse "leaflet-search-tap.fly.dev";
 }
 
 fn getTapPort() u16 {
-    const port_str = posix.getenv("TAP_PORT") orelse "443";
+    const port_str = compat.getenv("TAP_PORT") orelse "443";
     return std.fmt.parseInt(u16, port_str, 10) catch 443;
 }
 
@@ -51,8 +51,8 @@ fn useTls() bool {
 const QUEUE_CAPACITY = 256;
 
 const ProcessQueue = struct {
-    mutex: std.Thread.Mutex = .{},
-    cond: std.Thread.Condition = .{},
+    mutex: compat.Mutex = .{},
+    cond: compat.Condition = .{},
     items: [QUEUE_CAPACITY]?[]u8 = .{null} ** QUEUE_CAPACITY,
     head: usize = 0,
     tail: usize = 0,
@@ -148,7 +148,7 @@ pub fn consumer(allocator: Allocator) void {
         } else |err| {
             // connection failed - backoff
             logfire.warn("tap error: {}, reconnecting in {d}s", .{ err, backoff });
-            posix.nanosleep(backoff, 0);
+            compat.sleepSecs(backoff);
             backoff = @min(backoff * 2, max_backoff);
         }
     }
@@ -226,7 +226,7 @@ fn connect(allocator: Allocator) !void {
 
     logfire.info("connecting to {s}://{s}:{d}{s}", .{ if (tls) "wss" else "ws", host, port, path });
 
-    var client = websocket.Client.init(allocator, .{
+    var client = websocket.Client.init(compat.getIo(), allocator, .{
         .host = host,
         .port = port,
         .tls = tls,

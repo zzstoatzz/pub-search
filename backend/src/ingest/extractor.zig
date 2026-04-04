@@ -26,7 +26,6 @@ pub const Platform = enum {
     pub fn name(self: Platform) []const u8 {
         return @tagName(self);
     }
-
 };
 
 /// Extracted document data ready for indexing.
@@ -151,7 +150,7 @@ fn extractTags(allocator: Allocator, record: json.Value) ![][]const u8 {
 }
 
 fn extractContent(allocator: Allocator, record: json.Value) ![]u8 {
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
 
     // try textContent first (site.standard.document has this pre-flattened)

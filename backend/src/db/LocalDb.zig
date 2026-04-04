@@ -2,10 +2,10 @@
 //! Provides fast FTS5 queries while Turso remains source of truth
 
 const std = @import("std");
-const posix = std.posix;
 const zqlite = @import("zqlite");
 const Allocator = std.mem.Allocator;
 const logfire = @import("logfire");
+const compat = @import("../compat.zig");
 
 const LocalDb = @This();
 
@@ -14,7 +14,7 @@ read_conn: ?zqlite.Conn = null, // separate read connection — never blocked by
 allocator: Allocator,
 is_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 needs_resync: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-mutex: std.Thread.Mutex = .{}, // protects write conn only
+mutex: compat.Mutex = .{}, // protects write conn only
 path: []const u8 = "",
 consecutive_errors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
@@ -40,20 +40,29 @@ fn checkIntegrity(self: *LocalDb) bool {
 
 /// Delete the database file and WAL/SHM files
 fn deleteDbFiles(path: []const u8) void {
-    std.fs.cwd().deleteFile(path) catch {};
+    unlinkPath(path);
     // also delete WAL and SHM files
     var wal_buf: [260]u8 = undefined;
     var shm_buf: [260]u8 = undefined;
     if (path.len < 252) {
         const wal_path = std.fmt.bufPrint(&wal_buf, "{s}-wal", .{path}) catch return;
         const shm_path = std.fmt.bufPrint(&shm_buf, "{s}-shm", .{path}) catch return;
-        std.fs.cwd().deleteFile(wal_path) catch {};
-        std.fs.cwd().deleteFile(shm_path) catch {};
+        unlinkPath(wal_path);
+        unlinkPath(shm_path);
     }
 }
 
+/// Delete a file by path using C unlink (std.fs.cwd removed in 0.16)
+fn unlinkPath(path: []const u8) void {
+    var buf: [260]u8 = undefined;
+    if (path.len >= buf.len) return;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    _ = std.c.unlink(@ptrCast(&buf));
+}
+
 pub fn open(self: *LocalDb) !void {
-    const path_env = posix.getenv("LOCAL_DB_PATH") orelse "/data/local.db";
+    const path_env = compat.getenv("LOCAL_DB_PATH") orelse "/data/local.db";
     self.path = path_env;
 
     try self.openDb(path_env, false);

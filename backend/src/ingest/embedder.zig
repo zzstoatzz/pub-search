@@ -7,12 +7,12 @@ const std = @import("std");
 const http = std.http;
 const json = std.json;
 const mem = std.mem;
-const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
 const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
+const compat = @import("../compat.zig");
 
 // voyage-4-lite limits
 const MAX_BATCH_SIZE = 20; // conservative batch size for reliability
@@ -34,7 +34,7 @@ const DocsNeedingEmbeddings = zql.Query(
 
 /// Start the embedder background worker
 pub fn start(allocator: Allocator) void {
-    const api_key = posix.getenv("VOYAGE_API_KEY") orelse {
+    const api_key = compat.getenv("VOYAGE_API_KEY") orelse {
         logfire.info("embedder: VOYAGE_API_KEY not set, embeddings disabled", .{});
         return;
     };
@@ -49,7 +49,7 @@ pub fn start(allocator: Allocator) void {
 
 fn worker(allocator: Allocator, api_key: []const u8) void {
     // wait for db to be ready
-    std.Thread.sleep(5 * std.time.ns_per_s);
+    compat.sleep(5 * std.time.ns_per_s);
 
     var consecutive_errors: u32 = 0;
 
@@ -58,7 +58,7 @@ fn worker(allocator: Allocator, api_key: []const u8) void {
             consecutive_errors += 1;
             const backoff: u64 = @min(ERROR_BACKOFF_SECS * consecutive_errors, 3600);
             logfire.warn("embedder: error {}, backing off {d}s", .{ err, backoff });
-            std.Thread.sleep(backoff * std.time.ns_per_s);
+            compat.sleep(backoff * std.time.ns_per_s);
             continue;
         };
 
@@ -71,7 +71,7 @@ fn worker(allocator: Allocator, api_key: []const u8) void {
 
         // no work, sleep
         consecutive_errors = 0;
-        std.Thread.sleep(POLL_INTERVAL_SECS * std.time.ns_per_s);
+        compat.sleep(POLL_INTERVAL_SECS * std.time.ns_per_s);
     }
 }
 
@@ -176,7 +176,7 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
 
     // mark docs as embedded in turso
     // generate timestamp in Zig (avoids any strftime/pipeline API quirks)
-    const now_ts = std.time.timestamp();
+    const now_ts = compat.timestamp();
     const epoch_secs: u64 = @intCast(now_ts);
     const epoch = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
     const day = epoch.getDaySeconds();
@@ -184,7 +184,7 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8) !usize {
     const md = yd.calculateMonthDay();
     var ts_buf: [20]u8 = undefined;
     const ts = std.fmt.bufPrint(&ts_buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-        yd.year, md.month.numeric(), @as(u32, md.day_index) + 1,
+        yd.year,               md.month.numeric(),       @as(u32, md.day_index) + 1,
         day.getHoursIntoDay(), day.getMinutesIntoHour(), day.getSecondsIntoMinute(),
     }) catch "1970-01-01T00:00:00";
 
@@ -247,7 +247,7 @@ fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToE
     });
     defer span.end();
 
-    var http_client: http.Client = .{ .allocator = allocator };
+    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
     defer http_client.deinit();
 
     // build request body
@@ -363,4 +363,3 @@ fn parseVoyageResponse(allocator: Allocator, response: []const u8, expected_coun
 
     return embeddings;
 }
-

@@ -2,27 +2,27 @@
     .name = .leaflet_search,
     .version = "0.0.1",
     .fingerprint = 0x4a432eb7171f22eb,
-    .minimum_zig_version = "0.15.0",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .websocket = .{
-            .url = "https://github.com/zzstoatzz/websocket.zig/archive/9e6d732b207bdb0cb5fe5efb37a8173ac9638051.tar.gz",
-            .hash = "websocket-0.1.0-ZPISdeJ2AwC8rczCVo9NwFzIzW7EdvoXlNkNR_P-bdaf",
+            .url = "https://github.com/zzstoatzz/websocket.zig/archive/80c6434.tar.gz",
+            .hash = "websocket-0.1.0-ZPISdTHwAwA1d45BsYRE81Z8wNwZ3RhukgNADOma4eym",
         },
         .zql = .{
             .url = "https://github.com/zzstoatzz/zql/archive/main.tar.gz",
             .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
         },
         .zat = .{
-            .url = "https://tangled.sh/zat.dev/zat/archive/v0.2.13",
-            .hash = "zat-0.2.13-5PuC7tDBBAAchi_u_Myjr1hVhDbOollod03nbXqXHFn_",
+            .url = "https://tangled.sh/zat.dev/zat/archive/v0.3.0-alpha.16",
+            .hash = "zat-0.3.0-alpha.15-5PuC7nVhBQC8QDphqwrmXGqng1Xvo8ua_H5MqS-smp1T",
         },
         .zqlite = .{
             .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
             .hash = "zqlite-0.0.1-RWLaYz6bmAAT7E_jxopXf-j5Ea8VQldnxsd6TU8sa0Bb",
         },
         .logfire = .{
-            .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/main",
-            .hash = "logfire_zig-0.1.0-x2yDLgdwAADOXAZLNQJ8FUH5v1vfFwe5CApJtQ7c_pZd",
+            .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/zig-0.16",
+            .hash = "logfire_zig-0.1.0-x2yDLr5wAADNrQCuIHDTBMgyrohjJkhSSXvJRuWU5SPv",
         },
     },
     .paths = .{

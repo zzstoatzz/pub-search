@@ -1,5 +1,6 @@
 const std = @import("std");
-const posix = std.posix;
+const Io = std.Io;
+const compat = @import("compat.zig");
 
 const schema = @import("db/schema.zig");
 const result = @import("db/result.zig");
@@ -13,7 +14,7 @@ pub const Result = result.Result;
 pub const BatchResult = result.BatchResult;
 
 // global state
-var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+const allocator = std.heap.smp_allocator;
 var client: ?Client = null;
 var sync_client: ?Client = null;
 var local_db: ?LocalDb = null;
@@ -21,9 +22,9 @@ var local_db: ?LocalDb = null;
 /// Initialize Turso client only (fast, call synchronously at startup).
 /// Schema migrations run separately via initSchema() in the background thread
 /// so a slow/unreachable turso doesn't block the accept loop.
-pub fn initTurso() !void {
-    client = try Client.init(gpa.allocator());
-    sync_client = try Client.init(gpa.allocator());
+pub fn initTurso(io: Io) !void {
+    client = try Client.init(allocator, io);
+    sync_client = try Client.init(allocator, io);
 }
 
 /// Run schema migrations (idempotent). Call from background thread.
@@ -44,14 +45,14 @@ pub fn initLocalDb() void {
 
 fn initLocal() !void {
     // check if local db is disabled
-    if (posix.getenv("LOCAL_DB_ENABLED")) |val| {
+    if (compat.getenv("LOCAL_DB_ENABLED")) |val| {
         if (std.mem.eql(u8, val, "false") or std.mem.eql(u8, val, "0")) {
             std.debug.print("local db disabled via LOCAL_DB_ENABLED\n", .{});
             return;
         }
     }
 
-    local_db = LocalDb.init(gpa.allocator());
+    local_db = LocalDb.init(allocator);
     try local_db.?.open();
 }
 
@@ -106,7 +107,7 @@ fn syncLoop(turso: *Client, local: *LocalDb) void {
 
     // get sync interval from env (default 5 minutes)
     const interval_secs: u64 = blk: {
-        const env_val = posix.getenv("SYNC_INTERVAL_SECS") orelse "300";
+        const env_val = compat.getenv("SYNC_INTERVAL_SECS") orelse "300";
         break :blk std.fmt.parseInt(u64, env_val, 10) catch 300;
     };
 
@@ -114,7 +115,7 @@ fn syncLoop(turso: *Client, local: *LocalDb) void {
 
     // periodic incremental sync
     while (true) {
-        std.Thread.sleep(interval_secs * std.time.ns_per_s);
+        compat.sleepSecs(interval_secs);
         sync.incrementalSync(turso, local) catch |err| {
             std.debug.print("sync: incremental sync failed: {}\n", .{err});
         };

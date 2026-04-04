@@ -1,5 +1,5 @@
 const std = @import("std");
-const net = std.net;
+const Io = std.Io;
 const http = std.http;
 const mem = std.mem;
 const json = std.json;
@@ -7,6 +7,7 @@ const Allocator = mem.Allocator;
 const logfire = @import("logfire");
 const zql = @import("zql");
 const zat = @import("zat");
+const compat = @import("compat.zig");
 const db = @import("db.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
@@ -15,10 +16,10 @@ const dashboard = @import("server/dashboard.zig");
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
 
-pub fn handleConnection(conn: net.Server.Connection, accepted_at: i64) void {
-    defer conn.stream.close();
+pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
+    defer stream.close(io);
 
-    const queue_us = std.time.microTimestamp() - accepted_at;
+    const queue_us = compat.microTimestamp() - accepted_at;
     if (queue_us > 100_000) { // > 100ms
         logfire.warn("http.queue slow: {d}ms", .{@divTrunc(queue_us, 1000)});
     }
@@ -26,20 +27,20 @@ pub fn handleConnection(conn: net.Server.Connection, accepted_at: i64) void {
     var read_buffer: [HTTP_BUF_SIZE]u8 = undefined;
     var write_buffer: [HTTP_BUF_SIZE]u8 = undefined;
 
-    var reader = conn.stream.reader(&read_buffer);
-    var writer = conn.stream.writer(&write_buffer);
+    var reader = stream.reader(io, &read_buffer);
+    var writer = stream.writer(io, &write_buffer);
 
-    var server = http.Server.init(reader.interface(), &writer.interface);
+    var server = http.Server.init(&reader.interface, &writer.interface);
 
     while (true) {
-        const recv_start = std.time.microTimestamp();
+        const recv_start = compat.microTimestamp();
         var request = server.receiveHead() catch |err| {
             if (err != error.HttpConnectionClosing and err != error.EndOfStream) {
                 logfire.debug("http receive error: {}", .{err});
             }
             return;
         };
-        const recv_us = std.time.microTimestamp() - recv_start;
+        const recv_us = compat.microTimestamp() - recv_start;
         const target = request.head.target;
 
         const req_span = logfire.span("http.request", .{
@@ -48,7 +49,7 @@ pub fn handleConnection(conn: net.Server.Connection, accepted_at: i64) void {
             .receive_ms = @divTrunc(recv_us, 1000),
         });
 
-        handleRequest(&server, &request) catch |err| {
+        handleRequest(&server, &request, io) catch |err| {
             logfire.err("request error: {}", .{err});
             req_span.end();
             return;
@@ -59,7 +60,7 @@ pub fn handleConnection(conn: net.Server.Connection, accepted_at: i64) void {
     }
 }
 
-fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
+fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !void {
     _ = server;
     const target = request.head.target;
 
@@ -73,7 +74,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
     const path = if (mem.indexOf(u8, target, "?")) |qi| target[0..qi] else target;
 
     if (mem.startsWith(u8, path, "/search")) {
-        try handleSearch(request, target);
+        try handleSearch(request, target, io);
     } else if (mem.eql(u8, path, "/tags")) {
         try handleTags(request, target);
     } else if (mem.eql(u8, path, "/stats")) {
@@ -95,8 +96,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request) !void {
     }
 }
 
-fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = std.time.microTimestamp();
+fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = compat.microTimestamp();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -118,7 +119,7 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
     // resolve author param: if it's a handle (not a DID), resolve via AT Protocol
     const author_filter: ?[]const u8 = if (author_param) |ap| blk: {
         if (mem.startsWith(u8, ap, "did:")) break :blk ap;
-        break :blk resolveHandle(alloc, ap) catch null;
+        break :blk resolveHandle(alloc, ap, io) catch null;
     } else null;
 
     // record per-mode latency
@@ -168,7 +169,7 @@ fn handleSearch(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn handleTags(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = std.time.microTimestamp();
+    const start_time = compat.microTimestamp();
     defer metrics.timing.record(.tags, start_time);
 
     const span = logfire.span("http.tags", .{});
@@ -190,7 +191,7 @@ fn handleTags(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn handlePopular(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = std.time.microTimestamp();
+    const start_time = compat.microTimestamp();
     defer metrics.timing.record(.popular, start_time);
 
     const span = logfire.span("http.popular", .{});
@@ -447,7 +448,7 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
 }
 
 fn getDashboardUrl() []const u8 {
-    return std.posix.getenv("DASHBOARD_URL") orelse "https://pub-search.waow.tech/dashboard.html";
+    return compat.getenv("DASHBOARD_URL") orelse "https://pub-search.waow.tech/dashboard.html";
 }
 
 fn handleDashboard(request: *http.Server.Request) !void {
@@ -461,7 +462,7 @@ fn handleDashboard(request: *http.Server.Request) !void {
 }
 
 fn handleSimilar(request: *http.Server.Request, target: []const u8) !void {
-    const start_time = std.time.microTimestamp();
+    const start_time = compat.microTimestamp();
     defer metrics.timing.record(.similar, start_time);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -577,13 +578,13 @@ fn paginateJsonArray(alloc: Allocator, array_json: []const u8, limit: usize, off
 
 /// Resolve an AT Protocol handle to a DID via zat's HandleResolver.
 /// Tries HTTP .well-known first, falls back to DNS-over-HTTPS.
-fn resolveHandle(alloc: std.mem.Allocator, handle: []const u8) ![]const u8 {
+fn resolveHandle(alloc: std.mem.Allocator, handle: []const u8, io: Io) ![]const u8 {
     const parsed = zat.Handle.parse(handle) orelse {
         logfire.warn("resolveHandle: invalid handle: {s}", .{handle});
         return error.InvalidHandle;
     };
 
-    var resolver = zat.HandleResolver.init(alloc);
+    var resolver = zat.HandleResolver.init(io, alloc);
     defer resolver.deinit();
 
     return resolver.resolve(parsed) catch |err| {
@@ -595,17 +596,21 @@ fn resolveHandle(alloc: std.mem.Allocator, handle: []const u8) ![]const u8 {
 fn handleActivity(request: *http.Server.Request) !void {
     const counts = metrics.activity.getCounts();
 
-    // format as JSON array
+    // format as JSON array manually into buffer
     var buf: [512]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const writer = stream.writer();
-
-    writer.writeByte('[') catch return;
+    var pos: usize = 0;
+    buf[pos] = '[';
+    pos += 1;
     for (counts, 0..) |c, i| {
-        if (i > 0) writer.writeByte(',') catch return;
-        writer.print("{d}", .{c}) catch return;
+        if (i > 0) {
+            buf[pos] = ',';
+            pos += 1;
+        }
+        const written = std.fmt.bufPrint(buf[pos..], "{d}", .{c}) catch return;
+        pos += written.len;
     }
-    writer.writeByte(']') catch return;
+    buf[pos] = ']';
+    pos += 1;
 
-    try sendJson(request, stream.getWritten());
+    try sendJson(request, buf[0..pos]);
 }

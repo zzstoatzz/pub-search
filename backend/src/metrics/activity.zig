@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 
 // ring buffer for real-time search activity
 pub const SLOTS = 60;
@@ -6,12 +7,12 @@ const TICK_MS = 100;
 
 var counts: [SLOTS]u16 = .{0} ** SLOTS;
 var slot: usize = 0;
-var mutex: std.Thread.Mutex = .{};
+var mutex: compat.Mutex = .{};
 var thread: ?std.Thread = null;
 
 fn tickLoop() void {
     while (true) {
-        std.Thread.sleep(TICK_MS * std.time.ns_per_ms);
+        compat.sleepMs(TICK_MS);
         mutex.lock();
         slot = (slot + 1) % SLOTS;
         counts[slot] = 0;

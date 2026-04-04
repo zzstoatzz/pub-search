@@ -1,5 +1,6 @@
 const std = @import("std");
 const Client = @import("Client.zig");
+const compat = @import("../compat.zig");
 
 /// Initialize database schema and run migrations
 pub fn init(client: *Client) !void {
@@ -77,7 +78,7 @@ fn createTables(client: *Client) !void {
 
     // set service_started_at if not already set (first run ever)
     var ts_buf: [20]u8 = undefined;
-    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()}) catch "0";
+    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{compat.timestamp()}) catch "0";
     client.exec(
         "UPDATE stats SET service_started_at = ? WHERE id = 1 AND service_started_at IS NULL",
         &.{ts_str},
@@ -99,7 +100,6 @@ fn createTables(client: *Client) !void {
         \\  deleted_at INTEGER NOT NULL
         \\)
     , &.{});
-
 }
 
 fn runMigrations(client: *Client) !void {

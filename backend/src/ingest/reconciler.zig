@@ -12,31 +12,31 @@ const std = @import("std");
 const http = std.http;
 const json = std.json;
 const mem = std.mem;
-const posix = std.posix;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
+const compat = @import("../compat.zig");
 const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
 const indexer = @import("indexer.zig");
 
 // config (env vars with defaults)
 fn getIntervalSecs() u64 {
-    const val = posix.getenv("RECONCILE_INTERVAL_SECS") orelse "1800";
+    const val = compat.getenv("RECONCILE_INTERVAL_SECS") orelse "1800";
     return std.fmt.parseInt(u64, val, 10) catch 1800;
 }
 
 fn getBatchSize() usize {
-    const val = posix.getenv("RECONCILE_BATCH_SIZE") orelse "50";
+    const val = compat.getenv("RECONCILE_BATCH_SIZE") orelse "50";
     return std.fmt.parseInt(usize, val, 10) catch 50;
 }
 
 fn getReverifyDays() u64 {
-    const val = posix.getenv("RECONCILE_REVERIFY_DAYS") orelse "7";
+    const val = compat.getenv("RECONCILE_REVERIFY_DAYS") orelse "7";
     return std.fmt.parseInt(u64, val, 10) catch 7;
 }
 
 fn isEnabled() bool {
-    const val = posix.getenv("RECONCILE_ENABLED") orelse "true";
+    const val = compat.getenv("RECONCILE_ENABLED") orelse "true";
     return !mem.eql(u8, val, "false") and !mem.eql(u8, val, "0");
 }
 
@@ -81,7 +81,7 @@ pub fn start(allocator: Allocator) void {
 
 fn worker(allocator: Allocator) void {
     // wait for db to be ready
-    std.Thread.sleep(10 * std.time.ns_per_s);
+    compat.sleep(10 * std.time.ns_per_s);
 
     // PDS cache: DID → PDS endpoint URL (persists across cycles)
     var pds_cache = std.StringHashMap([]const u8).init(allocator);
@@ -113,7 +113,7 @@ fn worker(allocator: Allocator) void {
             @min(interval * consecutive_errors, 3600)
         else
             interval;
-        std.Thread.sleep(backoff * std.time.ns_per_s);
+        compat.sleep(backoff * std.time.ns_per_s);
     }
 }
 
@@ -136,7 +136,7 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
     var batch_str: [10]u8 = undefined;
     const batch_str_val = std.fmt.bufPrint(&batch_str, "{d}", .{batch_size}) catch "50";
 
-    const cutoff_ts = formatTimestamp(std.time.timestamp() - @as(i64, @intCast(reverify_days * 86400)));
+    const cutoff_ts = formatTimestamp(compat.timestamp() - @as(i64, @intCast(reverify_days * 86400)));
     const cutoff = cutoff_ts.slice();
 
     var result = try client.query(
@@ -220,7 +220,7 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
         }
 
         // rate limit: 200ms between PDS requests
-        std.Thread.sleep(200 * std.time.ns_per_ms);
+        compat.sleep(200 * std.time.ns_per_ms);
     }
 
     // batch delete from tpuf
@@ -245,7 +245,7 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
 }
 
 fn updateVerifiedAt(client: *db.Client, uri: []const u8) void {
-    const now = formatTimestamp(std.time.timestamp());
+    const now = formatTimestamp(compat.timestamp());
     client.exec(
         "UPDATE documents SET verified_at = ? WHERE uri = ?",
         &.{ now.slice(), uri },
@@ -272,7 +272,7 @@ fn formatTimestamp(ts: i64) TimestampBuf {
     const md = yd.calculateMonthDay();
     var result: TimestampBuf = undefined;
     const formatted = std.fmt.bufPrint(&result.buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-        yd.year, md.month.numeric(), @as(u32, md.day_index) + 1,
+        yd.year,               md.month.numeric(),       @as(u32, md.day_index) + 1,
         day.getHoursIntoDay(), day.getMinutesIntoHour(), day.getSecondsIntoMinute(),
     }) catch {
         // fallback: epoch (will cause re-verify, which is safe)
@@ -294,7 +294,7 @@ fn checkRecord(allocator: Allocator, pds: []const u8, did: []const u8, collectio
         return .error_skip;
     };
 
-    var http_client: http.Client = .{ .allocator = allocator };
+    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
     defer http_client.deinit();
 
     var response_body: std.Io.Writer.Allocating = .init(allocator);
@@ -336,7 +336,7 @@ fn resolvePdsHttp(allocator: Allocator, did: []const u8) ?[]const u8 {
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://plc.directory/{s}", .{did}) catch return null;
 
-    var http_client: http.Client = .{ .allocator = allocator };
+    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
     defer http_client.deinit();
 
     var response_body: std.Io.Writer.Allocating = .init(allocator);

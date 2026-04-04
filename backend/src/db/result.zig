@@ -32,7 +32,7 @@ pub const Result = struct {
             return .{ .allocator = allocator, .parsed = parsed, .rows = &.{} };
         };
 
-        var rows: std.ArrayList(Row) = .{};
+        var rows: std.ArrayList(Row) = .empty;
         errdefer rows.deinit(allocator);
 
         for (json_rows.items) |item| {
@@ -87,7 +87,7 @@ pub const BatchResult = struct {
             return .{ .allocator = allocator, .parsed = parsed, .results = &.{} };
         }
 
-        var all_results: std.ArrayList([]const Row) = .{};
+        var all_results: std.ArrayList([]const Row) = .empty;
         errdefer {
             for (all_results.items) |rows| allocator.free(rows);
             all_results.deinit(allocator);
@@ -100,7 +100,7 @@ pub const BatchResult = struct {
             const item = turso_results.array.items[i];
             const json_rows = getRowsFromResult(item);
 
-            var rows: std.ArrayList(Row) = .{};
+            var rows: std.ArrayList(Row) = .empty;
             if (json_rows) |jr| {
                 for (jr.items) |row_item| {
                     if (row_item == .array) {

@@ -2,11 +2,13 @@
 //! https://docs.turso.tech/sdk/http/reference
 
 const std = @import("std");
+const Io = std.Io;
 const http = std.http;
 const json = std.json;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const logfire = @import("logfire");
+const compat = @import("../compat.zig");
 
 const result = @import("result.zig");
 pub const Result = result.Result;
@@ -27,15 +29,15 @@ const AUTH_BUF_SIZE = 512;
 allocator: Allocator,
 url: []const u8,
 token: []const u8,
-mutex: std.Thread.Mutex = .{},
+mutex: compat.Mutex = .{},
 http_client: http.Client,
 
-pub fn init(allocator: Allocator) !Client {
-    const url = std.posix.getenv("TURSO_URL") orelse {
+pub fn init(allocator_param: Allocator, io: Io) !Client {
+    const url = compat.getenv("TURSO_URL") orelse {
         std.debug.print("TURSO_URL not set\n", .{});
         return error.MissingEnv;
     };
-    const token = std.posix.getenv("TURSO_TOKEN") orelse {
+    const token = compat.getenv("TURSO_TOKEN") orelse {
         std.debug.print("TURSO_TOKEN not set\n", .{});
         return error.MissingEnv;
     };
@@ -49,10 +51,10 @@ pub fn init(allocator: Allocator) !Client {
     std.debug.print("turso client initialized: {s}\n", .{host});
 
     return .{
-        .allocator = allocator,
+        .allocator = allocator_param,
         .url = host,
         .token = token,
-        .http_client = .{ .allocator = allocator },
+        .http_client = .{ .allocator = allocator_param, .io = io },
     };
 }
 
@@ -333,7 +335,7 @@ pub fn startKeepalive(self: *Client) void {
 
 fn keepaliveLoop(self: *Client) void {
     while (true) {
-        std.Thread.sleep(KEEPALIVE_INTERVAL_NS);
+        compat.sleep(KEEPALIVE_INTERVAL_NS);
         _ = self.exec("SELECT 1", .{}) catch |err| {
             logfire.debug("turso: keepalive ping failed: {}", .{err});
         };

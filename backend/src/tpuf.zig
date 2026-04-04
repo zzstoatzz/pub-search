@@ -12,8 +12,8 @@ const std = @import("std");
 const json = std.json;
 const http = std.http;
 const mem = std.mem;
-const posix = std.posix;
 const Allocator = mem.Allocator;
+const compat = @import("compat.zig");
 const logfire = @import("logfire");
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
@@ -64,8 +64,8 @@ pub const QueryResult = struct {
 
 /// Read config from environment. Call once at startup.
 pub fn init() void {
-    api_key = posix.getenv("TURBOPUFFER_API_KEY");
-    if (posix.getenv("TURBOPUFFER_NAMESPACE")) |ns| {
+    api_key = compat.getenv("TURBOPUFFER_API_KEY");
+    if (compat.getenv("TURBOPUFFER_NAMESPACE")) |ns| {
         namespace = ns;
     }
 
@@ -86,7 +86,7 @@ pub fn init() void {
         logfire.info("tpuf: TURBOPUFFER_API_KEY not set, vector store disabled", .{});
     }
 
-    voyage_api_key = posix.getenv("VOYAGE_API_KEY");
+    voyage_api_key = compat.getenv("VOYAGE_API_KEY");
     if (voyage_api_key != null) {
         logfire.info("tpuf: voyage query embedding enabled", .{});
     }
@@ -130,7 +130,7 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     defer allocator.free(body);
 
     // make request
-    var http_client: http.Client = .{ .allocator = allocator };
+    var http_client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
     defer http_client.deinit();
 
     var auth_buf: [256]u8 = undefined;
@@ -553,7 +553,7 @@ fn jsonUint(obj: json.ObjectMap, key: []const u8) u64 {
 // --- HTTP ---
 
 fn doRequest(allocator: Allocator, key: []const u8, url: []const u8, body: []const u8) ![]const u8 {
-    var client: http.Client = .{ .allocator = allocator };
+    var client: http.Client = .{ .allocator = allocator, .io = compat.getIo() };
     defer client.deinit();
 
     var auth_buf: [256]u8 = undefined;
@@ -607,7 +607,7 @@ fn keepaliveLoop(allocator: Allocator) void {
     // minimal query body: rank by ID, top_k=1, no attributes
     const ping_body = "{\"rank_by\":[\"id\",\"asc\"],\"top_k\":1,\"include_attributes\":[]}";
     while (true) {
-        std.Thread.sleep(KEEPALIVE_INTERVAL_NS);
+        compat.sleep(KEEPALIVE_INTERVAL_NS);
         const key = api_key orelse return;
         const response = doRequest(allocator, key, query_url, ping_body) catch |err| {
             logfire.debug("tpuf: keepalive ping failed: {}", .{err});
