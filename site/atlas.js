@@ -838,7 +838,10 @@
 
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
-    var factor = e.deltaY > 0 ? 0.9 : 1.1;
+    // scale zoom proportionally to deltaY — gentle for trackpad, snappy for mouse wheel
+    // deltaMode 1 = lines (mouse wheel): multiply by 40 to approximate pixels
+    var dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+    var factor = Math.pow(0.998, dy); // ~0.93 per 35px mouse tick, smooth for trackpad
     var newZoom = Math.max(view.minZoom, Math.min(view.maxZoom, view.zoom * factor));
     cacheTransform();
     var d = screenToData(e.clientX, e.clientY);
