@@ -78,6 +78,8 @@ but `http.search` intermittently shows 1-3 seconds. the gap occurs between two c
 
 on a shared CPU with fractional allocation, all these threads compete. the BatchSpanProcessor's 500ms TLS flush is particularly suspect — TLS is CPU-intensive.
 
+> **note (april 2026):** the backend now runs on zig 0.16 with thread-per-connection (Thread.Pool was removed). the thread count listed above is from the 0.15 era but the contention analysis still applies.
+
 ## possible next steps
 
 1. **upgrade VM**: move to `performance-1x` (dedicated CPU) — this is the real fix
@@ -88,7 +90,7 @@ on a shared CPU with fractional allocation, all these threads compete. the Batch
 
 ```
 client → fly proxy (TLS termination) → app (port 3000)
-                                         ├── HTTP thread pool (16 workers)
+                                         ├── thread-per-connection (accept loop spawns threads)
                                          ├── local SQLite (read_conn for search, conn+mutex for writes)
                                          ├── turso client (fallback for unsupported queries)
                                          ├── sync thread (turso → local, full on startup + periodic incremental)
