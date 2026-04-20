@@ -181,7 +181,8 @@ fn createSchema(self: *LocalDb) !void {
         \\  description TEXT,
         \\  base_path TEXT,
         \\  platform TEXT DEFAULT 'leaflet',
-        \\  source_collection TEXT
+        \\  source_collection TEXT,
+        \\  indexed_at TEXT
         \\)
     , .{}) catch |err| {
         std.debug.print("local db: failed to create publications table: {}\n", .{err});
@@ -255,6 +256,7 @@ fn createSchema(self: *LocalDb) !void {
     c.exec("ALTER TABLE documents ADD COLUMN embedded_at TEXT", .{}) catch {};
     c.exec("ALTER TABLE documents ADD COLUMN cover_image TEXT DEFAULT ''", .{}) catch {};
     c.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", .{}) catch {};
+    c.exec("ALTER TABLE publications ADD COLUMN indexed_at TEXT", .{}) catch {};
 }
 
 /// Row adapter matching result.Row interface (column-indexed access)

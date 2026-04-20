@@ -251,4 +251,15 @@ fn runMigrations(client: *Client) !void {
     // is_bridgyfed: marks documents from bridgy fed (brid.gy PDS)
     // 0 = normal, 1 = bridgy fed (excluded from search by default)
     client.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", &.{}) catch {};
+
+    // indexed_at for publications — mirrors documents.indexed_at so incremental
+    // sync can pull new/updated publications. without this, publications only
+    // sync on fullSync (first boot) and drift forever afterward.
+    client.exec("ALTER TABLE publications ADD COLUMN indexed_at TEXT", &.{}) catch {};
+    // one-time backfill so existing rows become visible to the incremental sync.
+    // subsequent inserts/updates stamp indexed_at in indexer.zig.
+    client.exec(
+        "UPDATE publications SET indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE indexed_at IS NULL",
+        &.{},
+    ) catch {};
 }

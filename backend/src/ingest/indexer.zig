@@ -261,7 +261,16 @@ pub fn insertPublication(
     } else |_| {}
 
     try c.exec(
-        "INSERT OR REPLACE INTO publications (uri, did, rkey, name, description, base_path) VALUES (?, ?, ?, ?, ?, ?)",
+        \\INSERT INTO publications (uri, did, rkey, name, description, base_path, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        \\ON CONFLICT(uri) DO UPDATE SET
+        \\  did = excluded.did,
+        \\  rkey = excluded.rkey,
+        \\  name = excluded.name,
+        \\  description = excluded.description,
+        \\  base_path = excluded.base_path,
+        \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
+    ,
         &.{ uri, did, rkey, name, description orelse "", base_path orelse "" },
     );
 

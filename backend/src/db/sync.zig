@@ -106,7 +106,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
     var pub_count: usize = 0;
     {
         var pub_result = turso.query(
-            "SELECT uri, did, rkey, name, description, base_path, platform FROM publications",
+            "SELECT uri, did, rkey, name, description, base_path, platform, indexed_at FROM publications",
             &.{},
         ) catch |err| {
             std.debug.print("sync: turso publications query failed: {}\n", .{err});
@@ -314,6 +314,34 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
         ) catch {};
     }
 
+    // fetch new/updated publications (same since_str as documents).
+    // publications were silently missing from incremental sync before
+    // `publications.indexed_at` was added — they only synced on fullSync,
+    // so the local replica drifted by hundreds of rows over time.
+    var new_pubs: usize = 0;
+    pubs: {
+        var pub_result = turso.query(
+            \\SELECT uri, did, rkey, name, description, base_path, platform, indexed_at
+            \\FROM publications
+            \\WHERE indexed_at >= ?
+            \\ORDER BY indexed_at
+        , &.{since_str}) catch |err| {
+            std.debug.print("sync: incremental publications query failed: {}\n", .{err});
+            sync_span.recordError(err);
+            // fall through to tombstones — don't abort entire sync
+            break :pubs;
+        };
+        defer pub_result.deinit();
+
+        local.lock();
+        defer local.unlock();
+
+        for (pub_result.rows) |row| {
+            insertPublicationLocal(conn, row) catch {};
+            new_pubs += 1;
+        }
+    }
+
     // sync deletions via tombstones (deleted_at is unix timestamp integer)
     var deleted: usize = 0;
     tombstone: {
@@ -355,10 +383,11 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
     local.unlock();
 
     sync_span.setAttribute("new_docs", @as(i64, @intCast(new_docs)));
+    sync_span.setAttribute("new_pubs", @as(i64, @intCast(new_pubs)));
     sync_span.setAttribute("deleted", @as(i64, @intCast(deleted)));
 
-    if (new_docs > 0 or deleted > 0) {
-        std.debug.print("sync: incremental sync — {d} new docs, {d} tombstone deletions\n", .{ new_docs, deleted });
+    if (new_docs > 0 or new_pubs > 0 or deleted > 0) {
+        std.debug.print("sync: incremental sync — {d} new docs, {d} new pubs, {d} tombstone deletions\n", .{ new_docs, new_pubs, deleted });
     }
 }
 
@@ -403,8 +432,8 @@ fn insertPublicationLocal(conn: zqlite.Conn, row: anytype) !void {
     // insert into main table (no created_at - Turso publications table doesn't have it)
     conn.exec(
         \\INSERT OR REPLACE INTO publications
-        \\(uri, did, rkey, name, description, base_path, platform)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        \\(uri, did, rkey, name, description, base_path, platform, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     , .{
         row.text(0), // uri
         row.text(1), // did
@@ -413,6 +442,7 @@ fn insertPublicationLocal(conn: zqlite.Conn, row: anytype) !void {
         row.text(4), // description
         row.text(5), // base_path
         row.text(6), // platform
+        row.text(7), // indexed_at
     }) catch |err| {
         return err;
     };
