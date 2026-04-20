@@ -4,6 +4,7 @@
 const std = @import("std");
 const Io = std.Io;
 const zqlite = @import("zqlite");
+const logfire = @import("logfire");
 const Allocator = std.mem.Allocator;
 const Client = @import("Client.zig");
 const LocalDb = @import("LocalDb.zig");
@@ -214,7 +215,13 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
 
 /// Incremental sync: fetch documents created since last sync
 pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
-    const conn = local.getConn() orelse return error.LocalNotOpen;
+    const sync_span = logfire.span("sync.incremental", .{});
+    defer sync_span.end();
+
+    const conn = local.getConn() orelse {
+        sync_span.recordError(error.LocalNotOpen);
+        return error.LocalNotOpen;
+    };
 
     // get last sync time
     local.lock();
@@ -269,6 +276,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
     };
 
     std.debug.print("sync: incremental sync since {s}\n", .{since_str});
+    sync_span.setAttribute("since", since_str);
 
     // fetch new documents (use indexed_at, not created_at, because resynced
     // documents can have old publication dates but recent insertion times)
@@ -283,6 +291,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             \\ORDER BY indexed_at
         , &.{since_str}) catch |err| {
             std.debug.print("sync: incremental query failed: {}\n", .{err});
+            sync_span.recordError(err);
             return;
         };
         defer result.deinit();
@@ -316,6 +325,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             &.{since_ts_str},
         ) catch |err| {
             std.debug.print("sync: tombstone query failed: {}\n", .{err});
+            sync_span.recordError(err);
             break :tombstone;
         };
         defer tomb_result.deinit();
@@ -343,6 +353,9 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
     local.lock();
     conn.exec("PRAGMA wal_checkpoint(PASSIVE)", .{}) catch {};
     local.unlock();
+
+    sync_span.setAttribute("new_docs", @as(i64, @intCast(new_docs)));
+    sync_span.setAttribute("deleted", @as(i64, @intCast(deleted)));
 
     if (new_docs > 0 or deleted > 0) {
         std.debug.print("sync: incremental sync — {d} new docs, {d} tombstone deletions\n", .{ new_docs, deleted });

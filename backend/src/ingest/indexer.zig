@@ -56,6 +56,7 @@ pub fn insertDocument(
             const existing_uri = row.text(0);
             if (!std.mem.eql(u8, existing_uri, uri)) {
                 logfire.debug("indexer: skipping dupe for {s} (existing: {s})", .{ uri, existing_uri });
+                logfire.span("tap.dropped", .{ .reason = "content_hash_dupe", .uri = uri, .existing_uri = existing_uri }).end();
                 return;
             }
         }
@@ -151,7 +152,10 @@ pub fn insertDocument(
         base_path = base_path[0 .. base_path.len - 1];
 
     // skip .test domains (dev/staging data)
-    if (std.mem.endsWith(u8, base_path, ".test")) return;
+    if (std.mem.endsWith(u8, base_path, ".test")) {
+        logfire.span("tap.dropped", .{ .reason = "test_domain", .uri = uri, .base_path = base_path }).end();
+        return;
+    }
 
     // detect platform from basePath if platform is unknown/other
     // this handles site.standard.* documents where collection doesn't indicate platform
@@ -185,6 +189,7 @@ pub fn insertDocument(
     // drop bridgy fed content entirely — low quality, pollutes the index
     if (std.mem.eql(u8, is_bridgyfed, "1")) {
         logfire.debug("indexer: dropping bridgy fed content {s}", .{uri});
+        logfire.span("tap.dropped", .{ .reason = "bridgy_fed", .uri = uri, .pub_uri = pub_uri }).end();
         return;
     }
 
