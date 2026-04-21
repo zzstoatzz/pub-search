@@ -92,12 +92,47 @@
       width: 100%;
       padding: 0.5rem;
       font-family: monospace;
-      font-size: 16px;
+      font-size: 16px; /* 16px prevents iOS auto-zoom on focus */
       background: var(--bg-subtle);
       border: 1px solid var(--border-focus);
       color: var(--text);
     }
     input[type="text"]:focus { outline: 1px solid #1B7340; }
+
+    /* typeahead dropdown */
+    .handle-wrap { position: relative; flex: 1; }
+    .typeahead {
+      position: absolute;
+      top: calc(100% + 2px);
+      left: 0;
+      right: 0;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      max-height: 240px;
+      overflow-y: auto;
+      z-index: 10;
+    }
+    .typeahead:empty, .typeahead.hidden { display: none; }
+    .typeahead-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.5rem;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .typeahead-row:last-child { border-bottom: none; }
+    .typeahead-row:hover, .typeahead-row.active { background: var(--bg-hover); }
+    .typeahead-avatar {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+      object-fit: cover;
+    }
+    .typeahead-handle { color: var(--text-bright); }
+    .typeahead-name { color: var(--text-dim); font-size: 11px; }
 
     button {
       padding: 0.5rem 1rem;
@@ -231,7 +266,12 @@
     <section id="login" class="card hidden">
       <p class="hint">sign in with your atproto handle:</p>
       <form id="login-form" style="display:flex;gap:0.5rem">
-        <input id="handle" type="text" placeholder="you.bsky.social" autocomplete="off" autocapitalize="off" required style="flex:1">
+        <div class="handle-wrap">
+          <input id="handle" type="text" placeholder="you.bsky.social"
+                 autocomplete="off" autocapitalize="off" autocorrect="off"
+                 spellcheck="false" required>
+          <div id="typeahead" class="typeahead hidden" role="listbox"></div>
+        </div>
         <button type="submit">sign in</button>
       </form>
       <div id="login-status" class="status"></div>
@@ -413,6 +453,82 @@
       if (!h) return;
       window.location.href = API_URL + '/oauth/login?handle=' + encodeURIComponent(h);
     });
+
+    // handle typeahead — hits typeahead.waow.tech (drop-in for app.bsky.actor.searchActorsTypeahead)
+    (function wireTypeahead() {
+      const input = $('handle');
+      if (!input) return; // login form may not be present
+      const box = $('typeahead');
+      let debounce = 0;
+      let activeIdx = -1;
+      let items = [];
+
+      const renderRows = (actors) => {
+        items = actors || [];
+        activeIdx = -1;
+        if (!items.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+        box.innerHTML = items.map((a, i) => `
+          <div class="typeahead-row" role="option" data-i="${i}">
+            ${a.avatar ? `<img class="typeahead-avatar" src="${escapeHtml(a.avatar)}" alt="">` : '<div class="typeahead-avatar"></div>'}
+            <span class="typeahead-handle">@${escapeHtml(a.handle)}</span>
+            ${a.displayName ? `<span class="typeahead-name">${escapeHtml(a.displayName)}</span>` : ''}
+          </div>
+        `).join('');
+        box.classList.remove('hidden');
+        box.querySelectorAll('.typeahead-row').forEach(row => {
+          row.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // keep focus on input
+            select(parseInt(row.dataset.i, 10));
+          });
+        });
+      };
+
+      const select = (i) => {
+        if (i < 0 || i >= items.length) return;
+        input.value = items[i].handle;
+        box.classList.add('hidden');
+        items = [];
+        // auto-submit — user picked, they're ready
+        $('login-form').requestSubmit();
+      };
+
+      const setActive = (i) => {
+        activeIdx = i;
+        box.querySelectorAll('.typeahead-row').forEach((row, idx) => {
+          row.classList.toggle('active', idx === i);
+        });
+      };
+
+      input.addEventListener('input', () => {
+        clearTimeout(debounce);
+        const q = input.value.trim();
+        if (q.length < 2) { renderRows([]); return; }
+        debounce = setTimeout(async () => {
+          try {
+            const r = await fetch(`https://typeahead.waow.tech/xrpc/app.bsky.actor.searchActorsTypeahead?q=${encodeURIComponent(q)}&limit=6`);
+            if (!r.ok) return;
+            const j = await r.json();
+            renderRows(j.actors || []);
+          } catch {}
+        }, 150);
+      });
+
+      input.addEventListener('keydown', (e) => {
+        if (box.classList.contains('hidden') || !items.length) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); setActive(Math.min(activeIdx + 1, items.length - 1)); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(activeIdx - 1, 0)); }
+        else if (e.key === 'Enter' && activeIdx >= 0) { e.preventDefault(); select(activeIdx); }
+        else if (e.key === 'Escape') { box.classList.add('hidden'); }
+      });
+
+      input.addEventListener('blur', () => {
+        // slight delay so mousedown on a row can fire first
+        setTimeout(() => box.classList.add('hidden'), 120);
+      });
+      input.addEventListener('focus', () => {
+        if (items.length) box.classList.remove('hidden');
+      });
+    })();
 
     render();
   </script>
