@@ -5,10 +5,10 @@
     "main": {
       "type": "record",
       "key": "tid",
-      "description": "Subscribe to new documents indexed by pub-search that match a trigger. pub-search fires a delivery (e.g. webhook) each time a matching document is ingested. The record lives on the user's PDS so subscriptions are portable and inspectable.",
+      "description": "Subscribe to new documents indexed by pub-search that match a trigger. When a matching document is ingested, the @pub-search.waow.tech bot DMs the subscriber on bsky chat. The record lives on the user's PDS so subscriptions are portable and inspectable.",
       "record": {
         "type": "object",
-        "required": ["triggerKind", "triggerValue", "destinationKind", "destinationValue", "createdAt"],
+        "required": ["triggerKind", "triggerValue", "createdAt"],
         "properties": {
           "triggerKind": {
             "type": "string",
@@ -19,16 +19,6 @@
             "type": "string",
             "maxLength": 512,
             "description": "Value to match. For author: a DID. For publication: an at-uri. For platform: the platform name. For tag: the tag string."
-          },
-          "destinationKind": {
-            "type": "string",
-            "knownValues": ["bsky"],
-            "description": "Where to send notifications. 'bsky' sends a direct message via chat.bsky on behalf of the authenticated subscriber."
-          },
-          "destinationValue": {
-            "type": "string",
-            "maxLength": 512,
-            "description": "For bsky: the recipient's DID or handle. The subscriber must have chat DM'ing permission with the recipient."
           },
           "label": {
             "type": "string",

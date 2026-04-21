@@ -22,8 +22,7 @@ const json = std.json;
 const Allocator = std.mem.Allocator;
 const logfire = @import("logfire");
 const db = @import("db.zig");
-const oauth = @import("oauth.zig");
-const store = @import("state.zig");
+const bsky_bot = @import("bsky_bot.zig");
 
 pub const SUBSCRIPTION_COLLECTION = "tech.waow.pub-search.subscription";
 
@@ -33,8 +32,8 @@ var global_alloc: ?Allocator = null;
 const QUEUE_CAPACITY = 1024;
 
 const DeliveryJob = struct {
+    /// the subscriber — who receives the DM from the bot
     owner_did: []u8,
-    recipient_did: []u8,
     sub_rkey: []u8,
     trigger_kind: []u8,
     trigger_value: []u8,
@@ -43,7 +42,6 @@ const DeliveryJob = struct {
 
     fn deinit(self: *DeliveryJob, a: Allocator) void {
         a.free(self.owner_did);
-        a.free(self.recipient_did);
         a.free(self.sub_rkey);
         a.free(self.trigger_kind);
         a.free(self.trigger_value);
@@ -58,7 +56,6 @@ var queue_cond: Io.Condition = .init;
 var dropped_count = std.atomic.Value(u64).init(0);
 var delivered_count = std.atomic.Value(u64).init(0);
 var failed_count = std.atomic.Value(u64).init(0);
-var skipped_no_session_count = std.atomic.Value(u64).init(0);
 
 // ---------------------------------------------------------------------------
 // init + schema
@@ -232,7 +229,7 @@ fn matchAndEnqueue(arena: Allocator, kind: []const u8, value: []const u8, doc_ti
     const local = db.getLocalDbRaw() orelse return;
 
     var rows = local.query(
-        \\SELECT rkey, owner_did, destination_kind, destination_value, trigger_kind, trigger_value
+        \\SELECT rkey, owner_did, trigger_kind, trigger_value
         \\FROM subscriptions
         \\WHERE trigger_kind = ? AND trigger_value = ?
     , .{ kind, value }) catch |err| {
@@ -244,16 +241,11 @@ fn matchAndEnqueue(arena: Allocator, kind: []const u8, value: []const u8, doc_ti
     while (rows.next()) |row| {
         const rkey = row.text(0);
         const owner_did = row.text(1);
-        const dest_kind = row.text(2);
-        const dest_value = row.text(3);
-        const trigger_kind = row.text(4);
-        const trigger_value = row.text(5);
-
-        if (!std.mem.eql(u8, dest_kind, "bsky")) continue;
+        const trigger_kind = row.text(2);
+        const trigger_value = row.text(3);
 
         enqueue(.{
             .owner_did = owner_did,
-            .recipient_did = dest_value,
             .sub_rkey = rkey,
             .trigger_kind = trigger_kind,
             .trigger_value = trigger_value,
@@ -274,7 +266,7 @@ pub fn testFire(arena: Allocator, owner_did: []const u8, rkey: []const u8) !void
     const local = db.getLocalDbRaw() orelse return error.LocalDbUnavailable;
 
     var rows = try local.query(
-        \\SELECT destination_kind, destination_value, trigger_kind, trigger_value
+        \\SELECT trigger_kind, trigger_value
         \\FROM subscriptions WHERE owner_did = ? AND rkey = ?
     , .{ owner_did, rkey });
     defer rows.deinit();
@@ -283,18 +275,13 @@ pub fn testFire(arena: Allocator, owner_did: []const u8, rkey: []const u8) !void
         logfire.warn("testFire: sub not found owner={s} rkey={s}", .{ owner_did, rkey });
         return error.NotFound;
     };
-    const dest_kind = row.text(0);
-    const dest_value = row.text(1);
-    const trigger_kind = row.text(2);
-    const trigger_value = row.text(3);
+    const trigger_kind = row.text(0);
+    const trigger_value = row.text(1);
 
-    if (!std.mem.eql(u8, dest_kind, "bsky")) return error.UnsupportedDestination;
-
-    logfire.info("testFire: enqueuing sub rkey={s} owner={s} recipient={s}", .{ rkey, owner_did, dest_value });
+    logfire.info("testFire: enqueuing sub rkey={s} owner={s}", .{ rkey, owner_did });
 
     try enqueue(.{
         .owner_did = owner_did,
-        .recipient_did = dest_value,
         .sub_rkey = rkey,
         .trigger_kind = trigger_kind,
         .trigger_value = trigger_value,
@@ -309,7 +296,6 @@ pub fn testFire(arena: Allocator, owner_did: []const u8, rkey: []const u8) !void
 
 const EnqueueInput = struct {
     owner_did: []const u8,
-    recipient_did: []const u8,
     sub_rkey: []const u8,
     trigger_kind: []const u8,
     trigger_value: []const u8,
@@ -328,7 +314,6 @@ fn enqueue(in: EnqueueInput, _: Allocator) !void {
 
     const job: DeliveryJob = .{
         .owner_did = try alloc.dupe(u8, in.owner_did),
-        .recipient_did = try alloc.dupe(u8, in.recipient_did),
         .sub_rkey = try alloc.dupe(u8, in.sub_rkey),
         .trigger_kind = try alloc.dupe(u8, in.trigger_kind),
         .trigger_value = try alloc.dupe(u8, in.trigger_value),
@@ -365,15 +350,9 @@ fn workerLoop(io: Io) void {
         var job = dequeueBlocking(io) orelse continue;
         defer job.deinit(alloc);
 
-        deliver(alloc, &job) catch |err| switch (err) {
-            error.NoSession => {
-                _ = skipped_no_session_count.fetchAdd(1, .monotonic);
-                logfire.warn("notifications: skip delivery sub={s} — subscriber has no live session", .{job.sub_rkey});
-            },
-            else => {
-                _ = failed_count.fetchAdd(1, .monotonic);
-                logfire.warn("notifications: delivery failed sub={s}: {}", .{ job.sub_rkey, err });
-            },
+        deliver(alloc, &job) catch |err| {
+            _ = failed_count.fetchAdd(1, .monotonic);
+            logfire.warn("notifications: delivery failed sub={s}: {}", .{ job.sub_rkey, err });
         };
     }
 }
@@ -383,18 +362,7 @@ fn deliver(alloc: Allocator, job: *const DeliveryJob) !void {
     defer arena.deinit();
     const a = arena.allocator();
 
-    logfire.info("deliver: starting sub={s} owner={s} recipient={s}", .{ job.sub_rkey, job.owner_did, job.recipient_did });
-
-    const session = (try store.getSession(a, job.owner_did)) orelse {
-        logfire.warn("deliver: NO session in memory for owner={s}", .{job.owner_did});
-        return error.NoSession;
-    };
-
-    const convo_id = oauth.chatGetConvoForMembers(a, session, &.{job.recipient_did}) catch |err| {
-        logfire.warn("deliver: getConvoForMembers failed sub={s} err={}", .{ job.sub_rkey, err });
-        return err;
-    };
-    logfire.info("deliver: convo_id={s} sub={s}", .{ convo_id, job.sub_rkey });
+    logfire.info("deliver: starting sub={s} to_did={s}", .{ job.sub_rkey, job.owner_did });
 
     const text = try std.fmt.allocPrint(a,
         \\new on pub-search — matched your {s}="{s}" subscription
@@ -403,23 +371,20 @@ fn deliver(alloc: Allocator, job: *const DeliveryJob) !void {
         \\{s}
     , .{ job.trigger_kind, job.trigger_value, job.doc_title, job.doc_url });
 
-    oauth.chatSendMessage(a, session, convo_id, text) catch |err| {
-        logfire.warn("deliver: sendMessage failed sub={s} err={}", .{ job.sub_rkey, err });
-        return err;
-    };
-    logfire.info("deliver: DM sent sub={s} recipient={s}", .{ job.sub_rkey, job.recipient_did });
+    try bsky_bot.sendDm(a, job.owner_did, text);
+
+    logfire.info("deliver: DM sent sub={s}", .{job.sub_rkey});
     _ = delivered_count.fetchAdd(1, .monotonic);
 }
 
-pub fn stats() struct { delivered: u64, failed: u64, dropped: u64, skipped_no_session: u64, queued: usize } {
-    const io = global_io orelse return .{ .delivered = 0, .failed = 0, .dropped = 0, .skipped_no_session = 0, .queued = 0 };
+pub fn stats() struct { delivered: u64, failed: u64, dropped: u64, queued: usize } {
+    const io = global_io orelse return .{ .delivered = 0, .failed = 0, .dropped = 0, .queued = 0 };
     queue_mutex.lockUncancelable(io);
     defer queue_mutex.unlock(io);
     return .{
         .delivered = delivered_count.load(.monotonic),
         .failed = failed_count.load(.monotonic),
         .dropped = dropped_count.load(.monotonic),
-        .skipped_no_session = skipped_no_session_count.load(.monotonic),
         .queued = queue.items.len,
     };
 }

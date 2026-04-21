@@ -20,7 +20,6 @@ const notifications = @import("../notifications.zig");
 const SUBSCRIPTION_COLLECTION = notifications.SUBSCRIPTION_COLLECTION;
 
 const ALLOWED_TRIGGER_KINDS = [_][]const u8{ "author", "publication", "platform", "tag" };
-const ALLOWED_DEST_KINDS = [_][]const u8{"bsky"};
 
 fn contains(haystack: []const []const u8, needle: []const u8) bool {
     for (haystack) |h| if (mem.eql(u8, h, needle)) return true;
@@ -68,9 +67,6 @@ pub fn handleList(request: *http.Server.Request, io: Io) !void {
 const CreateBody = struct {
     triggerKind: []const u8,
     triggerValue: []const u8,
-    destinationKind: []const u8,
-    destinationValue: []const u8,
-    secret: ?[]const u8 = null,
     label: ?[]const u8 = null,
 };
 
@@ -110,37 +106,16 @@ pub fn handleCreate(request: *http.Server.Request, io: Io) !void {
         try sendJsonStatus(request, .bad_request, "{\"error\":\"invalid triggerKind\"}");
         return;
     }
-    if (!contains(&ALLOWED_DEST_KINDS, parsed.destinationKind)) {
-        try sendJsonStatus(request, .bad_request, "{\"error\":\"invalid destinationKind\"}");
-        return;
-    }
     if (parsed.triggerValue.len == 0 or parsed.triggerValue.len > 512) {
         try sendJsonStatus(request, .bad_request, "{\"error\":\"triggerValue length\"}");
         return;
     }
-    if (parsed.destinationValue.len == 0 or parsed.destinationValue.len > 512) {
-        try sendJsonStatus(request, .bad_request, "{\"error\":\"destinationValue length\"}");
-        return;
-    }
-    // for bsky: resolve handle → DID at create time if needed, so we store
-    // a stable identifier the chat.convo.getConvoForMembers call can use.
-    var resolved_dest = parsed.destinationValue;
-    if (mem.eql(u8, parsed.destinationKind, "bsky") and !mem.startsWith(u8, resolved_dest, "did:")) {
-        const zat = @import("zat");
-        var resolver = zat.HandleResolver.init(io, alloc);
-        defer resolver.deinit();
-        const parsed_handle = zat.Handle.parse(resolved_dest) orelse {
-            try sendJsonStatus(request, .bad_request, "{\"error\":\"invalid bsky handle\"}");
-            return;
-        };
-        resolved_dest = resolver.resolve(parsed_handle) catch {
-            try sendJsonStatus(request, .bad_request, "{\"error\":\"could not resolve bsky handle\"}");
-            return;
-        };
-    }
 
-    const secret: []const u8 = ""; // no longer used; retained in schema for future signed destinations
-    _ = parsed.secret;
+    // destination is always the bot DMing the subscriber — implicit, not
+    // something the client specifies. stored as empty-string placeholders
+    // in the local mirror for schema continuity.
+    const dest_kind: []const u8 = "bsky";
+    const dest_value: []const u8 = "";
     const label: []const u8 = parsed.label orelse "";
     const created_at = try isoNow(alloc, io);
 
@@ -154,10 +129,6 @@ pub fn handleCreate(request: *http.Server.Request, io: Io) !void {
     try jw.write(parsed.triggerKind);
     try jw.objectField("triggerValue");
     try jw.write(parsed.triggerValue);
-    try jw.objectField("destinationKind");
-    try jw.write(parsed.destinationKind);
-    try jw.objectField("destinationValue");
-    try jw.write(resolved_dest);
     if (label.len > 0) {
         try jw.objectField("label");
         try jw.write(label);
@@ -185,9 +156,9 @@ pub fn handleCreate(request: *http.Server.Request, io: Io) !void {
         .rkey = rkey,
         .trigger_kind = parsed.triggerKind,
         .trigger_value = parsed.triggerValue,
-        .destination_kind = parsed.destinationKind,
-        .destination_value = resolved_dest,
-        .secret = secret,
+        .destination_kind = dest_kind,
+        .destination_value = dest_value,
+        .secret = "",
         .label = label,
         .created_at = created_at,
     }) catch |err| {
@@ -290,13 +261,12 @@ pub fn handleTestFire(request: *http.Server.Request, rkey: []const u8, io: Io) !
     notifications.testFire(alloc, did, rkey) catch |err| {
         const msg = switch (err) {
             error.NotFound => "{\"error\":\"subscription not found\"}",
-            error.UnsupportedDestination => "{\"error\":\"cannot test-fire this destination kind\"}",
             else => "{\"error\":\"test fire failed\"}",
         };
         try sendJsonStatus(request, .bad_request, msg);
         return;
     };
-    try sendJson(request, "{\"ok\":true,\"note\":\"delivery enqueued — check your webhook receiver\"}");
+    try sendJson(request, "{\"ok\":true,\"note\":\"delivery enqueued — check bsky DMs\"}");
 }
 
 pub fn handleDelete(request: *http.Server.Request, rkey: []const u8, io: Io) !void {

@@ -10,6 +10,7 @@ const ingest = @import("ingest.zig");
 const state = @import("state.zig");
 const oauth = @import("oauth.zig");
 const notifications = @import("notifications.zig");
+const bsky_bot = @import("bsky_bot.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -71,6 +72,17 @@ pub fn main() !void {
 
     // notifications module needs io + alloc for the delivery queue & worker
     notifications.init(allocator, io);
+
+    // bsky bot (sends subscription DMs on behalf of @pub-search.waow.tech)
+    bsky_bot.init(
+        allocator,
+        io,
+        getenv("BSKY_BOT_HANDLE") orelse "pub-search.waow.tech",
+        getenv("BSKY_BOT_APP_PASSWORD") orelse "",
+    );
+    if (!bsky_bot.isConfigured()) {
+        logfire.warn("BSKY_BOT_APP_PASSWORD not set — bsky DM delivery will fail", .{});
+    }
 
     // init local db and other services in background (slow)
     const init_thread = try Thread.spawn(.{}, initServices, .{ allocator, io });

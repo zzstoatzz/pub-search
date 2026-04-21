@@ -337,14 +337,12 @@
     function indexSubs(subs) {
       const out = {};
       for (const s of subs) {
-        if (s.triggerKind === 'publication' && s.destinationKind === 'bsky') {
-          out[s.triggerValue] = s.rkey;
-        }
+        if (s.triggerKind === 'publication') out[s.triggerValue] = s.rkey;
       }
       return out;
     }
 
-    function renderPubs(pubs, subIndex, selfDid) {
+    function renderPubs(pubs, subIndex) {
       const el = $('pubs');
       if (!pubs.length) {
         el.innerHTML = '<div class="empty">you don\'t have any <code>site.standard.publication</code> records on your PDS yet.</div>';
@@ -383,8 +381,6 @@
                 body: JSON.stringify({
                   triggerKind: 'publication',
                   triggerValue: p.uri,
-                  destinationKind: 'bsky',
-                  destinationValue: selfDid,
                   label: p.name || p.url || p.uri,
                 }),
               });
@@ -444,7 +440,7 @@
       hide($('login')); show($('pubs-section'));
 
       const [pubs, subs] = await Promise.all([fetchPubs(), fetchSubs()]);
-      renderPubs(pubs, indexSubs(subs), me.did);
+      renderPubs(pubs, indexSubs(subs));
     }
 
     $('login-form').addEventListener('submit', (e) => {
