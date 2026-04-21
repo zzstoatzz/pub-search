@@ -11,6 +11,8 @@ const db = @import("db.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
 const dashboard = @import("server/dashboard.zig");
+const subs = @import("server/subscriptions.zig");
+const oauth = @import("oauth.zig");
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -94,10 +96,36 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
         try handleActivity(request);
+    } else if (mem.eql(u8, path, "/oauth-client-metadata.json")) {
+        try oauth.handleClientMetadata(request);
+    } else if (mem.eql(u8, path, "/oauth/jwks")) {
+        try oauth.handleJwks(request);
+    } else if (mem.eql(u8, path, "/oauth/login")) {
+        try oauth.handleLogin(request);
+    } else if (mem.eql(u8, path, "/oauth/callback")) {
+        try oauth.handleCallback(request);
+    } else if (mem.eql(u8, path, "/oauth/logout") and request.head.method == .POST) {
+        try oauth.handleLogout(request);
+    } else if (mem.eql(u8, path, "/api/me")) {
+        try subs.handleMe(request, io);
+    } else if (mem.eql(u8, path, "/api/my-publications")) {
+        try subs.handleMyPublications(request, io);
+    } else if (mem.eql(u8, path, "/api/subscriptions") and request.head.method == .GET) {
+        try subs.handleList(request, io);
+    } else if (mem.eql(u8, path, "/api/subscriptions") and request.head.method == .POST) {
+        try subs.handleCreate(request, io);
+    } else if (mem.startsWith(u8, path, "/api/subscriptions/") and mem.endsWith(u8, path, "/test") and request.head.method == .POST) {
+        const rest = path["/api/subscriptions/".len..];
+        const rkey = rest[0 .. rest.len - "/test".len];
+        try subs.handleTestFire(request, rkey, io);
+    } else if (mem.startsWith(u8, path, "/api/subscriptions/") and request.head.method == .DELETE) {
+        const rkey = path["/api/subscriptions/".len..];
+        try subs.handleDelete(request, rkey, io);
     } else {
         try sendNotFound(request);
     }
 }
+
 
 fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void {
     const start_time = microTimestamp(io);
@@ -412,12 +440,16 @@ fn sendJson(request: *http.Server.Request, body: []const u8) !void {
 }
 
 fn sendCorsHeaders(request: *http.Server.Request, body: []const u8) !void {
+    // credentials + specific origin required for the cross-site cookie
+    // exchange with the subscriptions frontend on pub-search.waow.tech.
     try request.respond(body, .{
         .status = .no_content,
         .extra_headers = &.{
-            .{ .name = "access-control-allow-origin", .value = "*" },
-            .{ .name = "access-control-allow-methods", .value = "GET, OPTIONS" },
+            .{ .name = "access-control-allow-origin", .value = oauth.config().frontend_origin },
+            .{ .name = "access-control-allow-methods", .value = "GET, POST, DELETE, OPTIONS" },
             .{ .name = "access-control-allow-headers", .value = "content-type" },
+            .{ .name = "access-control-allow-credentials", .value = "true" },
+            .{ .name = "vary", .value = "origin" },
         },
     });
 }

@@ -3,6 +3,8 @@ node_modules/
 dist/
 .env
 *.db
+*.db-shm
+*.db-wal
 .zig-cache/
 zig-out/
 .loq_cache
