@@ -10,3 +10,4 @@ zig-out/
 .loq_cache
 site/atlas.json
 zig-pkg/
+.claude/
