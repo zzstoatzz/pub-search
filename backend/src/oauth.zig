@@ -845,13 +845,13 @@ pub fn handleCallback(request: *http.Server.Request) !void {
         return;
     };
 
-    // SameSite=None + Secure — the frontend is on a different origin than
+    // SameSite=Lax + Secure — the frontend is on a different origin than
     // the backend (pub-search.waow.tech vs leaflet-search-backend.fly.dev)
     // so we need cross-site cookies. Secure is required alongside None.
     var cookie_buf: [512]u8 = undefined;
     const cookie = std.fmt.bufPrint(
         &cookie_buf,
-        "pubsearch_session={s}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=2592000",
+        "pubsearch_session={s}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000",
         .{session_token},
     ) catch {
         try sendError(request, .internal_server_error, "cookie error");
@@ -885,7 +885,7 @@ pub fn handleLogout(request: *http.Server.Request) !void {
         .status = .ok,
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/json" },
-            .{ .name = "set-cookie", .value = "pubsearch_session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0" },
+            .{ .name = "set-cookie", .value = "pubsearch_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0" },
         },
     });
 }
