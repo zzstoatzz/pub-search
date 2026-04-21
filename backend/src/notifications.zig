@@ -279,13 +279,18 @@ pub fn testFire(arena: Allocator, owner_did: []const u8, rkey: []const u8) !void
     , .{ owner_did, rkey });
     defer rows.deinit();
 
-    const row = rows.next() orelse return error.NotFound;
+    const row = rows.next() orelse {
+        logfire.warn("testFire: sub not found owner={s} rkey={s}", .{ owner_did, rkey });
+        return error.NotFound;
+    };
     const dest_kind = row.text(0);
     const dest_value = row.text(1);
     const trigger_kind = row.text(2);
     const trigger_value = row.text(3);
 
     if (!std.mem.eql(u8, dest_kind, "bsky")) return error.UnsupportedDestination;
+
+    logfire.info("testFire: enqueuing sub rkey={s} owner={s} recipient={s}", .{ rkey, owner_did, dest_value });
 
     try enqueue(.{
         .owner_did = owner_did,
@@ -378,9 +383,18 @@ fn deliver(alloc: Allocator, job: *const DeliveryJob) !void {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const session = (try store.getSession(a, job.owner_did)) orelse return error.NoSession;
+    logfire.info("deliver: starting sub={s} owner={s} recipient={s}", .{ job.sub_rkey, job.owner_did, job.recipient_did });
 
-    const convo_id = try oauth.chatGetConvoForMembers(a, session, &.{job.recipient_did});
+    const session = (try store.getSession(a, job.owner_did)) orelse {
+        logfire.warn("deliver: NO session in memory for owner={s}", .{job.owner_did});
+        return error.NoSession;
+    };
+
+    const convo_id = oauth.chatGetConvoForMembers(a, session, &.{job.recipient_did}) catch |err| {
+        logfire.warn("deliver: getConvoForMembers failed sub={s} err={}", .{ job.sub_rkey, err });
+        return err;
+    };
+    logfire.info("deliver: convo_id={s} sub={s}", .{ convo_id, job.sub_rkey });
 
     const text = try std.fmt.allocPrint(a,
         \\new on pub-search — matched your {s}="{s}" subscription
@@ -389,7 +403,11 @@ fn deliver(alloc: Allocator, job: *const DeliveryJob) !void {
         \\{s}
     , .{ job.trigger_kind, job.trigger_value, job.doc_title, job.doc_url });
 
-    try oauth.chatSendMessage(a, session, convo_id, text);
+    oauth.chatSendMessage(a, session, convo_id, text) catch |err| {
+        logfire.warn("deliver: sendMessage failed sub={s} err={}", .{ job.sub_rkey, err });
+        return err;
+    };
+    logfire.info("deliver: DM sent sub={s} recipient={s}", .{ job.sub_rkey, job.recipient_did });
     _ = delivered_count.fetchAdd(1, .monotonic);
 }
 
