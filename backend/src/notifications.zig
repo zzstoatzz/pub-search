@@ -98,6 +98,10 @@ pub fn initSchema() !void {
     c.exec("CREATE INDEX IF NOT EXISTS idx_sub_match ON subscriptions(trigger_kind, trigger_value)", .{}) catch {};
     c.exec("CREATE INDEX IF NOT EXISTS idx_sub_owner ON subscriptions(owner_did)", .{}) catch {};
 
+    // migrations — idempotent adds for columns we introduced after initial ship
+    c.exec("ALTER TABLE subscriptions ADD COLUMN last_error TEXT DEFAULT ''", .{}) catch {};
+    c.exec("ALTER TABLE subscriptions ADD COLUMN last_error_at TEXT DEFAULT ''", .{}) catch {};
+
     std.log.info("notifications: schema ready", .{});
 }
 
@@ -145,7 +149,8 @@ pub fn listByOwnerJson(arena: Allocator, owner_did: []const u8) ![]const u8 {
     const local = db.getLocalDbRaw() orelse return error.LocalDbUnavailable;
 
     var rows = try local.query(
-        \\SELECT rkey, trigger_kind, trigger_value, destination_kind, destination_value, label, created_at
+        \\SELECT rkey, trigger_kind, trigger_value, destination_kind, destination_value, label, created_at,
+        \\       COALESCE(last_error, ''), COALESCE(last_error_at, '')
         \\FROM subscriptions WHERE owner_did = ? ORDER BY created_at DESC
     , .{owner_did});
     defer rows.deinit();
@@ -171,11 +176,33 @@ pub fn listByOwnerJson(arena: Allocator, owner_did: []const u8) ![]const u8 {
         try jw.write(row.text(5));
         try jw.objectField("createdAt");
         try jw.write(row.text(6));
+        try jw.objectField("lastError");
+        try jw.write(row.text(7));
+        try jw.objectField("lastErrorAt");
+        try jw.write(row.text(8));
         try jw.endObject();
     }
     try jw.endArray();
 
     return try out.toOwnedSlice();
+}
+
+/// Mark a delivery attempt's outcome on the subscription row. Empty err
+/// string = success (clears any prior error).
+pub fn recordDeliveryOutcome(owner_did: []const u8, rkey: []const u8, err: []const u8) void {
+    const local = db.getLocalDbRaw() orelse return;
+    if (err.len > 0) {
+        const trimmed = err[0..@min(err.len, 500)];
+        local.exec(
+            "UPDATE subscriptions SET last_error = ?, last_error_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE owner_did = ? AND rkey = ?",
+            .{ trimmed, owner_did, rkey },
+        ) catch |e| logfire.warn("recordDeliveryOutcome: {}", .{e});
+    } else {
+        local.exec(
+            "UPDATE subscriptions SET last_error = '', last_error_at = '' WHERE owner_did = ? AND rkey = ?",
+            .{ owner_did, rkey },
+        ) catch |e| logfire.warn("recordDeliveryOutcome(clear): {}", .{e});
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -350,10 +377,20 @@ fn workerLoop(io: Io) void {
         var job = dequeueBlocking(io) orelse continue;
         defer job.deinit(alloc);
 
-        deliver(alloc, &job) catch |err| {
+        if (deliver(alloc, &job)) |_| {
+            recordDeliveryOutcome(job.owner_did, job.sub_rkey, "");
+        } else |err| {
             _ = failed_count.fetchAdd(1, .monotonic);
-            logfire.warn("notifications: delivery failed sub={s}: {}", .{ job.sub_rkey, err });
-        };
+            var buf: [256]u8 = undefined;
+            const err_name = @errorName(err);
+            const last = bsky_bot.lastErrorSnippet();
+            const summary = if (last.len > 0)
+                std.fmt.bufPrint(&buf, "{s}: {s}", .{ err_name, last }) catch err_name
+            else
+                err_name;
+            logfire.warn("notifications: delivery failed sub={s}: {s}", .{ job.sub_rkey, summary });
+            recordDeliveryOutcome(job.owner_did, job.sub_rkey, summary);
+        }
     }
 }
 

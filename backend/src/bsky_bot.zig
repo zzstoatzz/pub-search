@@ -33,6 +33,35 @@ var cached_pds: ?[]u8 = null;
 var cached_access: ?[]u8 = null;
 var cached_refresh: ?[]u8 = null;
 
+// last error snippet from bsky — surfaced so callers (notifications
+// worker) can persist a useful message on the subscription row.
+// Sized to fit something like `ActorNotMessageable: this user does not
+// accept chat messages from non-followed accounts`.
+var last_error_mu: Io.Mutex = .init;
+var last_error_buf: [240]u8 = undefined;
+var last_error_len: usize = 0;
+
+fn setLastError(comptime fmt: []const u8, args: anytype) void {
+    last_error_mu.lockUncancelable(cfg_io);
+    defer last_error_mu.unlock(cfg_io);
+    const w = std.fmt.bufPrint(&last_error_buf, fmt, args) catch return;
+    last_error_len = w.len;
+}
+
+/// Return the last bsky error snippet (empty on success or no error yet).
+/// Caller must copy before next call — the slice is a window into a shared buffer.
+pub fn lastErrorSnippet() []const u8 {
+    last_error_mu.lockUncancelable(cfg_io);
+    defer last_error_mu.unlock(cfg_io);
+    return last_error_buf[0..last_error_len];
+}
+
+fn clearLastError() void {
+    last_error_mu.lockUncancelable(cfg_io);
+    defer last_error_mu.unlock(cfg_io);
+    last_error_len = 0;
+}
+
 pub fn init(alloc: Allocator, io: Io, handle: []const u8, password: []const u8) void {
     cfg_alloc = alloc;
     cfg_io = io;
@@ -49,6 +78,7 @@ pub fn isConfigured() bool {
 /// and 401 recovery transparently.
 pub fn sendDm(arena: Allocator, to_did: []const u8, text: []const u8) !void {
     if (!isConfigured()) return error.BotNotConfigured;
+    clearLastError();
 
     const convo_id = try callWithRetry(arena, to_did, null);
     _ = try callWithRetry(arena, convo_id, text);
@@ -172,6 +202,8 @@ fn getConvoForMembers(arena: Allocator, sn: Snapshot, to_did: []const u8) ![]con
     const result = try httpGet(arena, sn.pds, path, sn.access, true);
     if (result.status == .unauthorized) return error.Unauthorized;
     if (result.status != .ok) {
+        const snippet = extractBskyError(result.body);
+        setLastError("getConvo {t}: {s}", .{ result.status, snippet });
         logfire.err("bsky_bot: getConvoForMembers status={t} body={s}", .{ result.status, result.body[0..@min(result.body.len, 400)] });
         return error.FetchFailed;
     }
@@ -201,10 +233,25 @@ fn sendMessage(arena: Allocator, sn: Snapshot, convo_id: []const u8, text: []con
     const result = try httpPost(arena, sn.pds, "/xrpc/chat.bsky.convo.sendMessage", body, sn.access, true);
     if (result.status == .unauthorized) return error.Unauthorized;
     if (result.status != .ok) {
+        const snippet = extractBskyError(result.body);
+        setLastError("sendMessage {t}: {s}", .{ result.status, snippet });
         logfire.err("bsky_bot: sendMessage status={t} body={s}", .{ result.status, result.body[0..@min(result.body.len, 400)] });
         return error.FetchFailed;
     }
     return "";
+}
+
+/// Pull the atproto error name + message out of a bsky response body
+/// (shape: `{"error":"Name","message":"..."}`). Returns a borrowed slice
+/// into `body` — caller must copy if storing.
+fn extractBskyError(body: []const u8) []const u8 {
+    // avoid a full JSON parse — just pluck the "error" value substring.
+    // Good enough for a short snippet; full body is still logged.
+    const needle = "\"error\":\"";
+    const start = std.mem.indexOf(u8, body, needle) orelse return body[0..@min(body.len, 120)];
+    const rest = body[start + needle.len ..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return body[0..@min(body.len, 120)];
+    return rest[0..@min(end, 120)];
 }
 
 // ---------------------------------------------------------------------------

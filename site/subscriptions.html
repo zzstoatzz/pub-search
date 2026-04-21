@@ -234,6 +234,20 @@
 
     .empty { color: var(--text-dim); font-size: 12px; padding: 1rem 0; }
 
+    .sub-error {
+      color: var(--error);
+      font-size: 11px;
+      margin-top: 2px;
+      word-break: break-word;
+    }
+
+    .bot-notice {
+      font-size: 12px;
+      color: var(--text-secondary);
+      border-left: 2px solid var(--error);
+      padding-left: 0.75rem;
+    }
+
     .hidden { display: none !important; }
 
     .theme-toggle {
@@ -328,16 +342,42 @@
       try { const r = await api('/api/my-publications'); if (r.ok) return r.json(); } catch {}
       return [];
     }
+
+    const BOT_DID = 'did:plc:aywbh7hovtsqpv2pzkldmqdv';
+    const BOT_HANDLE = 'pub-search.waow.tech';
+
+    async function checkBotFollow(userDid) {
+      try {
+        const r = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.graph.getRelationships?actor=${encodeURIComponent(userDid)}&others=${encodeURIComponent(BOT_DID)}`);
+        if (!r.ok) return null;
+        const j = await r.json();
+        return !!(j.relationships?.[0]?.following);
+      } catch { return null; }
+    }
+
+    function renderBotNotice(follows) {
+      const el = $('bot-notice');
+      // quiet on the happy path — only surface when DMs are likely to be blocked
+      if (follows === true) {
+        el.classList.add('hidden');
+        return;
+      }
+      el.className = 'card bot-notice warn';
+      el.innerHTML = `⚠️ to receive DMs, follow <a href="https://bsky.app/profile/${escapeHtml(BOT_HANDLE)}" target="_blank" rel="noopener">@${escapeHtml(BOT_HANDLE)}</a> on bsky, or set your DM preference to "Everyone". bsky blocks DMs from strangers by default.`;
+      el.classList.remove('hidden');
+    }
     async function fetchSubs() {
       try { const r = await api('/api/subscriptions'); if (r.ok) return r.json(); } catch {}
       return [];
     }
 
     // build a lookup map: publication at-uri → subscription rkey
+    // build pubUri → sub map so each row can show its toggle state +
+    // any last delivery error in one lookup.
     function indexSubs(subs) {
       const out = {};
       for (const s of subs) {
-        if (s.triggerKind === 'publication') out[s.triggerValue] = s.rkey;
+        if (s.triggerKind === 'publication') out[s.triggerValue] = s;
       }
       return out;
     }
@@ -350,13 +390,19 @@
       }
       el.innerHTML = '';
       for (const p of pubs) {
-        const subbed = !!subIndex[p.uri];
+        const sub = subIndex[p.uri] || null;
+        const subbed = !!sub;
         const row = document.createElement('div');
         row.className = 'pub';
+        const errorLine = sub?.lastError
+          ? `<div class="sub-error">⚠️ last delivery: ${escapeHtml(sub.lastError)}</div>`
+          : '';
+
         row.innerHTML = `
           <div class="pub-meta">
             <div class="pub-name">${escapeHtml(p.name || '(untitled)')}</div>
             <div class="pub-url">${p.url ? `<a href="${escapeHtml(p.url)}" target="_blank" rel="noopener">${escapeHtml(p.url)}</a>` : escapeHtml(p.uri)}</div>
+            ${errorLine}
           </div>
           <button class="test-btn" title="send a test DM">test</button>
           <label class="toggle" title="${subbed ? 'DM me off' : 'DM me on'}">
@@ -386,12 +432,12 @@
               });
               const j = await r.json().catch(() => ({}));
               if (!r.ok) throw new Error(j.error || ('error ' + r.status));
-              subIndex[p.uri] = j.rkey;
+              subIndex[p.uri] = { rkey: j.rkey, triggerKind: 'publication', triggerValue: p.uri };
               testBtn.style.display = '';
             } else {
-              const rkey = subIndex[p.uri];
-              if (!rkey) return;
-              const r = await api('/api/subscriptions/' + encodeURIComponent(rkey), { method: 'DELETE' });
+              const s = subIndex[p.uri];
+              if (!s) return;
+              const r = await api('/api/subscriptions/' + encodeURIComponent(s.rkey), { method: 'DELETE' });
               if (!r.ok) throw new Error('delete failed');
               delete subIndex[p.uri];
               testBtn.style.display = 'none';
@@ -406,8 +452,9 @@
         };
 
         testBtn.onclick = async () => {
-          const rkey = subIndex[p.uri];
-          if (!rkey) return;
+          const s = subIndex[p.uri];
+          if (!s) return;
+          const rkey = s.rkey;
           const status = $('pubs-status');
           testBtn.disabled = true;
           status.textContent = ''; status.classList.remove('err');
@@ -439,7 +486,10 @@
       };
       hide($('login')); show($('pubs-section'));
 
-      const [pubs, subs] = await Promise.all([fetchPubs(), fetchSubs()]);
+      const [pubs, subs, follows] = await Promise.all([
+        fetchPubs(), fetchSubs(), checkBotFollow(me.did),
+      ]);
+      renderBotNotice(follows);
       renderPubs(pubs, indexSubs(subs));
     }
 
