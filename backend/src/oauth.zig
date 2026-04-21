@@ -905,17 +905,17 @@ pub fn getSessionDid(request: *http.Server.Request) ?[]const u8 {
             saw_token = true;
             const did = store.resolveSessionToken(token);
             if (did) |d| {
-                logfire.debug("getSessionDid: resolved did={s}", .{d});
+                logfire.info("getSessionDid: resolved did={s}", .{d});
                 return d;
             }
-            logfire.warn("getSessionDid: token present but no session found (token prefix={s})", .{token[0..@min(token.len, 8)]});
+            logfire.warn("getSessionDid: token present but no session (token prefix={s})", .{token[0..@min(token.len, 8)]});
             return null;
         }
     }
     if (!saw_cookie_header) {
-        logfire.debug("getSessionDid: no Cookie header present on request", .{});
+        logfire.info("getSessionDid: no Cookie header on request {s}", .{request.head.target});
     } else if (!saw_token) {
-        logfire.debug("getSessionDid: Cookie header present but pubsearch_session missing", .{});
+        logfire.info("getSessionDid: Cookie header present but pubsearch_session missing (target={s})", .{request.head.target});
     }
     return null;
 }
