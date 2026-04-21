@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>subscriptions - pub search</title>
-  <meta name="description" content="get a bsky DM when pub-search indexes a new document under one of your standard.site publications">
+  <meta name="description" content="get a bsky DM when pub-search indexes a new document under a standard.site publication you follow">
   <meta name="robots" content="noindex">
   <script>
     (function() {
@@ -275,7 +275,7 @@
       <span class="me" id="me"></span>
     </h1>
 
-    <p>get a bsky DM whenever pub-search indexes a new document under one of your <code>site.standard.publication</code> records.</p>
+    <p>get a bsky DM whenever pub-search indexes a new document under a publication you follow. follows come from your <code>site.standard.graph.subscription</code> records — the same ones your standard.site reader writes when you click "subscribe".</p>
 
     <section id="login" class="card hidden">
       <p class="hint">sign in with your atproto handle:</p>
@@ -385,7 +385,7 @@
     function renderPubs(pubs, subIndex) {
       const el = $('pubs');
       if (!pubs.length) {
-        el.innerHTML = '<div class="empty">you don\'t have any <code>site.standard.publication</code> records on your PDS yet.</div>';
+        el.innerHTML = '<div class="empty">you aren\'t subscribed to any standard.site publications yet. head to any standard.site reader (e.g. a <code>pckt.blog</code> / <code>greengale.app</code> / <code>offprint.app</code> / <code>leaflet.pub</code> page) and hit subscribe.</div>';
         return;
       }
       el.innerHTML = '';

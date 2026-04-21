@@ -16,6 +16,7 @@ const Allocator = std.mem.Allocator;
 const oauth = @import("../oauth.zig");
 const store = @import("../state.zig");
 const notifications = @import("../notifications.zig");
+const db = @import("../db.zig");
 
 const SUBSCRIPTION_COLLECTION = notifications.SUBSCRIPTION_COLLECTION;
 
@@ -170,10 +171,16 @@ pub fn handleCreate(request: *http.Server.Request, io: Io) !void {
     try sendJson(request, out);
 }
 
-/// GET /api/my-publications — list the authenticated user's
-/// site.standard.publication records by hitting their PDS directly
-/// (records are public; no DPoP needed). This is the source of truth
-/// for the toggle list in the subscriptions UI.
+/// GET /api/my-publications — list the publications the authenticated
+/// user is *subscribed to*, via their `site.standard.graph.subscription`
+/// records. That's standard.site's canonical "user follows publication"
+/// record — the signal we hook into so "turn on notifications" maps
+/// cleanly onto publications the user already cares about.
+///
+/// For each subscription record we pluck the `publication` at-uri and
+/// try to resolve the publication's metadata (name/url) from pub-search's
+/// local mirror. If it's not in the index yet, we still return the at-uri
+/// so the UI can show it.
 pub fn handleMyPublications(request: *http.Server.Request, io: Io) !void {
     _ = io;
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -189,13 +196,13 @@ pub fn handleMyPublications(request: *http.Server.Request, io: Io) !void {
         return;
     };
 
-    const url = try std.fmt.allocPrint(alloc, "{s}/xrpc/com.atproto.repo.listRecords?repo={s}&collection=site.standard.publication&limit=100", .{
+    const url = try std.fmt.allocPrint(alloc, "{s}/xrpc/com.atproto.repo.listRecords?repo={s}&collection=site.standard.graph.subscription&limit=100", .{
         session.pds_url, session.did,
     });
 
     const body = oauth.httpGet(alloc, url) catch |err| {
         std.log.warn("handleMyPublications: listRecords failed: {}", .{err});
-        try sendJsonStatus(request, .bad_gateway, "{\"error\":\"failed to fetch publications from PDS\"}");
+        try sendJsonStatus(request, .bad_gateway, "{\"error\":\"failed to fetch subscriptions from PDS\"}");
         return;
     };
 
@@ -214,31 +221,46 @@ pub fn handleMyPublications(request: *http.Server.Request, io: Io) !void {
         return;
     }
 
+    const local = db.getLocalDbRaw();
+
     var out: std.Io.Writer.Allocating = .init(alloc);
     var jw: json.Stringify = .{ .writer = &out.writer };
     try jw.beginArray();
     for (records.array.items) |rec| {
         if (rec != .object) continue;
-        const uri_v = rec.object.get("uri") orelse continue;
-        if (uri_v != .string) continue;
         const val = rec.object.get("value") orelse continue;
         if (val != .object) continue;
+        const pub_v = val.object.get("publication") orelse continue;
+        if (pub_v != .string) continue;
+        const pub_uri = pub_v.string;
+
+        // enrich from local publications mirror — name + base_path
+        var name: []const u8 = "";
+        var base_path: []const u8 = "";
+        if (local) |l| {
+            if (l.query("SELECT name, base_path FROM publications WHERE uri = ?", .{pub_uri})) |q| {
+                var rows = q;
+                defer rows.deinit();
+                if (rows.next()) |row| {
+                    // dupe into arena — underlying slice dies with rows.deinit
+                    name = alloc.dupe(u8, row.text(0)) catch "";
+                    base_path = alloc.dupe(u8, row.text(1)) catch "";
+                }
+            } else |_| {}
+        }
 
         try jw.beginObject();
         try jw.objectField("uri");
-        try jw.write(uri_v.string);
-        if (val.object.get("name")) |n| if (n == .string) {
+        try jw.write(pub_uri);
+        if (name.len > 0) {
             try jw.objectField("name");
-            try jw.write(n.string);
-        };
-        if (val.object.get("url")) |u| if (u == .string) {
+            try jw.write(name);
+        }
+        if (base_path.len > 0) {
+            const pub_url = try std.fmt.allocPrint(alloc, "https://{s}", .{base_path});
             try jw.objectField("url");
-            try jw.write(u.string);
-        };
-        if (val.object.get("description")) |d| if (d == .string) {
-            try jw.objectField("description");
-            try jw.write(d.string);
-        };
+            try jw.write(pub_url);
+        }
         try jw.endObject();
     }
     try jw.endArray();
