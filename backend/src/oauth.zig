@@ -20,6 +20,7 @@ const Allocator = mem.Allocator;
 const zat = @import("zat");
 const zat_oauth = zat.oauth;
 const store = @import("state.zig");
+const logfire = @import("logfire");
 
 // `transition:chat.bsky` grants access to chat.bsky.* xrpc endpoints
 // (proxied through the user's PDS to did:web:api.bsky.chat). needed so
@@ -830,6 +831,7 @@ pub fn handleCallback(request: *http.Server.Request) !void {
         return;
     };
     store.deleteAuthRequest(state);
+    logfire.info("oauth.callback: session stored did={s} handle={s}", .{ auth_req.did, auth_req.handle });
 
     // redirect back to the subscriptions page with ?logged_in={handle}
     var redirect_url: std.ArrayList(u8) = .empty;
@@ -856,6 +858,7 @@ pub fn handleCallback(request: *http.Server.Request) !void {
         return;
     };
 
+    logfire.info("oauth.callback: setting cookie redirect={s}", .{redirect_url.items});
     try request.respond("", .{
         .status = .found,
         .extra_headers = &.{
@@ -892,14 +895,70 @@ pub fn handleLogout(request: *http.Server.Request) !void {
 // ---------------------------------------------------------------------------
 
 pub fn getSessionDid(request: *http.Server.Request) ?[]const u8 {
+    var saw_cookie_header = false;
+    var saw_token = false;
     var it = request.iterateHeaders();
     while (it.next()) |h| {
         if (std.ascii.eqlIgnoreCase(h.name, "cookie")) {
+            saw_cookie_header = true;
             const token = parseCookieValue(h.value, "pubsearch_session") orelse continue;
-            return store.resolveSessionToken(token);
+            saw_token = true;
+            const did = store.resolveSessionToken(token);
+            if (did) |d| {
+                logfire.debug("getSessionDid: resolved did={s}", .{d});
+                return d;
+            }
+            logfire.warn("getSessionDid: token present but no session found (token prefix={s})", .{token[0..@min(token.len, 8)]});
+            return null;
         }
     }
+    if (!saw_cookie_header) {
+        logfire.debug("getSessionDid: no Cookie header present on request", .{});
+    } else if (!saw_token) {
+        logfire.debug("getSessionDid: Cookie header present but pubsearch_session missing", .{});
+    }
     return null;
+}
+
+/// Diagnostic: dump which auth-related headers / cookies are reaching the
+/// backend. Reveals nothing sensitive — just whether the cookie made the trip.
+pub fn handleAuthDebug(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var has_cookie_header = false;
+    var has_session_cookie = false;
+    var session_token_prefix: []const u8 = "";
+    var origin_hdr: []const u8 = "";
+
+    var it = request.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "cookie")) {
+            has_cookie_header = true;
+            if (parseCookieValue(h.value, "pubsearch_session")) |tok| {
+                has_session_cookie = true;
+                session_token_prefix = tok[0..@min(tok.len, 8)];
+            }
+        } else if (std.ascii.eqlIgnoreCase(h.name, "origin")) {
+            origin_hdr = h.value;
+        }
+    }
+
+    const did_resolved: []const u8 = if (getSessionDid(request)) |d| d else "";
+
+    const body = try std.fmt.allocPrint(alloc,
+        \\{{"hasCookieHeader":{s},"hasSessionCookie":{s},"sessionTokenPrefix":"{s}","origin":"{s}","didResolved":"{s}","frontendOrigin":"{s}"}}
+    , .{
+        if (has_cookie_header) "true" else "false",
+        if (has_session_cookie) "true" else "false",
+        session_token_prefix,
+        origin_hdr,
+        did_resolved,
+        cfg.frontend_origin,
+    });
+
+    try sendJson(request, body);
 }
 
 fn parseCookieValue(cookie_header: []const u8, name: []const u8) ?[]const u8 {

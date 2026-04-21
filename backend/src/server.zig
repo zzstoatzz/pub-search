@@ -106,6 +106,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try oauth.handleCallback(request);
     } else if (mem.eql(u8, path, "/oauth/logout") and request.head.method == .POST) {
         try oauth.handleLogout(request);
+    } else if (mem.eql(u8, path, "/api/auth-debug")) {
+        try oauth.handleAuthDebug(request);
     } else if (mem.eql(u8, path, "/api/me")) {
         try subs.handleMe(request, io);
     } else if (mem.eql(u8, path, "/api/my-publications")) {
