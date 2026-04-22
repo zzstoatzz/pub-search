@@ -17,6 +17,7 @@ const oauth = @import("../oauth.zig");
 const store = @import("../state.zig");
 const notifications = @import("../notifications.zig");
 const db = @import("../db.zig");
+const logfire = @import("logfire");
 
 const SUBSCRIPTION_COLLECTION = notifications.SUBSCRIPTION_COLLECTION;
 
@@ -199,27 +200,36 @@ pub fn handleMyPublications(request: *http.Server.Request, io: Io) !void {
     const url = try std.fmt.allocPrint(alloc, "{s}/xrpc/com.atproto.repo.listRecords?repo={s}&collection=site.standard.graph.subscription&limit=100", .{
         session.pds_url, session.did,
     });
+    logfire.info("handleMyPublications: did={s} pds={s}", .{ session.did, session.pds_url });
 
     const body = oauth.httpGet(alloc, url) catch |err| {
-        std.log.warn("handleMyPublications: listRecords failed: {}", .{err});
+        logfire.warn("handleMyPublications: listRecords failed: {}", .{err});
         try sendJsonStatus(request, .bad_gateway, "{\"error\":\"failed to fetch subscriptions from PDS\"}");
         return;
     };
+    logfire.info("handleMyPublications: body_bytes={d} preview={s}", .{
+        body.len,
+        body[0..@min(body.len, 120)],
+    });
 
     const parsed = json.parseFromSlice(json.Value, alloc, body, .{}) catch {
+        logfire.warn("handleMyPublications: json parse failed, body_preview={s}", .{body[0..@min(body.len, 200)]});
         try sendJsonStatus(request, .bad_gateway, "{\"error\":\"PDS returned invalid json\"}");
         return;
     };
     defer parsed.deinit();
 
     const records = parsed.value.object.get("records") orelse {
+        logfire.info("handleMyPublications: no 'records' key in response", .{});
         try sendJson(request, "[]");
         return;
     };
     if (records != .array) {
+        logfire.info("handleMyPublications: 'records' is not an array (kind={t})", .{records});
         try sendJson(request, "[]");
         return;
     }
+    logfire.info("handleMyPublications: returning {d} records", .{records.array.items.len});
 
     const local = db.getLocalDbRaw();
 
