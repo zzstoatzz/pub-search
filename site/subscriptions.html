@@ -240,6 +240,12 @@
       margin-top: 2px;
       word-break: break-word;
     }
+    .sub-error a { color: inherit; text-decoration: underline; }
+    .sub-error .raw {
+      color: var(--text-dim);
+      font-size: 10px;
+      font-style: italic;
+    }
 
     .bot-notice {
       font-size: 12px;
@@ -373,6 +379,27 @@
     }
 
     // build a lookup map: publication at-uri → subscription rkey
+    // translate a raw backend lastError into a user-facing string with
+    // an optional action link. matches known bsky chat error codes;
+    // falls back to the raw string for anything else.
+    function friendlyDeliveryError(raw) {
+      if (!raw) return null;
+      const botProfile = `https://bsky.app/profile/${BOT_HANDLE}`;
+      if (raw.includes('NotFollowedBySender') || raw.includes('ActorNotMessageable')) {
+        return {
+          html: `bsky blocked this DM — <a href="${botProfile}" target="_blank" rel="noopener">follow @${escapeHtml(BOT_HANDLE)}</a> or set your bsky DM preference to "Everyone"`,
+          showRaw: true,
+        };
+      }
+      if (raw.includes('RateLimit') || raw.includes('TooManyRequests')) {
+        return { html: 'bsky rate-limited us — next matching document will retry', showRaw: true };
+      }
+      if (raw.includes('LoginFailed') || raw.includes('BotNotConfigured')) {
+        return { html: 'the pub-search bot can\'t sign in right now — this is a server problem, not yours', showRaw: true };
+      }
+      return { html: escapeHtml(raw), showRaw: false };
+    }
+
     // build pubUri → sub map so each row can show its toggle state +
     // any last delivery error in one lookup.
     function indexSubs(subs) {
@@ -395,8 +422,9 @@
         const subbed = !!sub;
         const row = document.createElement('div');
         row.className = 'pub';
-        const errorLine = sub?.lastError
-          ? `<div class="sub-error">⚠️ last delivery: ${escapeHtml(sub.lastError)}</div>`
+        const friendly = sub?.lastError ? friendlyDeliveryError(sub.lastError) : null;
+        const errorLine = friendly
+          ? `<div class="sub-error">⚠️ ${friendly.html}${friendly.showRaw ? `<br><span class="raw">${escapeHtml(sub.lastError)}</span>` : ''}</div>`
           : '';
 
         row.innerHTML = `
