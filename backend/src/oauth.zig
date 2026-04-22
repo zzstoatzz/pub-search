@@ -22,10 +22,10 @@ const zat_oauth = zat.oauth;
 const store = @import("state.zig");
 const logfire = @import("logfire");
 
-// `transition:chat.bsky` grants access to chat.bsky.* xrpc endpoints
-// (proxied through the user's PDS to did:web:api.bsky.chat). needed so
-// subscribers can receive DM deliveries on their own behalf.
-pub const SCOPE = "atproto repo:tech.waow.pub-search.subscription transition:chat.bsky";
+// only the scope needed to write the pub-search subscription record to
+// the user's PDS. DM delivery is done by the @pub-search.waow.tech bot
+// with its own app-password session — no chat scope needed on the user.
+pub const SCOPE = "atproto repo:tech.waow.pub-search.subscription";
 
 pub const Config = struct {
     io: Io,
@@ -881,11 +881,16 @@ pub fn handleLogout(request: *http.Server.Request) !void {
             break;
         }
     }
+    // the only endpoint that both clears the cookie AND needs CORS creds
+    // headers — can't use sendJson because we also need Set-Cookie
     try request.respond("{\"ok\":true}", .{
         .status = .ok,
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/json" },
             .{ .name = "set-cookie", .value = "pubsearch_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0" },
+            .{ .name = "access-control-allow-origin", .value = cfg.frontend_origin },
+            .{ .name = "access-control-allow-credentials", .value = "true" },
+            .{ .name = "vary", .value = "origin" },
         },
     });
 }
