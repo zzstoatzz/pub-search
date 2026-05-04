@@ -73,6 +73,15 @@ pub fn main() !void {
     // notifications module needs io + alloc for the delivery queue & worker
     notifications.init(allocator, io);
 
+    // metrics modules just need `io` stashed so per-request handlers can
+    // record latency / activity safely. these MUST be initialized before
+    // the listener accept loop starts, otherwise the first poll of /activity
+    // or /stats hits `global_io.?` and SIGABRTs the process. the heavier
+    // services that depend on the local replica stay in initServices.
+    metrics.activity.init(io);
+    metrics.timing.setIo(io);
+    metrics.buffer.init(io);
+
     // bsky bot (sends subscription DMs on behalf of @pub-search.waow.tech)
     bsky_bot.init(
         allocator,
@@ -129,14 +138,9 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
         std.debug.print("notifications: startWorker failed: {}\n", .{err});
     };
 
-    // start activity tracker
-    metrics.activity.init(io);
-
-    // start stats buffer (background sync to Turso)
-    metrics.buffer.init(io);
-
-    // init timing module
-    metrics.timing.setIo(io);
+    // metrics.activity / metrics.buffer / metrics.timing are now initialized
+    // up in main() before the listener starts so request handlers can safely
+    // call record() on them.
 
     // init vector store (reads TURBOPUFFER_API_KEY from env)
     tpuf.init(io);
