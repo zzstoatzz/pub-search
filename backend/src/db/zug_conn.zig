@@ -78,9 +78,31 @@ fn argsToRuntimeValues(args: anytype, out: []Client.RuntimeValue) void {
 
 fn runtimeValueFrom(v: anytype) Client.RuntimeValue {
     const T = @TypeOf(v);
-    if (T == []const u8) return .{ .text = v };
     if (T == i64) return .{ .int = v };
-    @compileError("MigrationConn args must be []const u8 or i64; got " ++ @typeName(T));
+    if (comptime isU8StringLike(T)) {
+        // covers []const u8, [:0]const u8, *const [N]u8, *const [N:0]u8.
+        // zug binds @tagName(Class.x) for the class column, which is
+        // *const [N:0]u8 in zig 0.16, not a plain slice.
+        const s: []const u8 = v;
+        return .{ .text = s };
+    }
+    @compileError("MigrationConn args must be a u8 string/slice or i64; got " ++ @typeName(T));
+}
+
+fn isU8StringLike(comptime T: type) bool {
+    const info = @typeInfo(T);
+    if (info != .pointer) return false;
+
+    // []const u8, [:0]const u8, etc.
+    if (info.pointer.size == .slice and info.pointer.child == u8) return true;
+
+    // *const [N]u8, *const [N:0]u8 (string literals, @tagName results)
+    if (info.pointer.size == .one) {
+        const child = @typeInfo(info.pointer.child);
+        if (child == .array and child.array.child == u8) return true;
+    }
+
+    return false;
 }
 
 // --- tests ---
@@ -136,6 +158,40 @@ test "argsToRuntimeValues: zug UPDATE-shaped tuple (i64 + string)" {
 
     try std.testing.expectEqual(@as(i64, 0), buf[0].int);
     try std.testing.expectEqualStrings("001_create_documents", buf[1].text);
+}
+
+test "argsToRuntimeValues: real zug INSERT shape (string literal + @tagName + i64)" {
+    // This is the *exact* tuple zug.sqlite.insertMigration constructs, with
+    // no pre-coercion to []const u8. In zig 0.16, both string literals and
+    // @tagName return *const [N:0]u8, not []const u8. The type guard must
+    // accept that or zug.sqlite.run won't compile.
+    const Class = enum { startup, maintenance };
+    var buf: [5]Client.RuntimeValue = undefined;
+    argsToRuntimeValues(.{
+        "001_create_documents",
+        "create documents table",
+        "deadbeef00000000",
+        @tagName(Class.startup),
+        @as(i64, 1),
+    }, buf[0..]);
+
+    try std.testing.expectEqualStrings("001_create_documents", buf[0].text);
+    try std.testing.expectEqualStrings("create documents table", buf[1].text);
+    try std.testing.expectEqualStrings("deadbeef00000000", buf[2].text);
+    try std.testing.expectEqualStrings("startup", buf[3].text);
+    try std.testing.expectEqual(@as(i64, 1), buf[4].int);
+}
+
+test "isU8StringLike: accepts the shapes zug actually passes" {
+    // belt-and-suspenders: explicit comptime checks so a regression in the
+    // type detection fails the build, not just the run.
+    try std.testing.expect(isU8StringLike([]const u8));
+    try std.testing.expect(isU8StringLike([:0]const u8));
+    try std.testing.expect(isU8StringLike(@TypeOf("hello"))); // *const [5:0]u8
+    const Class = enum { startup };
+    try std.testing.expect(isU8StringLike(@TypeOf(@tagName(Class.startup))));
+    try std.testing.expect(!isU8StringLike(i64));
+    try std.testing.expect(!isU8StringLike(u32));
 }
 
 test "MigrationConn.Rows: iterates Hrana response shape" {
