@@ -98,6 +98,15 @@ section { margin-bottom: 2rem; }
   margin-bottom: 0.75rem;
 }
 
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  gap: 0.5rem;
+}
+.timeline-header .section-title { margin-bottom: 0; }
+
 .timeline {
   display: flex;
   align-items: flex-end;
@@ -172,6 +181,9 @@ a.pub-name:hover { color: #2a9d5c; }
   padding: 1px 4px;
 }
 .traffic-range-btns {
+  display: inline-flex;
+}
+.traffic-section .traffic-range-btns {
   position: absolute;
   top: 0;
   right: 0;

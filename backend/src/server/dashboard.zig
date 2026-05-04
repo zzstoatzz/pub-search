@@ -11,6 +11,89 @@ const TimelineJson = struct { date: []const u8, count: i64, bridgyfed: i64 };
 const PubJson = struct { name: []const u8, basePath: []const u8, count: i64 };
 const PlatformJson = struct { platform: []const u8, count: i64 };
 
+/// Time range for the indexing timeline.
+///
+/// Bucket sizes are chosen to keep bar counts bounded:
+///   d7/d30/d90 -> daily, y1 -> weekly, all_time -> monthly.
+pub const TimelineRange = enum {
+    d7,
+    d30,
+    d90,
+    y1,
+    all_time,
+
+    pub fn fromString(s: []const u8) TimelineRange {
+        if (std.mem.eql(u8, s, "7d")) return .d7;
+        if (std.mem.eql(u8, s, "30d")) return .d30;
+        if (std.mem.eql(u8, s, "90d")) return .d90;
+        if (std.mem.eql(u8, s, "1y")) return .y1;
+        if (std.mem.eql(u8, s, "all")) return .all_time;
+        return .d30;
+    }
+
+    pub fn bucketLabel(self: TimelineRange) []const u8 {
+        return switch (self) {
+            .d7, .d30, .d90 => "daily",
+            .y1 => "weekly",
+            .all_time => "monthly",
+        };
+    }
+
+    fn sql(self: TimelineRange) []const u8 {
+        return switch (self) {
+            .d7 =>
+            \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
+            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
+            \\FROM documents
+            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
+            \\AND DATE(indexed_at) <= DATE('now')
+            \\AND DATE(indexed_at) >= DATE('now', '-6 days')
+            \\GROUP BY DATE(indexed_at)
+            \\ORDER BY date DESC
+            ,
+            .d30 =>
+            \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
+            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
+            \\FROM documents
+            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
+            \\AND DATE(indexed_at) <= DATE('now')
+            \\AND DATE(indexed_at) >= DATE('now', '-29 days')
+            \\GROUP BY DATE(indexed_at)
+            \\ORDER BY date DESC
+            ,
+            .d90 =>
+            \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
+            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
+            \\FROM documents
+            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
+            \\AND DATE(indexed_at) <= DATE('now')
+            \\AND DATE(indexed_at) >= DATE('now', '-89 days')
+            \\GROUP BY DATE(indexed_at)
+            \\ORDER BY date DESC
+            ,
+            .y1 =>
+            \\SELECT DATE(indexed_at, 'weekday 0', '-6 days') as date, COUNT(*) as count,
+            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
+            \\FROM documents
+            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
+            \\AND DATE(indexed_at) <= DATE('now')
+            \\AND DATE(indexed_at) >= DATE('now', '-364 days')
+            \\GROUP BY DATE(indexed_at, 'weekday 0', '-6 days')
+            \\ORDER BY date DESC
+            ,
+            .all_time =>
+            \\SELECT strftime('%Y-%m-01', indexed_at) as date, COUNT(*) as count,
+            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
+            \\FROM documents
+            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
+            \\AND DATE(indexed_at) <= DATE('now')
+            \\GROUP BY strftime('%Y-%m-01', indexed_at)
+            \\ORDER BY date DESC
+            ,
+        };
+    }
+};
+
 /// All data needed to render the dashboard
 pub const Data = struct {
     started_at: i64,
@@ -62,16 +145,8 @@ pub const TAGS_SQL =
     \\LIMIT 100
 ;
 
-const TIMELINE_SQL =
-    \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
-    \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
-    \\FROM documents
-    \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
-    \\AND DATE(indexed_at) <= DATE('now')
-    \\GROUP BY DATE(indexed_at)
-    \\ORDER BY date DESC
-    \\LIMIT 30
-;
+// default timeline range for /api/dashboard (kept for back-compat)
+const DEFAULT_TIMELINE_RANGE: TimelineRange = .d30;
 
 const TOP_PUBS_SQL =
     \\SELECT p.name, p.base_path, COUNT(d.uri) as doc_count
@@ -101,7 +176,7 @@ pub fn fetch(alloc: Allocator) !Data {
         .{ .sql = STATS_SQL },
         .{ .sql = PLATFORMS_SQL },
         .{ .sql = TAGS_SQL },
-        .{ .sql = TIMELINE_SQL },
+        .{ .sql = DEFAULT_TIMELINE_RANGE.sql() },
         .{ .sql = TOP_PUBS_SQL },
     }) catch return error.QueryFailed;
     defer batch.deinit();
@@ -172,7 +247,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const tags_json = try formatTagsJsonLocal(alloc, &tags_rows);
 
     // timeline query
-    var timeline_rows = try local.query(TIMELINE_SQL, .{});
+    var timeline_rows = try local.query(DEFAULT_TIMELINE_RANGE.sql(), .{});
     defer timeline_rows.deinit();
     const timeline_json = try formatTimelineJsonLocal(alloc, &timeline_rows);
 
@@ -354,6 +429,63 @@ fn formatTrafficJson(alloc: Allocator) ![]const u8 {
     try jw.endArray();
 
     return try output.toOwnedSlice();
+}
+
+/// Fetch the documents-indexed timeline at the requested range.
+/// Returns a JSON object: `{"bucket":"daily|weekly|monthly","range":"30d","points":[...]}`.
+pub fn fetchTimeline(alloc: Allocator, range: TimelineRange) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+
+    try jw.beginObject();
+    try jw.objectField("bucket");
+    try jw.write(range.bucketLabel());
+    try jw.objectField("range");
+    try jw.write(@tagName(range));
+    try jw.objectField("points");
+
+    // local + turso queries both take comptime SQL — dispatch on the range tag
+    // and run the matching comptime-known query string in each branch
+    switch (range) {
+        .d7 => try writeTimelinePoints(&jw, comptime TimelineRange.d7.sql()),
+        .d30 => try writeTimelinePoints(&jw, comptime TimelineRange.d30.sql()),
+        .d90 => try writeTimelinePoints(&jw, comptime TimelineRange.d90.sql()),
+        .y1 => try writeTimelinePoints(&jw, comptime TimelineRange.y1.sql()),
+        .all_time => try writeTimelinePoints(&jw, comptime TimelineRange.all_time.sql()),
+    }
+
+    try jw.endObject();
+    return try output.toOwnedSlice();
+}
+
+fn writeTimelinePoints(jw: *json.Stringify, comptime sql_query: []const u8) !void {
+    // try local SQLite first
+    if (db.getLocalDb()) |local| {
+        if (local.query(sql_query, .{})) |rows_const| {
+            var rows = rows_const;
+            defer rows.deinit();
+            try jw.beginArray();
+            while (rows.next()) |row| {
+                try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
+            }
+            try jw.endArray();
+            return;
+        } else |err| {
+            logfire.warn("dashboard: timeline local query failed: {s}, falling back to turso", .{@errorName(err)});
+        }
+    }
+
+    // fall back to Turso
+    const client = db.getClient() orelse return error.NotInitialized;
+    var res = client.query(sql_query, &.{}) catch return error.QueryFailed;
+    defer res.deinit();
+
+    try jw.beginArray();
+    for (res.rows) |row| {
+        try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
+    }
+    try jw.endArray();
 }
 
 /// Generate dashboard data as JSON for API endpoint

@@ -92,6 +92,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleDashboard(request);
     } else if (mem.eql(u8, path, "/api/dashboard")) {
         try handleDashboardApi(request);
+    } else if (mem.eql(u8, path, "/api/timeline")) {
+        try handleTimelineApi(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -478,6 +480,22 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
 
     const json_response = dashboard.toJson(alloc, data) catch {
         try sendJson(request, "{\"error\":\"failed to serialize dashboard data\"}");
+        return;
+    };
+
+    try sendJson(request, json_response);
+}
+
+fn handleTimelineApi(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const range_str = parseQueryParam(alloc, target, "range") catch "30d";
+    const range = dashboard.TimelineRange.fromString(range_str);
+
+    const json_response = dashboard.fetchTimeline(alloc, range) catch {
+        try sendJson(request, "{\"error\":\"failed to fetch timeline\"}");
         return;
     };
 

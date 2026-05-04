@@ -25,9 +25,37 @@ function updateAge() {
   }
 }
 
-function renderTimeline(timeline) {
+// timeline state
+let currentTimelineRange = '30d';
+const TIMELINE_TITLES = {
+  '7d': 'documents over time (last 7 days)',
+  '30d': 'documents over time (last 30 days)',
+  '90d': 'documents over time (last 90 days)',
+  '1y': 'documents over time (last year, weekly)',
+  'all': 'documents over time (all time, monthly)',
+};
+
+function formatBucketLabel(date, bucket) {
+  // dates from the API are YYYY-MM-DD strings (UTC) — parse without timezone shift
+  const [y, m, d] = date.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (bucket === 'monthly') {
+    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', timeZone: 'UTC' });
+  }
+  if (bucket === 'weekly') {
+    return 'wk of ' + dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+  return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function renderTimeline(timeline, bucket) {
   const el = document.getElementById('timeline');
-  if (!timeline || timeline.length === 0) return;
+  el.innerHTML = '';
+  bucket = bucket || 'daily';
+  if (!timeline || timeline.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;text-align:center;width:100%;align-self:center">no data in this range</div>';
+    return;
+  }
 
   const max = Math.max(...timeline.map(d => d.count));
   [...timeline].reverse().forEach(d => {
@@ -36,7 +64,7 @@ function renderTimeline(timeline) {
     const stack = document.createElement('div');
     stack.className = 'bar-stack';
     stack.style.height = Math.max(totalH, 3) + '%';
-    stack.title = d.date + ': ' + d.count;
+    stack.title = formatBucketLabel(d.date, bucket) + ': ' + d.count;
 
     const normalDiv = document.createElement('div');
     normalDiv.className = 'bar-normal';
@@ -45,6 +73,20 @@ function renderTimeline(timeline) {
 
     el.appendChild(stack);
   });
+}
+
+async function loadTimeline(range) {
+  currentTimelineRange = range;
+  const titleEl = document.getElementById('timeline-title');
+  if (titleEl) titleEl.textContent = TIMELINE_TITLES[range] || TIMELINE_TITLES['30d'];
+
+  try {
+    const r = await fetch(API_BASE + '/api/timeline?range=' + encodeURIComponent(range));
+    const data = await r.json();
+    renderTimeline(data.points, data.bucket);
+  } catch (e) {
+    console.error('failed to load timeline:', e);
+  }
 }
 
 function renderPubs(pubs) {
@@ -358,6 +400,14 @@ document.getElementById('traffic-range')?.addEventListener('click', function(e) 
   this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   drawTrafficSvg();
+});
+
+document.getElementById('timeline-range')?.addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-range]');
+  if (!btn) return;
+  this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadTimeline(btn.dataset.range);
 });
 
 function formatTimestamp(hour) {

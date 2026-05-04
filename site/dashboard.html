@@ -74,8 +74,17 @@
       </div>
     </section>
 
-    <section>
-      <div class="section-title">documents indexed (last 30 days)</div>
+    <section class="timeline-section">
+      <div class="timeline-header">
+        <div class="section-title" id="timeline-title">documents over time (last 30 days)</div>
+        <span class="traffic-range-btns" id="timeline-range">
+          <button data-range="7d">7d</button>
+          <button data-range="30d" class="active">30d</button>
+          <button data-range="90d">90d</button>
+          <button data-range="1y">1y</button>
+          <button data-range="all">all</button>
+        </span>
+      </div>
       <div class="chart-box">
         <div class="timeline" id="timeline"></div>
       </div>
