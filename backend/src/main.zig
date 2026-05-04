@@ -167,3 +167,14 @@ fn setSocketTimeout(fd: std.posix.fd_t, secs: u32) !void {
     try std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, &timeout);
     try std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, &timeout);
 }
+
+// Force the test runner to include `test "..."` blocks from non-root modules.
+// Without this, only tests literally inside main.zig would run — referencing
+// a module via `pub const X = @import("x.zig").X` does not pull in `x.zig`'s
+// test blocks. Add new test-bearing files here as they appear.
+test {
+    _ = @import("db/Client.zig");
+    _ = @import("db/zug_conn.zig");
+    _ = @import("ingest/extractor.zig");
+    _ = @import("server/search.zig");
+}
