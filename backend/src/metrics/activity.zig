@@ -28,7 +28,10 @@ pub fn init(io: Io) void {
 }
 
 pub fn getCounts() [SLOTS]u16 {
-    const io = global_io.?;
+    // /activity can be polled before initServices runs activity.init in the
+    // background; fall back to a snapshot of the zero-initialized buffer
+    // instead of panicking on `global_io.?`
+    const io = global_io orelse return counts;
     mutex.lockUncancelable(io);
     defer mutex.unlock(io);
     var result: [SLOTS]u16 = undefined;
@@ -40,7 +43,8 @@ pub fn getCounts() [SLOTS]u16 {
 }
 
 pub fn record() void {
-    const io = global_io.?;
+    // pre-init requests are dropped rather than crashing the server
+    const io = global_io orelse return;
     mutex.lockUncancelable(io);
     defer mutex.unlock(io);
     counts[slot] +|= 1;
