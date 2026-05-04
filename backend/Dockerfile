@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # install zig 0.16.0-dev
-ARG ZIG_VERSION=0.16.0-dev.3059+42e33db9d
+ARG ZIG_VERSION=0.16.0-dev.3070+b22eb176b
 RUN curl -L https://ziglang.org/builds/zig-x86_64-linux-${ZIG_VERSION}.tar.xz | tar -xJ -C /usr/local \
     && ln -s /usr/local/zig-x86_64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig
 
