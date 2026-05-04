@@ -17,10 +17,27 @@ pub const BatchResult = result.BatchResult;
 const Client = @This();
 
 // Hrana protocol types (https://github.com/tursodatabase/libsql/blob/main/docs/HRANA_3_SPEC.md)
-const Value = struct { type: []const u8 = "text", value: []const u8 };
-const Stmt = struct { sql: []const u8, args: ?[]const Value = null };
+//
+// `WireValue` is the JSON-serialized arg shape Turso expects on the wire. The
+// `value` field is always a string even for integers — the `type` tag tells
+// Turso how to coerce it. `null` values are emitted with no `value` field via
+// the `emit_null_optional_fields = false` JSON option.
+const WireValue = struct { type: []const u8 = "text", value: ?[]const u8 = null };
+const Stmt = struct { sql: []const u8, args: ?[]const WireValue = null };
 const ExecuteReq = struct { type: []const u8 = "execute", stmt: Stmt };
 const CloseReq = struct { type: []const u8 = "close" };
+
+/// A runtime-typed bind value for the migration / dynamic-SQL path.
+///
+/// The comptime `query`/`exec` API only ever sends `text` values (it accepts
+/// `[]const u8` args), so it doesn't need this. zug-style migrations bind
+/// `i64` directly for things like the `dirty INTEGER` column, so the runtime
+/// path needs a typed shape.
+pub const RuntimeValue = union(enum) {
+    text: []const u8,
+    int: i64,
+    null_value,
+};
 
 const URL_BUF_SIZE = 512;
 const AUTH_BUF_SIZE = 512;
@@ -80,6 +97,25 @@ pub fn exec(self: *Client, comptime sql: []const u8, args: anytype) !void {
     self.allocator.free(response);
 }
 
+/// Execute a statement with a runtime-built SQL string and typed args.
+///
+/// Use this for code paths where the SQL or arg shape isn't known at compile
+/// time — schema migrations, parameterized table-name queries, etc. Existing
+/// handler code should keep using the comptime `exec` / `query`.
+pub fn execRuntime(self: *Client, sql: []const u8, args: []const RuntimeValue) !void {
+    const response = try self.executeRawTyped(sql, args);
+    self.allocator.free(response);
+}
+
+/// Read rows with a runtime-built SQL string and typed args.
+///
+/// Same use-case as `execRuntime`. Caller deinits the returned `Result`.
+pub fn queryRuntime(self: *Client, sql: []const u8, args: []const RuntimeValue) !Result {
+    const response = try self.executeRawTyped(sql, args);
+    defer self.allocator.free(response);
+    return Result.parse(self.allocator, response);
+}
+
 pub const Statement = struct {
     sql: []const u8,
     args: []const []const u8 = &.{},
@@ -120,64 +156,47 @@ fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
 }
 
 fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const u8 {
+    const body = try self.buildRequestBody(sql, args);
+    defer self.allocator.free(body);
     const span = logfire.span("db.query", .{
         .sql = truncateSql(sql),
         .args_count = @as(i64, @intCast(args.len)),
     });
-    defer span.end();
-
-    self.mutex.lockUncancelable(self.io);
-    defer self.mutex.unlock(self.io);
-
-    var url_buf: [URL_BUF_SIZE]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
-        return error.UrlTooLong;
-
-    const body = try self.buildRequestBody(sql, args);
-    defer self.allocator.free(body);
-
-    var auth_buf: [AUTH_BUF_SIZE]u8 = undefined;
-    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.token}) catch
-        return error.AuthTooLong;
-
-    var response_body: std.Io.Writer.Allocating = .init(self.allocator);
-    errdefer response_body.deinit();
-
-    const res = self.http_client.fetch(.{
-        .location = .{ .url = url },
-        .method = .POST,
-        .headers = .{
-            .content_type = .{ .override = "application/json" },
-            .authorization = .{ .override = auth },
-        },
-        .payload = body,
-        .response_writer = &response_body.writer,
-    }) catch |err| {
-        logfire.err("db.query http failed: {s} | sql: {s}", .{ @errorName(err), truncateSql(sql) });
-        span.recordError(error.HttpError);
-        return error.HttpError;
-    };
-
-    if (res.status != .ok) {
-        const resp_text = response_body.toOwnedSlice() catch "";
-        defer if (resp_text.len > 0) self.allocator.free(resp_text);
-        const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
-        logfire.err("db.query turso error: {} | sql: {s} | response: {s}", .{ res.status, truncateSql(sql), resp_preview });
-        span.recordError(error.TursoError);
-        span.setAttribute("turso.status", @intFromEnum(res.status));
-        span.setAttribute("turso.response", resp_preview);
-        return error.TursoError;
-    }
-
-    return try response_body.toOwnedSlice();
+    return self.doRequest(span, "db.query", sql, body);
 }
 
 fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
-    const first_sql = if (statements.len > 0) truncateSql(statements[0].sql) else "";
+    const body = try self.buildBatchRequestBody(statements);
+    defer self.allocator.free(body);
+    const first_sql = if (statements.len > 0) statements[0].sql else "";
+    // preserve the original batch span attribute names (`statement_count`,
+    // `first_sql`) so any existing logfire dashboards/alerts keep working
     const span = logfire.span("db.batch", .{
         .statement_count = @as(i64, @intCast(statements.len)),
-        .first_sql = first_sql,
+        .first_sql = truncateSql(first_sql),
     });
+    return self.doRequest(span, "db.batch", first_sql, body);
+}
+
+fn executeRawTyped(self: *Client, sql: []const u8, args: []const RuntimeValue) ![]const u8 {
+    const body = try buildTypedRequestBody(self.allocator, sql, args);
+    defer self.allocator.free(body);
+    const span = logfire.span("db.query", .{
+        .sql = truncateSql(sql),
+        .args_count = @as(i64, @intCast(args.len)),
+    });
+    return self.doRequest(span, "db.query", sql, body);
+}
+
+/// Shared HTTP path for all three execute variants.
+///
+/// The caller creates the span (with whatever attribute shape its dashboards
+/// expect) and passes it in; `doRequest` is responsible for `end()`,
+/// `recordError`, and decorating with the turso response details on failure.
+/// `span_name` is used only for log-message prefixes. `sql_for_log` is the
+/// already-untruncated SQL string used for log lines (truncated inside).
+fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_log: []const u8, body: []const u8) ![]const u8 {
+    const truncated = truncateSql(sql_for_log);
     defer span.end();
 
     self.mutex.lockUncancelable(self.io);
@@ -186,9 +205,6 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
         return error.UrlTooLong;
-
-    const body = try self.buildBatchRequestBody(statements);
-    defer self.allocator.free(body);
 
     var auth_buf: [AUTH_BUF_SIZE]u8 = undefined;
     const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.token}) catch
@@ -207,7 +223,7 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
         .payload = body,
         .response_writer = &response_body.writer,
     }) catch |err| {
-        logfire.err("db.batch http failed: {s} | first_sql: {s}", .{ @errorName(err), first_sql });
+        logfire.err("{s} http failed: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
         span.recordError(error.HttpError);
         return error.HttpError;
     };
@@ -216,7 +232,7 @@ fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
         const resp_text = response_body.toOwnedSlice() catch "";
         defer if (resp_text.len > 0) self.allocator.free(resp_text);
         const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
-        logfire.err("db.batch turso error: {} | first_sql: {s} | response: {s}", .{ res.status, first_sql, resp_preview });
+        logfire.err("{s} turso error: {} | sql: {s} | response: {s}", .{ span_name, res.status, truncated, resp_preview });
         span.recordError(error.TursoError);
         span.setAttribute("turso.status", @intFromEnum(res.status));
         span.setAttribute("turso.response", resp_preview);
@@ -271,13 +287,73 @@ fn buildRequestBody(self: *Client, sql: []const u8, args: []const []const u8) ![
     return try body.toOwnedSlice();
 }
 
-fn toValues(self: *Client, args: []const []const u8) ![]const Value {
+/// Build a Hrana request body for a single statement with typed runtime args.
+///
+/// Differs from `buildRequestBody` only in that integer args are emitted with
+/// `type: "integer"` (Turso requires the value to be a string-formatted decimal
+/// even for integers — the `type` tag is what coerces it back).
+fn buildTypedRequestBody(allocator: Allocator, sql: []const u8, args: []const RuntimeValue) ![]const u8 {
+    var body: std.Io.Writer.Allocating = .init(allocator);
+    errdefer body.deinit();
+    var jw: json.Stringify = .{ .writer = &body.writer, .options = .{ .emit_null_optional_fields = false } };
+
+    const values = try toTypedValues(allocator, args);
+    defer freeTypedValues(allocator, values);
+
+    try jw.beginObject();
+    try jw.objectField("requests");
+    try jw.beginArray();
+    try jw.write(ExecuteReq{
+        .stmt = .{ .sql = sql, .args = if (values.len > 0) values else null },
+    });
+    try jw.write(CloseReq{});
+    try jw.endArray();
+    try jw.endObject();
+
+    return try body.toOwnedSlice();
+}
+
+fn toValues(self: *Client, args: []const []const u8) ![]const WireValue {
     if (args.len == 0) return &.{};
-    const values = try self.allocator.alloc(Value, args.len);
+    const values = try self.allocator.alloc(WireValue, args.len);
     for (args, 0..) |arg, i| {
         values[i] = .{ .value = arg };
     }
     return values;
+}
+
+/// Convert typed `RuntimeValue` args into Hrana `WireValue` shapes.
+///
+/// Integer values are formatted into freshly-allocated decimal strings; the
+/// caller frees them via `freeTypedValues` once the JSON body has been built.
+fn toTypedValues(allocator: Allocator, args: []const RuntimeValue) ![]const WireValue {
+    if (args.len == 0) return &.{};
+    const values = try allocator.alloc(WireValue, args.len);
+    errdefer allocator.free(values);
+
+    var i: usize = 0;
+    errdefer for (values[0..i]) |v| {
+        if (std.mem.eql(u8, v.type, "integer")) if (v.value) |s| allocator.free(s);
+    };
+
+    while (i < args.len) : (i += 1) {
+        values[i] = switch (args[i]) {
+            .text => |s| .{ .type = "text", .value = s },
+            .int => |n| blk: {
+                const s = try std.fmt.allocPrint(allocator, "{d}", .{n});
+                break :blk .{ .type = "integer", .value = s };
+            },
+            .null_value => .{ .type = "null", .value = null },
+        };
+    }
+    return values;
+}
+
+fn freeTypedValues(allocator: Allocator, values: []const WireValue) void {
+    for (values) |v| {
+        if (std.mem.eql(u8, v.type, "integer")) if (v.value) |s| allocator.free(s);
+    }
+    allocator.free(values);
 }
 
 fn validateArgs(comptime sql: []const u8, comptime ArgsType: type) void {
@@ -341,4 +417,102 @@ fn keepaliveLoop(self: *Client) void {
             logfire.debug("turso: keepalive ping failed: {}", .{err});
         };
     }
+}
+
+// --- tests ---
+
+test "toTypedValues: empty args returns empty slice" {
+    const values = try toTypedValues(std.testing.allocator, &.{});
+    defer freeTypedValues(std.testing.allocator, values);
+    try std.testing.expectEqual(@as(usize, 0), values.len);
+}
+
+test "toTypedValues: text values pass through" {
+    const args = [_]RuntimeValue{ .{ .text = "hello" }, .{ .text = "world" } };
+    const values = try toTypedValues(std.testing.allocator, &args);
+    defer freeTypedValues(std.testing.allocator, values);
+
+    try std.testing.expectEqual(@as(usize, 2), values.len);
+    try std.testing.expectEqualStrings("text", values[0].type);
+    try std.testing.expectEqualStrings("hello", values[0].value.?);
+    try std.testing.expectEqualStrings("text", values[1].type);
+    try std.testing.expectEqualStrings("world", values[1].value.?);
+}
+
+test "toTypedValues: int values become decimal strings tagged integer" {
+    const args = [_]RuntimeValue{ .{ .int = 42 }, .{ .int = -17 }, .{ .int = 0 } };
+    const values = try toTypedValues(std.testing.allocator, &args);
+    defer freeTypedValues(std.testing.allocator, values);
+
+    try std.testing.expectEqual(@as(usize, 3), values.len);
+    try std.testing.expectEqualStrings("integer", values[0].type);
+    try std.testing.expectEqualStrings("42", values[0].value.?);
+    try std.testing.expectEqualStrings("integer", values[1].type);
+    try std.testing.expectEqualStrings("-17", values[1].value.?);
+    try std.testing.expectEqualStrings("integer", values[2].type);
+    try std.testing.expectEqualStrings("0", values[2].value.?);
+}
+
+test "toTypedValues: null_value emits null type with no value" {
+    const args = [_]RuntimeValue{.null_value};
+    const values = try toTypedValues(std.testing.allocator, &args);
+    defer freeTypedValues(std.testing.allocator, values);
+
+    try std.testing.expectEqual(@as(usize, 1), values.len);
+    try std.testing.expectEqualStrings("null", values[0].type);
+    try std.testing.expect(values[0].value == null);
+}
+
+test "toTypedValues: mixed types (zug INSERT shape)" {
+    // Mirrors zug's `insertMigration` call: 4 strings + 1 int.
+    const args = [_]RuntimeValue{
+        .{ .text = "001_initial" },
+        .{ .text = "initial schema" },
+        .{ .text = "abc123" },
+        .{ .text = "startup" },
+        .{ .int = 0 },
+    };
+    const values = try toTypedValues(std.testing.allocator, &args);
+    defer freeTypedValues(std.testing.allocator, values);
+
+    try std.testing.expectEqual(@as(usize, 5), values.len);
+    try std.testing.expectEqualStrings("text", values[0].type);
+    try std.testing.expectEqualStrings("text", values[3].type);
+    try std.testing.expectEqualStrings("integer", values[4].type);
+    try std.testing.expectEqualStrings("0", values[4].value.?);
+}
+
+test "buildTypedRequestBody: emits valid Hrana JSON with mixed types" {
+    const args = [_]RuntimeValue{ .{ .text = "abc" }, .{ .int = 1 } };
+    const body = try buildTypedRequestBody(std.testing.allocator, "INSERT INTO t VALUES (?, ?)", &args);
+    defer std.testing.allocator.free(body);
+
+    // parse it back to make sure it's valid JSON shaped as Hrana expects
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
+    defer parsed.deinit();
+
+    const requests = parsed.value.object.get("requests").?.array;
+    try std.testing.expectEqual(@as(usize, 2), requests.items.len); // execute + close
+
+    const stmt = requests.items[0].object.get("stmt").?.object;
+    try std.testing.expectEqualStrings("INSERT INTO t VALUES (?, ?)", stmt.get("sql").?.string);
+
+    const wire_args = stmt.get("args").?.array;
+    try std.testing.expectEqual(@as(usize, 2), wire_args.items.len);
+    try std.testing.expectEqualStrings("text", wire_args.items[0].object.get("type").?.string);
+    try std.testing.expectEqualStrings("abc", wire_args.items[0].object.get("value").?.string);
+    try std.testing.expectEqualStrings("integer", wire_args.items[1].object.get("type").?.string);
+    try std.testing.expectEqualStrings("1", wire_args.items[1].object.get("value").?.string);
+}
+
+test "buildTypedRequestBody: no args produces null args field" {
+    const body = try buildTypedRequestBody(std.testing.allocator, "SELECT 1", &.{});
+    defer std.testing.allocator.free(body);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
+    defer parsed.deinit();
+
+    // args field is omitted (emit_null_optional_fields = false)
+    const stmt = parsed.value.object.get("requests").?.array.items[0].object.get("stmt").?.object;
+    try std.testing.expect(stmt.get("args") == null);
 }
