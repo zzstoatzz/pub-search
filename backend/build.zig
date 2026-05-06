@@ -30,12 +30,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zug = b.dependency("zug", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const imports: []const std.Build.Module.Import = &.{
         .{ .name = "websocket", .module = websocket.module("websocket") },
         .{ .name = "zql", .module = zql.module("zql") },
         .{ .name = "zat", .module = zat.module("zat") },
         .{ .name = "zqlite", .module = zqlite.module("zqlite") },
         .{ .name = "logfire", .module = logfire.module("logfire") },
+        .{ .name = "zug", .module = zug.module("zug") },
     };
 
     const exe = b.addExecutable(.{

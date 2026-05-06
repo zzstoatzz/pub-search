@@ -1,0 +1,231 @@
+//! Migration list for the Turso schema, run via `zug.sqlite.run`.
+//!
+//! ## design
+//!
+//! Migration `001_initial_schema` is a *snapshot* of the current schema
+//! (every CREATE TABLE / VIRTUAL TABLE / INDEX with all columns currently in
+//! production). New deployments running the migration list from scratch get
+//! the modern schema in one shot. Production turso, which is already in this
+//! state, gets bootstrapped — `schema.zig:bootstrapIfNeeded` seeds
+//! `zug_migrations` with every migration marked as already-applied so zug
+//! runs zero of them on the existing DB.
+//!
+//! Subsequent migrations are *data backfills only*. Schema additions in the
+//! future should be appended as new ALTER TABLE migrations — never edit
+//! migration 001 retroactively (zug's checksum check would catch the change
+//! and refuse to run).
+//!
+//! ## transactions
+//!
+//! All migrations are `transactional: false` because the Turso HTTP client
+//! closes the connection at the end of each pipeline request, so BEGIN /
+//! COMMIT can't span multiple `conn.exec` calls. Partial failure is
+//! recoverable via zug's dirty flag — the migration row stays `dirty=1` and
+//! blocks subsequent runs until repaired.
+
+const zug = @import("zug");
+
+pub const migrations = [_]zug.Migration{
+    .{
+        .id = "001_initial_schema",
+        .name = "create all tables, virtual tables, and indexes",
+        .sql =
+        \\CREATE TABLE IF NOT EXISTS documents (
+        \\  uri TEXT PRIMARY KEY,
+        \\  did TEXT NOT NULL,
+        \\  rkey TEXT NOT NULL,
+        \\  title TEXT NOT NULL,
+        \\  content TEXT NOT NULL,
+        \\  created_at TEXT,
+        \\  publication_uri TEXT,
+        \\  platform TEXT DEFAULT 'leaflet',
+        \\  source_collection TEXT DEFAULT 'pub.leaflet.document',
+        \\  embedded_at TEXT,
+        \\  content_hash TEXT,
+        \\  path TEXT,
+        \\  base_path TEXT DEFAULT '',
+        \\  has_publication INTEGER DEFAULT 0,
+        \\  cover_image TEXT,
+        \\  verified_at TEXT,
+        \\  indexed_at TEXT,
+        \\  is_bridgyfed INTEGER DEFAULT 0
+        \\);
+        \\CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+        \\  uri UNINDEXED,
+        \\  title,
+        \\  content
+        \\);
+        \\CREATE TABLE IF NOT EXISTS publications (
+        \\  uri TEXT PRIMARY KEY,
+        \\  did TEXT NOT NULL,
+        \\  rkey TEXT NOT NULL,
+        \\  name TEXT NOT NULL,
+        \\  description TEXT,
+        \\  base_path TEXT,
+        \\  platform TEXT DEFAULT 'leaflet',
+        \\  source_collection TEXT DEFAULT 'pub.leaflet.publication',
+        \\  indexed_at TEXT
+        \\);
+        \\CREATE VIRTUAL TABLE IF NOT EXISTS publications_fts USING fts5(
+        \\  uri UNINDEXED,
+        \\  name,
+        \\  description,
+        \\  base_path
+        \\);
+        \\CREATE TABLE IF NOT EXISTS document_tags (
+        \\  document_uri TEXT NOT NULL,
+        \\  tag TEXT NOT NULL,
+        \\  PRIMARY KEY (document_uri, tag)
+        \\);
+        \\CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag);
+        \\CREATE TABLE IF NOT EXISTS stats (
+        \\  id INTEGER PRIMARY KEY CHECK (id = 1),
+        \\  total_searches INTEGER DEFAULT 0,
+        \\  total_errors INTEGER DEFAULT 0,
+        \\  service_started_at INTEGER,
+        \\  cache_hits INTEGER DEFAULT 0,
+        \\  cache_misses INTEGER DEFAULT 0
+        \\);
+        \\INSERT OR IGNORE INTO stats (id) VALUES (1);
+        \\CREATE TABLE IF NOT EXISTS popular_searches (
+        \\  query TEXT PRIMARY KEY,
+        \\  count INTEGER DEFAULT 1
+        \\);
+        \\CREATE TABLE IF NOT EXISTS tombstones (
+        \\  uri TEXT PRIMARY KEY,
+        \\  record_type TEXT NOT NULL,
+        \\  deleted_at INTEGER NOT NULL
+        \\);
+        \\CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_did_rkey ON documents(did, rkey);
+        \\CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_did_rkey ON publications(did, rkey);
+        \\CREATE INDEX IF NOT EXISTS idx_documents_did_content_hash ON documents(did, content_hash);
+        ,
+    },
+    .{
+        .id = "002_init_stats_started_at",
+        .name = "stamp stats.service_started_at on first ever boot",
+        .sql = "UPDATE stats SET service_started_at = strftime('%s', 'now') WHERE id = 1 AND service_started_at IS NULL",
+    },
+    .{
+        .id = "003_backfill_default_platform",
+        .name = "backfill platform / source_collection for pre-multi-platform rows",
+        .sql =
+        \\UPDATE documents SET platform = 'leaflet' WHERE platform IS NULL;
+        \\UPDATE documents SET source_collection = 'pub.leaflet.document' WHERE source_collection IS NULL;
+        \\UPDATE publications SET platform = 'leaflet' WHERE platform IS NULL;
+        \\UPDATE publications SET source_collection = 'pub.leaflet.publication' WHERE source_collection IS NULL;
+        ,
+    },
+    .{
+        .id = "004_reclassify_platform_from_collection",
+        .name = "fix 'unknown'/'standardsite' rows from pre-detection ingest",
+        .sql =
+        \\UPDATE documents SET platform = 'leaflet' WHERE platform = 'unknown' AND source_collection LIKE 'pub.leaflet.%';
+        \\UPDATE documents SET platform = 'pckt' WHERE platform = 'unknown' AND source_collection LIKE 'blog.pckt.%';
+        \\UPDATE documents SET platform = 'other' WHERE platform = 'standardsite';
+        ,
+    },
+    .{
+        .id = "005_reclassify_platform_from_basepath",
+        .name = "detect platform from publication.base_path for site.standard.* docs",
+        .sql =
+        \\UPDATE documents SET platform = 'pckt'
+        \\  WHERE platform IN ('other', 'unknown')
+        \\  AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%pckt.blog%');
+        \\UPDATE documents SET platform = 'leaflet'
+        \\  WHERE platform IN ('other', 'unknown')
+        \\  AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%');
+        \\UPDATE documents SET platform = 'offprint'
+        \\  WHERE platform IN ('other', 'unknown')
+        \\  AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%offprint.app%' OR base_path LIKE '%offprint.test%');
+        \\UPDATE documents SET platform = 'greengale'
+        \\  WHERE platform IN ('other', 'unknown')
+        \\  AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%greengale.app%');
+        ,
+    },
+    .{
+        .id = "006_backfill_base_path",
+        .name = "denormalize publications.base_path onto documents.base_path",
+        .sql =
+        \\UPDATE documents SET base_path = COALESCE(
+        \\  (SELECT p.base_path FROM publications p WHERE p.uri = documents.publication_uri),
+        \\  (SELECT p.base_path FROM publications p WHERE p.did = documents.did LIMIT 1),
+        \\  ''
+        \\) WHERE base_path IS NULL OR base_path = '';
+        ,
+    },
+    .{
+        .id = "007_backfill_has_publication",
+        .name = "denormalize documents.has_publication from publication_uri",
+        .sql = "UPDATE documents SET has_publication = CASE WHEN publication_uri != '' THEN 1 ELSE 0 END WHERE has_publication = 0 AND publication_uri != ''",
+    },
+    .{
+        .id = "008_cleanup_greengale_publications",
+        .name = "remove stale greengale publication/self records and re-derive document base_path",
+        // Targeted cleanup from 2026-01-22: deleted upstream record left wrong
+        // basePath for greengale documents on did:plc:27ivzcszryxp6mehutodmcxo.
+        .sql =
+        \\DELETE FROM publications WHERE rkey = 'self'
+        \\  AND base_path = 'greengale.app'
+        \\  AND did = 'did:plc:27ivzcszryxp6mehutodmcxo';
+        \\DELETE FROM publications_fts WHERE uri IN (
+        \\  SELECT 'at://' || did || '/site.standard.publication/self'
+        \\  FROM publications WHERE rkey = 'self' AND base_path = 'greengale.app'
+        \\);
+        \\UPDATE documents SET base_path = (
+        \\  SELECT p.base_path FROM publications p
+        \\    WHERE p.did = documents.did
+        \\    AND p.base_path LIKE 'greengale.app/%'
+        \\    ORDER BY LENGTH(p.base_path) DESC
+        \\    LIMIT 1
+        \\)
+        \\  WHERE platform = 'greengale'
+        \\  AND (base_path = 'greengale.app' OR base_path LIKE '%pckt.blog%')
+        \\  AND did IN (SELECT did FROM publications WHERE base_path LIKE 'greengale.app/%');
+        ,
+    },
+    .{
+        .id = "009_backfill_documents_indexed_at",
+        .name = "stamp indexed_at = created_at for pre-incremental-sync rows",
+        .sql = "UPDATE documents SET indexed_at = created_at WHERE indexed_at IS NULL",
+    },
+    .{
+        .id = "010_backfill_publications_indexed_at",
+        .name = "stamp publications.indexed_at = now() for pre-incremental-sync rows",
+        .sql = "UPDATE publications SET indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE indexed_at IS NULL",
+    },
+};
+
+// --- tests ---
+
+const std = @import("std");
+
+test "migration ids are unique" {
+    // zug.validateUnique runs this check at zug.sqlite.run time, but that's
+    // the production startup path. catching dupes at build time is cheaper.
+    for (migrations, 0..) |left, i| {
+        for (migrations[i + 1 ..]) |right| {
+            try std.testing.expect(!std.mem.eql(u8, left.id, right.id));
+        }
+    }
+}
+
+test "every migration has SQL or a callback" {
+    // we don't currently use the .up callback path; if that changes this
+    // assertion can relax to "has at least one of sql or up".
+    for (migrations) |m| {
+        try std.testing.expect(m.sql != null);
+        try std.testing.expect(m.sql.?.len > 0);
+    }
+}
+
+test "migration ids start with three-digit prefix" {
+    // discipline: prevents accidental 'fix_typo' style ids that don't sort.
+    for (migrations) |m| {
+        try std.testing.expect(m.id.len >= 4);
+        try std.testing.expect(std.ascii.isDigit(m.id[0]));
+        try std.testing.expect(std.ascii.isDigit(m.id[1]));
+        try std.testing.expect(std.ascii.isDigit(m.id[2]));
+        try std.testing.expectEqual(@as(u8, '_'), m.id[3]);
+    }
+}

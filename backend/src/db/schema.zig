@@ -1,265 +1,83 @@
 const std = @import("std");
-const Io = std.Io;
+const Allocator = std.mem.Allocator;
 const Client = @import("Client.zig");
+const zug = @import("zug");
+const logfire = @import("logfire");
 
-/// Initialize database schema and run migrations
-pub fn init(client: *Client) !void {
-    try createTables(client);
-    try runMigrations(client);
+const MigrationConn = @import("zug_conn.zig").MigrationConn;
+const migrations = @import("migrations.zig").migrations;
+
+/// Initialize schema and run migrations via zug.
+///
+/// On first deploy against an existing turso instance, `bootstrapIfNeeded`
+/// seeds `zug_migrations` with every migration marked already-applied, so
+/// `zug.sqlite.run` does no work. On subsequent deploys, only newly-appended
+/// migrations run. On a fresh database (no `documents` table), the bootstrap
+/// is skipped and `zug.sqlite.run` runs every migration from scratch.
+pub fn init(allocator: Allocator, client: *Client) !void {
+    try bootstrapIfNeeded(allocator, client);
+
+    var conn = MigrationConn.init(client);
+    var diag: zug.Diagnostics = .{};
+    zug.sqlite.run(allocator, &conn, &migrations, .{ .diagnostics = &diag }) catch |err| {
+        logfire.err(
+            "schema migration failed: {s} | id={s} stmt#{d} preview={s} | {s}",
+            .{ @errorName(err), diag.migration_id, diag.statement_index, diag.statement_preview, diag.message },
+        );
+        return err;
+    };
+
     std.debug.print("schema initialized\n", .{});
 }
 
-fn createTables(client: *Client) !void {
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS documents (
-        \\  uri TEXT PRIMARY KEY,
-        \\  did TEXT NOT NULL,
-        \\  rkey TEXT NOT NULL,
-        \\  title TEXT NOT NULL,
-        \\  content TEXT NOT NULL,
-        \\  created_at TEXT,
-        \\  publication_uri TEXT
-        \\)
-    , &.{});
+/// If the schema is already in place but `zug_migrations` doesn't exist yet,
+/// seed it with every migration marked clean+applied. The current production
+/// schema *is* the result of running migrations 001..N — running them again
+/// would re-do the 5+ minutes of full-table scans we're trying to escape.
+fn bootstrapIfNeeded(allocator: Allocator, client: *Client) !void {
+    if (!try tableExists(client, "documents")) return; // fresh DB; let zug create everything
+    if (try tableExists(client, "zug_migrations")) return; // already bootstrapped
 
-    try client.exec(
-        \\CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-        \\  uri UNINDEXED,
-        \\  title,
-        \\  content
-        \\)
-    , &.{});
+    logfire.info("zug bootstrap: seeding zug_migrations with {d} migrations as already-applied", .{migrations.len});
 
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS publications (
-        \\  uri TEXT PRIMARY KEY,
-        \\  did TEXT NOT NULL,
-        \\  rkey TEXT NOT NULL,
+    var conn = MigrationConn.init(client);
+
+    // create the migrations table with the same schema zug uses internally,
+    // so the rows we INSERT are interpreted correctly when zug.sqlite.run
+    // queries it on the next line.
+    try conn.exec(
+        \\CREATE TABLE IF NOT EXISTS zug_migrations (
+        \\  id TEXT PRIMARY KEY,
         \\  name TEXT NOT NULL,
-        \\  description TEXT,
-        \\  base_path TEXT
+        \\  checksum TEXT NOT NULL,
+        \\  class TEXT NOT NULL,
+        \\  dirty INTEGER NOT NULL DEFAULT 0,
+        \\  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         \\)
-    , &.{});
+    , .{});
 
-    try client.exec(
-        \\CREATE VIRTUAL TABLE IF NOT EXISTS publications_fts USING fts5(
-        \\  uri UNINDEXED,
-        \\  name,
-        \\  description,
-        \\  base_path
-        \\)
-    , &.{});
+    for (migrations) |m| {
+        var checksum_buf: [16]u8 = undefined;
+        const checksum = m.checksumHex(&checksum_buf);
+        try conn.exec(
+            "INSERT INTO zug_migrations (id, name, checksum, class, dirty) VALUES (?, ?, ?, ?, ?)",
+            .{ m.id, m.name, checksum, @tagName(m.class), @as(i64, 0) },
+        );
+    }
 
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS document_tags (
-        \\  document_uri TEXT NOT NULL,
-        \\  tag TEXT NOT NULL,
-        \\  PRIMARY KEY (document_uri, tag)
-        \\)
-    , &.{});
-
-    client.exec(
-        "CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag)",
-        &.{},
-    ) catch {};
-
-    // stats table: single row for lifetime counters
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS stats (
-        \\  id INTEGER PRIMARY KEY CHECK (id = 1),
-        \\  total_searches INTEGER DEFAULT 0,
-        \\  total_errors INTEGER DEFAULT 0,
-        \\  service_started_at INTEGER
-        \\)
-    , &.{});
-
-    // ensure the single row exists
-    client.exec("INSERT OR IGNORE INTO stats (id) VALUES (1)", &.{}) catch {};
-
-    // set service_started_at if not already set (first run ever)
-    var ts_buf: [20]u8 = undefined;
-    const now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(client.io, .real).nanoseconds, std.time.ns_per_s));
-    const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{now_s}) catch "0";
-    client.exec(
-        "UPDATE stats SET service_started_at = ? WHERE id = 1 AND service_started_at IS NULL",
-        &.{ts_str},
-    ) catch {};
-
-    // popular searches tracking
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS popular_searches (
-        \\  query TEXT PRIMARY KEY,
-        \\  count INTEGER DEFAULT 1
-        \\)
-    , &.{});
-
-    // tombstones for deleted records
-    try client.exec(
-        \\CREATE TABLE IF NOT EXISTS tombstones (
-        \\  uri TEXT PRIMARY KEY,
-        \\  record_type TEXT NOT NULL,
-        \\  deleted_at INTEGER NOT NULL
-        \\)
-    , &.{});
+    _ = allocator; // unused for now — zug.sqlite.run will allocate later
 }
 
-fn runMigrations(client: *Client) !void {
-    // these may fail if columns already exist - that's fine
-    client.exec("ALTER TABLE documents ADD COLUMN publication_uri TEXT", &.{}) catch {};
-    client.exec("ALTER TABLE publications ADD COLUMN base_path TEXT", &.{}) catch {};
-    client.exec("ALTER TABLE stats ADD COLUMN service_started_at INTEGER", &.{}) catch {};
-    client.exec("ALTER TABLE stats ADD COLUMN cache_hits INTEGER DEFAULT 0", &.{}) catch {};
-    client.exec("ALTER TABLE stats ADD COLUMN cache_misses INTEGER DEFAULT 0", &.{}) catch {};
-
-    // multi-platform support: track source platform and collection
-    client.exec("ALTER TABLE documents ADD COLUMN platform TEXT DEFAULT 'leaflet'", &.{}) catch {};
-    client.exec("ALTER TABLE documents ADD COLUMN source_collection TEXT DEFAULT 'pub.leaflet.document'", &.{}) catch {};
-
-    // backfill existing records (idempotent - only updates NULLs)
-    client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform IS NULL", &.{}) catch {};
-    client.exec("UPDATE documents SET source_collection = 'pub.leaflet.document' WHERE source_collection IS NULL", &.{}) catch {};
-
-    // multi-platform support for publications
-    client.exec("ALTER TABLE publications ADD COLUMN platform TEXT DEFAULT 'leaflet'", &.{}) catch {};
-    client.exec("ALTER TABLE publications ADD COLUMN source_collection TEXT DEFAULT 'pub.leaflet.publication'", &.{}) catch {};
-    client.exec("UPDATE publications SET platform = 'leaflet' WHERE platform IS NULL", &.{}) catch {};
-    client.exec("UPDATE publications SET source_collection = 'pub.leaflet.publication' WHERE source_collection IS NULL", &.{}) catch {};
-
-    // embedded_at: tracks when a document was embedded into turbopuffer
-    // (replaces the old turso embedding column — can't DROP COLUMN in SQLite, but NULL = no space)
-    client.exec("ALTER TABLE documents ADD COLUMN embedded_at TEXT", &.{}) catch {};
-
-    // dedupe index: same (did, rkey) across collections = same document
-    // e.g., pub.leaflet.document/abc and site.standard.document/abc are the same content
-    client.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_did_rkey ON documents(did, rkey)", &.{}) catch {};
-    client.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_did_rkey ON publications(did, rkey)", &.{}) catch {};
-
-    // backfill platform from source_collection for records indexed before platform detection fix
-    client.exec("UPDATE documents SET platform = 'leaflet' WHERE platform = 'unknown' AND source_collection LIKE 'pub.leaflet.%'", &.{}) catch {};
-    client.exec("UPDATE documents SET platform = 'pckt' WHERE platform = 'unknown' AND source_collection LIKE 'blog.pckt.%'", &.{}) catch {};
-
-    // rename 'standardsite' to 'other' (standardsite was a misnomer - it's a lexicon, not a platform)
-    // documents using site.standard.* that don't match a known platform are simply "other"
-    client.exec("UPDATE documents SET platform = 'other' WHERE platform = 'standardsite'", &.{}) catch {};
-
-    // content_hash: used for cross-platform dedup (same author + same content = skip)
-    client.exec("ALTER TABLE documents ADD COLUMN content_hash TEXT", &.{}) catch {};
-    client.exec("CREATE INDEX IF NOT EXISTS idx_documents_did_content_hash ON documents(did, content_hash)", &.{}) catch {};
-
-    // detect platform from publication basePath (site.standard.* is a lexicon, not a platform)
-    // known platforms (pckt, leaflet, offprint) use site.standard.* but have distinct basePaths
-    client.exec(
-        \\UPDATE documents SET platform = 'pckt'
-        \\WHERE platform IN ('other', 'unknown')
-        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%pckt.blog%')
-    , &.{}) catch {};
-
-    client.exec(
-        \\UPDATE documents SET platform = 'leaflet'
-        \\WHERE platform IN ('other', 'unknown')
-        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%leaflet.pub%')
-    , &.{}) catch {};
-
-    client.exec(
-        \\UPDATE documents SET platform = 'offprint'
-        \\WHERE platform IN ('other', 'unknown')
-        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%offprint.app%' OR base_path LIKE '%offprint.test%')
-    , &.{}) catch {};
-
-    client.exec(
-        \\UPDATE documents SET platform = 'greengale'
-        \\WHERE platform IN ('other', 'unknown')
-        \\AND publication_uri IN (SELECT uri FROM publications WHERE base_path LIKE '%greengale.app%')
-    , &.{}) catch {};
-
-    // URL path field for documents (e.g., "/001" for zat.dev)
-    // used to build full URL: publication.url + document.path
-    client.exec("ALTER TABLE documents ADD COLUMN path TEXT", &.{}) catch {};
-
-    // denormalized columns for query performance (avoids per-row subqueries)
-    client.exec("ALTER TABLE documents ADD COLUMN base_path TEXT DEFAULT ''", &.{}) catch {};
-    client.exec("ALTER TABLE documents ADD COLUMN has_publication INTEGER DEFAULT 0", &.{}) catch {};
-
-    // backfill base_path from publications (idempotent - only updates empty values)
-    client.exec(
-        \\UPDATE documents SET base_path = COALESCE(
-        \\  (SELECT p.base_path FROM publications p WHERE p.uri = documents.publication_uri),
-        \\  (SELECT p.base_path FROM publications p WHERE p.did = documents.did LIMIT 1),
-        \\  ''
-        \\) WHERE base_path IS NULL OR base_path = ''
-    , &.{}) catch {};
-
-    // backfill has_publication (idempotent)
-    client.exec(
-        "UPDATE documents SET has_publication = CASE WHEN publication_uri != '' THEN 1 ELSE 0 END WHERE has_publication = 0 AND publication_uri != ''",
-        &.{},
-    ) catch {};
-
-    // note: publications_fts was rebuilt with base_path column via scripts/rebuild-pub-fts
-    // new publications will include base_path via insertPublication in indexer.zig
-
-    // 2026-01-22: clean up stale publication/self records that were deleted from ATProto
-    // these cause incorrect basePath lookups for greengale documents
-    // specifically: did:plc:27ivzcszryxp6mehutodmcxo had publication/self with basePath 'greengale.app'
-    // but that publication was deleted, and the correct one is 'greengale.app/3fz.org'
-    client.exec(
-        \\DELETE FROM publications WHERE rkey = 'self'
-        \\AND base_path = 'greengale.app'
-        \\AND did = 'did:plc:27ivzcszryxp6mehutodmcxo'
-    , &.{}) catch {};
-    client.exec(
-        \\DELETE FROM publications_fts WHERE uri IN (
-        \\  SELECT 'at://' || did || '/site.standard.publication/self'
-        \\  FROM publications WHERE rkey = 'self' AND base_path = 'greengale.app'
-        \\)
-    , &.{}) catch {};
-
-    // re-derive basePath for greengale documents that got wrong basePath
-    // match documents to greengale publications (basePath contains greengale.app)
-    // prefer more specific basePaths (with subdomain)
-    client.exec(
-        \\UPDATE documents SET base_path = (
-        \\  SELECT p.base_path FROM publications p
-        \\  WHERE p.did = documents.did
-        \\  AND p.base_path LIKE 'greengale.app/%'
-        \\  ORDER BY LENGTH(p.base_path) DESC
-        \\  LIMIT 1
-        \\)
-        \\WHERE platform = 'greengale'
-        \\AND (base_path = 'greengale.app' OR base_path LIKE '%pckt.blog%')
-        \\AND did IN (SELECT did FROM publications WHERE base_path LIKE 'greengale.app/%')
-    , &.{}) catch {};
-
-    // cover_image: blob CID for document cover image (used for thumbnails in search results)
-    client.exec("ALTER TABLE documents ADD COLUMN cover_image TEXT", &.{}) catch {};
-
-    // DiskANN vector index (documents_embedding_idx) is managed via scripts/rebuild-documents-table
-    // DO NOT add CREATE INDEX here — it hangs on startup when the index already exists
-
-    // verified_at: tracks when reconciler last verified document exists at source PDS
-    client.exec("ALTER TABLE documents ADD COLUMN verified_at TEXT", &.{}) catch {};
-
-    // indexed_at: tracks when a document was inserted/updated in Turso
-    // used by incremental sync (created_at is publication date, not insertion time,
-    // so resynced documents with old created_at were missed by incremental sync)
-    client.exec("ALTER TABLE documents ADD COLUMN indexed_at TEXT", &.{}) catch {};
-    client.exec(
-        "UPDATE documents SET indexed_at = created_at WHERE indexed_at IS NULL",
-        &.{},
-    ) catch {};
-
-    // is_bridgyfed: marks documents from bridgy fed (brid.gy PDS)
-    // 0 = normal, 1 = bridgy fed (excluded from search by default)
-    client.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", &.{}) catch {};
-
-    // indexed_at for publications — mirrors documents.indexed_at so incremental
-    // sync can pull new/updated publications. without this, publications only
-    // sync on fullSync (first boot) and drift forever afterward.
-    client.exec("ALTER TABLE publications ADD COLUMN indexed_at TEXT", &.{}) catch {};
-    // one-time backfill so existing rows become visible to the incremental sync.
-    // subsequent inserts/updates stamp indexed_at in indexer.zig.
-    client.exec(
-        "UPDATE publications SET indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE indexed_at IS NULL",
-        &.{},
-    ) catch {};
+fn tableExists(client: *Client, table: []const u8) !bool {
+    var res = try client.queryRuntime(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        &.{.{ .text = table }},
+    );
+    defer res.deinit();
+    return !res.isEmpty();
 }
+
+// re-export migration ids and names for callers that want to inspect what
+// would run (e.g. a /admin/migrations endpoint someday).
+pub const Migration = zug.Migration;
+pub const all_migrations: []const zug.Migration = &migrations;

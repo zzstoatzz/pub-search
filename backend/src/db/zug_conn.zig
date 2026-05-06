@@ -12,9 +12,10 @@
 //! Anything else is a compile error so we catch surprises early. Adding a new
 //! supported type is a one-line addition to `runtimeValueFrom`.
 //!
-//! This file does NOT import `zug`. It just duck-types into the trait zug
-//! validates with `validateConn`. zug becomes a build dep in phase 3 when we
-//! actually call `zug.sqlite.run(allocator, &conn, &migrations, .{})`.
+//! This file does NOT import `zug` even though `zug` is a build dep — it
+//! just duck-types into the trait zug validates with `validateConn`. The
+//! actual `zug.sqlite.run(allocator, &conn, &migrations, .{})` call lives
+//! in `schema.zig` / `db.zig`, which is where the zug import belongs.
 
 const std = @import("std");
 const Client = @import("Client.zig");

@@ -35,11 +35,15 @@ pub fn initTurso(io: Io) !void {
     sync_client = try Client.init(allocator, io);
 }
 
-/// Run schema migrations (idempotent). Call from background thread.
+/// Run schema migrations via zug. Call from background thread.
+///
+/// On an existing turso DB, `schema.bootstrapIfNeeded` seeds the
+/// `zug_migrations` table on first run so no migrations actually execute.
+/// On a fresh DB, the full migration list runs from scratch.
 pub fn initSchema() void {
     if (client) |*c| {
-        schema.init(c) catch |err| {
-            std.debug.print("schema init failed (tables likely already exist): {}\n", .{err});
+        schema.init(allocator, c) catch |err| {
+            logfire.err("schema init failed: {s}", .{@errorName(err)});
         };
     }
 }

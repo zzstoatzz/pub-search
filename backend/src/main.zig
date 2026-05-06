@@ -175,6 +175,7 @@ fn setSocketTimeout(fd: std.posix.fd_t, secs: u32) !void {
 test {
     _ = @import("db/Client.zig");
     _ = @import("db/zug_conn.zig");
+    _ = @import("db/migrations.zig");
     _ = @import("ingest/extractor.zig");
     _ = @import("server/search.zig");
 }
