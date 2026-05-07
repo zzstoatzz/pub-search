@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const db = @import("../db.zig");
 const logfire = @import("logfire");
 const timing = @import("../metrics.zig").timing;
+const stats_buffer = @import("../metrics.zig").buffer;
 
 // JSON output types
 const TagJson = struct { tag: []const u8, count: i64 };
@@ -211,15 +212,19 @@ pub fn fetch(alloc: Allocator) !Data {
 }
 
 fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
-    // get stats from Turso (searches/started_at don't sync to local replica)
-    const client = db.getClient() orelse return error.NotInitialized;
-    var stats_res = client.query(
-        \\SELECT total_searches, service_started_at FROM stats WHERE id = 1
-    , &.{}) catch return error.QueryFailed;
-    defer stats_res.deinit();
-    const turso_stats = stats_res.first();
-    const searches = if (turso_stats) |r| r.int(0) else 0;
-    const started_at = if (turso_stats) |r| r.int(1) else 0;
+    // pull cached stats from the in-memory buffer instead of querying turso.
+    // total_searches / service_started_at don't live on the local replica
+    // (only sync-tracked tables do), but the stats_buffer module already
+    // refreshes them in the background every 5s. a synchronous turso call
+    // here would hang the *entire* dashboard handler for as long as turso
+    // takes to respond — and on 2026-05-07 turso had a ~95s hiccup that did
+    // exactly that, leaving fly proxy to 502 every dashboard request.
+    //
+    // the cached values can be up to ~5s stale, which is fine for a stats
+    // counter rendered on a debug page.
+    const cached = stats_buffer.getCachedStats();
+    const searches = if (cached) |c| c.searches else 0;
+    const started_at = if (cached) |c| c.started_at else 0;
 
     // get document/publication/embedding counts from local (fast)
     var counts_rows = try local.query(
