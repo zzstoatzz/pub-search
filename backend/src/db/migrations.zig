@@ -7,13 +7,19 @@
 //! production). New deployments running the migration list from scratch get
 //! the modern schema in one shot. Production turso, which is already in this
 //! state, gets bootstrapped — `schema.zig:bootstrapIfNeeded` seeds
-//! `zug_migrations` with every migration marked as already-applied so zug
-//! runs zero of them on the existing DB.
+//! `zug_migrations` with the **baseline** migrations (the first
+//! `BOOTSTRAP_BASELINE_COUNT` entries) marked already-applied so zug runs zero
+//! of them on the existing DB.
 //!
-//! Subsequent migrations are *data backfills only*. Schema additions in the
-//! future should be appended as new ALTER TABLE migrations — never edit
-//! migration 001 retroactively (zug's checksum check would catch the change
-//! and refuse to run).
+//! **Migrations appended after zug adoption are NOT part of the baseline.**
+//! Future schema/data changes get new entries (011, 012, …); zug runs them
+//! against turso normally. `BOOTSTRAP_BASELINE_COUNT` stays frozen at the
+//! count that existed when zug was adopted, so a restored pre-zug backup
+//! gets the baseline pre-applied but every later migration runs for real.
+//!
+//! Schema additions in the future should be appended as new ALTER TABLE
+//! migrations — never edit migration 001 retroactively (zug's checksum check
+//! would catch the change and refuse to run).
 //!
 //! ## transactions
 //!
@@ -24,6 +30,17 @@
 //! blocks subsequent runs until repaired.
 
 const zug = @import("zug");
+
+/// Number of leading migrations that bootstrap pre-marks as already-applied
+/// when adopting zug on top of an existing turso DB.
+///
+/// **Critical: this number is FROZEN at the count of migrations that existed
+/// at the moment of adoption.** Migrations appended after zug adoption (011,
+/// 012, …) must NOT be folded into the baseline — they need to actually run
+/// against turso. If a fresh-but-pre-zug DB ever bootstraps later (e.g. a
+/// restored backup), only these baseline entries should be marked applied;
+/// everything past this index runs through `zug.sqlite.run` normally.
+pub const BOOTSTRAP_BASELINE_COUNT: usize = 10;
 
 pub const migrations = [_]zug.Migration{
     .{
@@ -217,6 +234,12 @@ test "every migration has SQL or a callback" {
         try std.testing.expect(m.sql != null);
         try std.testing.expect(m.sql.?.len > 0);
     }
+}
+
+test "BOOTSTRAP_BASELINE_COUNT does not exceed migrations.len" {
+    // safety: if someone shrinks the migrations array without updating the
+    // constant, bootstrap would index out of bounds. tests catch this.
+    try std.testing.expect(BOOTSTRAP_BASELINE_COUNT <= migrations.len);
 }
 
 test "migration ids start with three-digit prefix" {
