@@ -63,7 +63,8 @@ the backend handles all of this in the [content extraction](content-extraction.m
 | full-text matching | SQLite FTS5 (BM25 ranking, inverted index) | query construction, tokenization rules, recency scoring |
 | vector similarity | Voyage AI (embeddings), turbopuffer (ANN search) | hybrid fusion, result merging, snippet extraction |
 | firehose sync | tap (from bluesky-social/indigo) | content extraction per platform, deduplication |
-| data storage | Turso (cloud SQLite), local SQLite replica | schema design, sync logic, migration handling |
+| data storage | Turso (cloud SQLite), local SQLite replica | schema design, sync logic, replica management |
+| schema migrations | [zug](https://tangled.sh/@zzstoatzz.io/zug) (Zig 0.16 SQLite migration runner) | migration list, bootstrap path for the existing turso DB, `MigrationConn` adapter to zug's connection trait |
 | frontend | Cloudflare Pages (hosting) | the entire UI and search experience |
 
 the tools are popular and well-established. the assembly — wiring the firehose to content extraction to multi-modal search across heterogeneous publishing platforms — is very custom.
@@ -77,4 +78,5 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [tap.md](tap.md) — firehose consumer setup, debugging, memory tuning
 - [reconciliation.md](reconciliation.md) — stale document detection and cleanup
 - [turso-hrana.md](turso-hrana.md) — Turso's HTTP protocol for database queries
+- [migrations.md](migrations.md) — schema migration system (zug + adapter + bootstrap)
 - [performance-saga.md](performance-saga.md) — a debugging story about latency spikes

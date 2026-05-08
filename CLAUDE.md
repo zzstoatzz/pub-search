@@ -33,6 +33,13 @@
 ## zig dependencies
 - update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)
 
+## schema migrations
+- run via [zug](https://tangled.sh/@zzstoatzz.io/zug) — see `docs/migrations.md`
+- list lives in `backend/src/db/migrations.zig`
+- to add: append a new entry with the next 3-digit prefix; **never edit existing migrations** (zug checksums them)
+- `BOOTSTRAP_BASELINE_COUNT` is FROZEN at 10 — don't change it when adding new migrations
+- repair a dirty migration: fix the underlying issue, then `UPDATE zug_migrations SET dirty=0 WHERE id='...'` and redeploy
+
 ## MCP server
 - hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
 - local dev: `cd mcp && uv run pytest` for tests
