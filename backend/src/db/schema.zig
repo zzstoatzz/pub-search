@@ -129,7 +129,3 @@ fn tableExists(client: *Client, table: []const u8) !bool {
     return !res.isEmpty();
 }
 
-// re-export migration ids and names for callers that want to inspect what
-// would run (e.g. a /admin/migrations endpoint someday).
-pub const Migration = zug.Migration;
-pub const all_migrations: []const zug.Migration = &migrations;

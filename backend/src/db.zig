@@ -12,7 +12,6 @@ pub const LocalDb = @import("db/LocalDb.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
 pub const BatchResult = result.BatchResult;
-pub const MigrationConn = @import("db/zug_conn.zig").MigrationConn;
 
 // global state
 const allocator = std.heap.smp_allocator;
