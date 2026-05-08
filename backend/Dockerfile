@@ -17,7 +17,11 @@ WORKDIR /app
 COPY build.zig build.zig.zon ./
 COPY src ./src
 
-RUN zig build -Doptimize=ReleaseSafe
+# pin to x86_64_v3 (AVX2) — fly EPYC machines support up to that. without
+# -Dtarget+-Dcpu, zig auto-detects from the depot builder's CPU, which may
+# include newer instructions (AVX-512) that the runtime machine doesn't
+# support → SIGILL on first instruction. v3 covers all current fly machines.
+RUN zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu -Dcpu=x86_64_v3
 
 # runtime stage
 FROM debian:bookworm-slim
