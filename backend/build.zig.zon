@@ -25,8 +25,8 @@
             .hash = "logfire_zig-0.2.2-x2yDLqCPAABljJ7YXfiGMnkCJmmy9ygmMSSWKxrp-I7Z",
         },
         .zug = .{
-            .url = "https://tangled.org/zzstoatzz.io/zug/archive/5fac77d.tar.gz",
-            .hash = "zug-0.1.0-alpha.0-h4vXbfRxAACVc4cXbMWQqX3E6EdxGXqMePVab0hp9Xgz",
+            .url = "https://tangled.org/zzstoatzz.io/zug/archive/v0.1.1-alpha.0.tar.gz",
+            .hash = "zug-0.1.1-alpha.0-h4vXbambAAAfzRxf5WGSkExOJkO9QfpkdA9R7s2XPNo0",
         },
     },
     .paths = .{

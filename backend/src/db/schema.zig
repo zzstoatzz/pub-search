@@ -11,16 +11,35 @@ const BOOTSTRAP_BASELINE_COUNT = migrations_mod.BOOTSTRAP_BASELINE_COUNT;
 
 /// Initialize schema and run migrations via zug.
 ///
-/// On first deploy against an existing turso instance, `bootstrapIfNeeded`
-/// seeds `zug_migrations` with the *baseline* migrations marked already-applied
-/// (the ones that existed at the moment of zug adoption), so `zug.sqlite.run`
-/// only runs migrations appended after adoption. On a fresh DB (no `documents`
-/// table), bootstrap is skipped and zug runs everything from scratch.
+/// On an existing turso DB (one that has `documents` already), `zug.sqlite.baseline`
+/// seeds and verifies the *baseline* migrations marked already-applied — the ones
+/// that existed at the moment of zug adoption. `zug.sqlite.run` then only executes
+/// migrations appended after adoption. On a fresh DB (no `documents`), baseline is
+/// skipped entirely and `run` creates everything from scratch.
 pub fn init(allocator: Allocator, client: *Client) !void {
-    try bootstrapIfNeeded(client);
-
     var conn = MigrationConn.init(client);
     var diag: zug.Diagnostics = .{};
+
+    if (try existingAppSchema(client)) {
+        // Mark the first BOOTSTRAP_BASELINE_COUNT migrations as already-applied.
+        // baseline() handles CREATE-IF-NOT-EXISTS, INSERT OR IGNORE seeding (so a
+        // partial previous attempt completes on the next boot), and post-seed
+        // verification of every baseline row's checksum + dirty flag. On
+        // already-bootstrapped DBs this short-circuits after verification.
+        // BOOTSTRAP_BASELINE_COUNT is FROZEN at the count at adoption time —
+        // never grows — so a restored pre-zug backup gets exactly the right
+        // historical migrations pre-applied and everything after runs normally.
+        zug.sqlite.baseline(allocator, &conn, migrations[0..BOOTSTRAP_BASELINE_COUNT], .{
+            .diagnostics = &diag,
+        }) catch |err| {
+            logfire.err(
+                "schema baseline failed: {s} | id={s} | {s}",
+                .{ @errorName(err), diag.migration_id, diag.message },
+            );
+            return err;
+        };
+    }
+
     zug.sqlite.run(allocator, &conn, &migrations, .{ .diagnostics = &diag }) catch |err| {
         logfire.err(
             "schema migration failed: {s} | id={s} stmt#{d} preview={s} | {s}",
@@ -32,100 +51,21 @@ pub fn init(allocator: Allocator, client: *Client) !void {
     std.debug.print("schema initialized\n", .{});
 }
 
-/// Bootstrap zug_migrations on an existing turso DB (one that has `documents`
-/// but no `zug_migrations` yet — i.e. the first deploy after zug adoption, or
-/// a restored backup taken before adoption).
+/// App-specific predicate: does this turso DB already have leaflet-search's
+/// schema? Used to distinguish "fresh DB — let zug create everything" from
+/// "existing pre-zug DB — record baseline migrations as already-applied so
+/// zug doesn't re-run them." `documents` is the load-bearing table; if it
+/// exists the schema is in place.
 ///
-/// **Resumable + verified.** `INSERT OR IGNORE` lets a partial bootstrap from a
-/// previous boot complete on the next boot — rows that landed last time stay,
-/// missing ones get filled in. After seeding, every baseline id is verified
-/// to exist with the matching checksum and `dirty=0`; otherwise this returns
-/// `error.BootstrapIncomplete` so `init()` halts loudly instead of silently
-/// letting `zug.sqlite.run` re-execute the historical migrations.
-///
-/// Only `migrations[0..BOOTSTRAP_BASELINE_COUNT]` is seeded. Anything appended
-/// later (a new 011, 012, …) is NOT pre-marked applied — those run normally
-/// via `zug.sqlite.run`. Otherwise an old pre-zug DB restored from a backup
-/// would silently skip every new migration.
-fn bootstrapIfNeeded(client: *Client) !void {
-    if (!try tableExists(client, "documents")) return; // fresh DB; let zug create everything
-
-    var conn = MigrationConn.init(client);
-
-    // create the migrations table with the same schema zug uses internally so
-    // the rows we INSERT are interpreted correctly when zug.sqlite.run reads
-    // the table on the next line. CREATE-IF-NOT-EXISTS is a no-op on a DB
-    // where bootstrap previously got past this step.
-    try conn.exec(
-        \\CREATE TABLE IF NOT EXISTS zug_migrations (
-        \\  id TEXT PRIMARY KEY,
-        \\  name TEXT NOT NULL,
-        \\  checksum TEXT NOT NULL,
-        \\  class TEXT NOT NULL,
-        \\  dirty INTEGER NOT NULL DEFAULT 0,
-        \\  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        \\)
-    , .{});
-
-    // if the table already has every baseline row with correct checksums,
-    // we're done. otherwise seed the missing rows (resumable from a partial
-    // previous bootstrap) and verify.
-    if (try baselineComplete(client)) return;
-
-    logfire.info(
-        "zug bootstrap: seeding {d} baseline migrations as already-applied",
-        .{BOOTSTRAP_BASELINE_COUNT},
-    );
-
-    const baseline = migrations[0..BOOTSTRAP_BASELINE_COUNT];
-    for (baseline) |m| {
-        var checksum_buf: [16]u8 = undefined;
-        const checksum = m.checksumHex(&checksum_buf);
-        // INSERT OR IGNORE: rows that landed in a previous attempt stay; this
-        // round only fills holes. (it does NOT fix a corrupted checksum on an
-        // existing row — that case is caught by baselineComplete below.)
-        try conn.exec(
-            "INSERT OR IGNORE INTO zug_migrations (id, name, checksum, class, dirty) VALUES (?, ?, ?, ?, ?)",
-            .{ m.id, m.name, checksum, @tagName(m.class), @as(i64, 0) },
-        );
-    }
-
-    if (!try baselineComplete(client)) {
-        logfire.err("zug bootstrap: baseline still incomplete after seeding — refusing to proceed", .{});
-        return error.BootstrapIncomplete;
-    }
-}
-
-/// Returns true iff every baseline migration id is present in `zug_migrations`
-/// with matching checksum and `dirty=0`. Used both as a fast-path skip for
-/// already-bootstrapped DBs and as a post-seed verification gate.
-fn baselineComplete(client: *Client) !bool {
-    const baseline = migrations[0..BOOTSTRAP_BASELINE_COUNT];
-    for (baseline) |m| {
-        var checksum_buf: [16]u8 = undefined;
-        const expected_checksum = m.checksumHex(&checksum_buf);
-
-        var res = try client.queryRuntime(
-            "SELECT checksum, dirty FROM zug_migrations WHERE id = ? LIMIT 1",
-            &.{.{ .text = m.id }},
-        );
-        defer res.deinit();
-        const row = res.first() orelse return false;
-
-        const got_checksum = row.text(0);
-        const got_dirty = row.int(1);
-        if (!std.mem.eql(u8, got_checksum, expected_checksum)) return false;
-        if (got_dirty != 0) return false;
-    }
-    return true;
-}
-
-fn tableExists(client: *Client, table: []const u8) !bool {
+/// Per the zug v0.1.1-alpha.0 contract, `zug.sqlite.baseline` does not
+/// decide fresh-vs-existing — it always tries to seed + verify. We gate
+/// the call behind this predicate so a fresh DB doesn't get a phantom
+/// "applied" migration table without the actual schema underneath.
+fn existingAppSchema(client: *Client) !bool {
     var res = try client.queryRuntime(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-        &.{.{ .text = table }},
+        &.{.{ .text = "documents" }},
     );
     defer res.deinit();
     return !res.isEmpty();
 }
-
