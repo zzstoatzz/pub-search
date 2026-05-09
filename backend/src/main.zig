@@ -18,6 +18,15 @@ const SOCKET_TIMEOUT_SECS = 5;
 var threaded_io: Io.Threaded = undefined;
 pub const std_options_debug_threaded_io: ?*Io.Threaded = &threaded_io;
 
+// route every `std.log.*` call through logfire's OTEL log pipeline so
+// stdlib + dependency log output is queryable in logfire alongside spans.
+// active once `logfire.configure(...)` runs (it calls std_log_bridge.init);
+// before that the bridge falls back to std.log.defaultLog (stderr).
+pub const std_options: std.Options = .{
+    .log_level = .info,
+    .logFn = logfire.logFn,
+};
+
 pub fn main() !void {
     const allocator = std.heap.smp_allocator;
 
