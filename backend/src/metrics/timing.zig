@@ -20,7 +20,31 @@ const ENDPOINT_COUNT = @typeInfo(Endpoint).@"enum".fields.len;
 const PERSIST_PATH = "/data/timing.bin";
 const PERSIST_PATH_HOURLY = "/data/timing_hourly.bin";
 const HOURS_TO_KEEP = 720; // 30 days
-const LATENCY_HISTORY_HOURS = 24; // per-endpoint latency charts stay at 24h
+const LATENCY_HISTORY_HOURS = 24; // default window embedded in /api/dashboard
+
+/// Selectable window for the latency-history charts. The hourly buckets are
+/// kept for `HOURS_TO_KEEP` (30 days), so any of these resolve against the
+/// same in-memory ring buffer — the API just slices what the caller asks for.
+pub const LatencyRange = enum {
+    h24,
+    d7,
+    d30,
+
+    pub fn fromString(s: []const u8) LatencyRange {
+        if (std.mem.eql(u8, s, "24h")) return .h24;
+        if (std.mem.eql(u8, s, "7d")) return .d7;
+        if (std.mem.eql(u8, s, "30d")) return .d30;
+        return .h24;
+    }
+
+    pub fn hours(self: LatencyRange) usize {
+        return switch (self) {
+            .h24 => 24,
+            .d7 => 24 * 7,
+            .d30 => HOURS_TO_KEEP, // 720
+        };
+    }
+};
 
 /// per-endpoint latency buffer
 const LatencyBuffer = struct {
@@ -283,39 +307,59 @@ pub fn getTimeSeries(endpoint: Endpoint) [LATENCY_HISTORY_HOURS]TimeSeriesPoint 
     defer mutex.unlock(io);
 
     ensureInitialized();
-
-    const current_hour = getCurrentHour();
-    const ep_buckets = hourly[@intFromEnum(endpoint)];
     var result: [LATENCY_HISTORY_HOURS]TimeSeriesPoint = undefined;
-
-    // return hours in chronological order, oldest first
-    for (0..LATENCY_HISTORY_HOURS) |i| {
-        const hours_ago = LATENCY_HISTORY_HOURS - 1 - i;
-        const hour = current_hour - @as(i64, @intCast(hours_ago)) * 3600;
-        const idx = getHourIndex(hour);
-        const bucket = ep_buckets[idx];
-
-        if (bucket.hour == hour and bucket.count > 0) {
-            result[i] = .{
-                .hour = hour,
-                .count = bucket.count,
-                .avg_ms = @as(f64, @floatFromInt(bucket.sum_us)) / @as(f64, @floatFromInt(bucket.count)) / 1000.0,
-                .max_ms = @as(f64, @floatFromInt(bucket.max_us)) / 1000.0,
-            };
-        } else {
-            result[i] = .{ .hour = hour, .count = 0, .avg_ms = 0, .max_ms = 0 };
-        }
-    }
+    fillTimeSeriesLocked(endpoint, LATENCY_HISTORY_HOURS, &result);
     return result;
 }
 
-/// get time series for all endpoints
+/// get time series for all endpoints (24h)
 pub fn getAllTimeSeries() [ENDPOINT_COUNT][LATENCY_HISTORY_HOURS]TimeSeriesPoint {
     var result: [ENDPOINT_COUNT][LATENCY_HISTORY_HOURS]TimeSeriesPoint = undefined;
     for (0..ENDPOINT_COUNT) |i| {
         result[i] = getTimeSeries(@enumFromInt(i));
     }
     return result;
+}
+
+/// Write up to `out.len` time-series points (one per hour, oldest first) for
+/// `endpoint` into the caller-provided slice. `out.len` must be ≤ HOURS_TO_KEEP.
+/// Used by the `/api/latency?range=...` endpoint to slice an arbitrary window
+/// out of the existing 30-day ring buffer without a fixed-size return type.
+pub fn writeTimeSeries(endpoint: Endpoint, out: []TimeSeriesPoint) void {
+    const io = getIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
+
+    ensureInitialized();
+    fillTimeSeriesLocked(endpoint, out.len, out);
+}
+
+/// Internal: fill `out[0..count]` with hourly points for `endpoint`,
+/// oldest-first. Caller must hold the mutex and ensureInitialized.
+fn fillTimeSeriesLocked(endpoint: Endpoint, count: usize, out: []TimeSeriesPoint) void {
+    std.debug.assert(out.len >= count);
+    std.debug.assert(count <= HOURS_TO_KEEP);
+
+    const current_hour = getCurrentHour();
+    const ep_buckets = hourly[@intFromEnum(endpoint)];
+
+    for (0..count) |i| {
+        const hours_ago = count - 1 - i;
+        const hour = current_hour - @as(i64, @intCast(hours_ago)) * 3600;
+        const idx = getHourIndex(hour);
+        const bucket = ep_buckets[idx];
+
+        if (bucket.hour == hour and bucket.count > 0) {
+            out[i] = .{
+                .hour = hour,
+                .count = bucket.count,
+                .avg_ms = @as(f64, @floatFromInt(bucket.sum_us)) / @as(f64, @floatFromInt(bucket.count)) / 1000.0,
+                .max_ms = @as(f64, @floatFromInt(bucket.max_us)) / 1000.0,
+            };
+        } else {
+            out[i] = .{ .hour = hour, .count = 0, .avg_ms = 0, .max_ms = 0 };
+        }
+    }
 }
 
 /// traffic data point (aggregate across all endpoints)

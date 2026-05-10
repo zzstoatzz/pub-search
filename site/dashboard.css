@@ -66,7 +66,8 @@ section { margin-bottom: 2rem; }
 
 .metrics {
   display: flex;
-  gap: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1.75rem 2rem;
   margin-bottom: 1rem;
 }
 
@@ -98,14 +99,15 @@ section { margin-bottom: 2rem; }
   margin-bottom: 0.75rem;
 }
 
-.timeline-header {
+/* shared layout for any section that wants a title + range buttons row */
+.ranged-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
   gap: 0.5rem;
 }
-.timeline-header .section-title { margin-bottom: 0; }
+.ranged-header .section-title { margin-bottom: 0; }
 
 .timeline {
   display: flex;
@@ -159,10 +161,9 @@ a.pub-name:hover { color: #2a9d5c; }
 .timing-value { color: var(--text); }
 .timing-value .dim { color: var(--text-dim); }
 
-.traffic-section {
-  position: relative;
-  margin-bottom: 3rem;
-}
+/* sections with a header + range buttons + chart below */
+.ranged-section { margin-bottom: 2rem; }
+
 .traffic-sparkline {
   position: relative;
   height: 60px;
@@ -180,15 +181,10 @@ a.pub-name:hover { color: #2a9d5c; }
   background: var(--tooltip-bg);
   padding: 1px 4px;
 }
-.traffic-range-btns {
-  display: inline-flex;
-}
-.traffic-section .traffic-range-btns {
-  position: absolute;
-  top: 0;
-  right: 0;
-}
-.traffic-range-btns button {
+
+/* shared range-button group used by traffic, latency, timeline */
+.range-btns { display: inline-flex; }
+.range-btns button {
   font-family: monospace;
   font-size: 10px;
   background: none;
@@ -198,11 +194,11 @@ a.pub-name:hover { color: #2a9d5c; }
   cursor: pointer;
   margin-left: 2px;
 }
-.traffic-range-btns button:hover {
+.range-btns button:hover {
   border-color: var(--border-focus);
   color: var(--text-secondary);
 }
-.traffic-range-btns button.active {
+.range-btns button.active {
   border-color: #1B7340;
   color: #1B7340;
 }

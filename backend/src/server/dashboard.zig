@@ -379,36 +379,18 @@ fn formatTimingJson(alloc: Allocator) ![]const u8 {
         const t = all_timing[i];
         const series = all_series[i];
         try jw.objectField(field.name);
-        try jw.beginObject();
-        try jw.objectField("count");
-        try jw.write(t.count);
-        try jw.objectField("avg_ms");
-        try jw.write(t.avg_ms);
-        try jw.objectField("p50_ms");
-        try jw.write(t.p50_ms);
-        try jw.objectField("p95_ms");
-        try jw.write(t.p95_ms);
-        try jw.objectField("p99_ms");
-        try jw.write(t.p99_ms);
-        try jw.objectField("max_ms");
-        try jw.write(t.max_ms);
-        // add 24h time series
-        try jw.objectField("history");
-        try jw.beginArray();
-        for (series) |point| {
-            try jw.beginObject();
-            try jw.objectField("hour");
-            try jw.write(point.hour);
-            try jw.objectField("count");
-            try jw.write(point.count);
-            try jw.objectField("avg_ms");
-            try jw.write(point.avg_ms);
-            try jw.objectField("max_ms");
-            try jw.write(point.max_ms);
-            try jw.endObject();
-        }
-        try jw.endArray();
-        try jw.endObject();
+        // EndpointStats + the 24h history serialize as one struct — field
+        // names of EndpointStats and TimeSeriesPoint already match the wire
+        // shape we want.
+        try jw.write(.{
+            .count = t.count,
+            .avg_ms = t.avg_ms,
+            .p50_ms = t.p50_ms,
+            .p95_ms = t.p95_ms,
+            .p99_ms = t.p99_ms,
+            .max_ms = t.max_ms,
+            .history = series[0..],
+        });
     }
     try jw.endObject();
 
@@ -460,6 +442,43 @@ pub fn fetchTimeline(alloc: Allocator, range: TimelineRange) ![]const u8 {
         .all_time => try writeTimelinePoints(&jw, comptime TimelineRange.all_time.sql()),
     }
 
+    try jw.endObject();
+    return try output.toOwnedSlice();
+}
+
+/// Fetch per-endpoint latency history at the requested range (24h / 7d / 30d).
+/// Returns JSON: `{"range":"7d","hours":168,"endpoints":{"search_keyword":[...], …}}`.
+/// The hourly buckets live in-memory for `HOURS_TO_KEEP` (30d) regardless, so
+/// this endpoint just slices the existing window — no new storage cost.
+pub fn fetchLatency(alloc: Allocator, range: timing.LatencyRange) ![]const u8 {
+    const hours = range.hours();
+
+    // shared scratch buffer reused across endpoints (we serialize one at a time)
+    const points = try alloc.alloc(timing.TimeSeriesPoint, hours);
+    defer alloc.free(points);
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+
+    try jw.beginObject();
+    try jw.objectField("range");
+    try jw.write(@tagName(range));
+    try jw.objectField("hours");
+    try jw.write(@as(i64, @intCast(hours)));
+    try jw.objectField("endpoints");
+    try jw.beginObject();
+
+    inline for (@typeInfo(timing.Endpoint).@"enum".fields) |field| {
+        const ep: timing.Endpoint = @enumFromInt(field.value);
+        timing.writeTimeSeries(ep, points);
+        try jw.objectField(field.name);
+        // TimeSeriesPoint's field names match the wire shape we want, so the
+        // serializer walks them directly — no per-field boilerplate needed.
+        try jw.write(points);
+    }
+
+    try jw.endObject();
     try jw.endObject();
     return try output.toOwnedSlice();
 }

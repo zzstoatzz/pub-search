@@ -44,14 +44,17 @@
       <div class="live" id="live"></div>
     </section>
 
-    <div class="traffic-section">
+    <section class="ranged-section">
+      <div class="ranged-header">
+        <div class="section-title">traffic</div>
+        <span class="range-btns" id="traffic-range">
+          <button data-range="24h">24h</button>
+          <button data-range="7d" class="active">7d</button>
+          <button data-range="30d">30d</button>
+        </span>
+      </div>
       <div class="traffic-sparkline" id="traffic-sparkline"></div>
-      <span class="traffic-range-btns" id="traffic-range">
-        <button data-range="24h">24h</button>
-        <button data-range="7d" class="active">7d</button>
-        <button data-range="30d">30d</button>
-      </span>
-    </div>
+    </section>
 
     <section>
       <div class="section-title">documents by platform</div>
@@ -67,17 +70,24 @@
       </div>
     </section>
 
-    <section>
-      <div class="section-title">latency history (24h)</div>
+    <section class="ranged-section">
+      <div class="ranged-header">
+        <div class="section-title">latency history</div>
+        <span class="range-btns" id="latency-range">
+          <button data-range="24h" class="active">24h</button>
+          <button data-range="7d">7d</button>
+          <button data-range="30d">30d</button>
+        </span>
+      </div>
       <div class="chart-box">
         <div id="latency-history"></div>
       </div>
     </section>
 
-    <section class="timeline-section">
-      <div class="timeline-header">
-        <div class="section-title" id="timeline-title">documents over time (last 30 days)</div>
-        <span class="traffic-range-btns" id="timeline-range">
+    <section class="ranged-section">
+      <div class="ranged-header">
+        <div class="section-title">documents over time</div>
+        <span class="range-btns" id="timeline-range">
           <button data-range="7d">7d</button>
           <button data-range="30d" class="active">30d</button>
           <button data-range="90d">90d</button>

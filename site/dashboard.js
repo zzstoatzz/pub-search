@@ -25,15 +25,8 @@ function updateAge() {
   }
 }
 
-// timeline state
-let currentTimelineRange = '30d';
-const TIMELINE_TITLES = {
-  '7d': 'documents over time (last 7 days)',
-  '30d': 'documents over time (last 30 days)',
-  '90d': 'documents over time (last 90 days)',
-  '1y': 'documents over time (last year, weekly)',
-  'all': 'documents over time (all time, monthly)',
-};
+// each chart's range buttons own the title-of-truth, so we don't duplicate
+// "(last X days)" subtitles in markup or carry stale state in JS.
 
 function formatBucketLabel(date, bucket) {
   // dates from the API are YYYY-MM-DD strings (UTC) — parse without timezone shift
@@ -76,16 +69,29 @@ function renderTimeline(timeline, bucket) {
 }
 
 async function loadTimeline(range) {
-  currentTimelineRange = range;
-  const titleEl = document.getElementById('timeline-title');
-  if (titleEl) titleEl.textContent = TIMELINE_TITLES[range] || TIMELINE_TITLES['30d'];
-
   try {
     const r = await fetch(API_BASE + '/api/timeline?range=' + encodeURIComponent(range));
     const data = await r.json();
     renderTimeline(data.points, data.bucket);
   } catch (e) {
     console.error('failed to load timeline:', e);
+  }
+}
+
+async function loadLatency(range) {
+  try {
+    const r = await fetch(API_BASE + '/api/latency?range=' + encodeURIComponent(range));
+    const data = await r.json();
+    // server returns { range, hours, endpoints: { search_keyword: [...], ... } }
+    // renderLatencyChart expects the same shape it gets in /api/dashboard's
+    // `timing` payload — `{ <ep>: { history: [...] } }` — so wrap once.
+    const wrapped = {};
+    for (const [ep, history] of Object.entries(data.endpoints || {})) {
+      wrapped[ep] = { history };
+    }
+    renderLatencyChart(wrapped);
+  } catch (e) {
+    console.error('failed to load latency:', e);
   }
 }
 
@@ -182,6 +188,8 @@ function renderTiming(timing) {
 function renderLatencyChart(timing) {
   const container = document.getElementById('latency-history');
   if (!container) return;
+  // re-renders happen on range-button clicks; clear stale grids first.
+  container.innerHTML = '';
 
   const endpoints = ['search_keyword', 'search_semantic', 'search_hybrid', 'similar', 'tags', 'popular'];
 
@@ -201,9 +209,13 @@ function renderLatencyChart(timing) {
     const history = timing[name]?.history || [];
     const color = ENDPOINT_COLORS[name];
 
-    // find max for this endpoint only
+    // find max + most recent non-zero avg for this endpoint
     let maxVal = 0;
-    history.forEach(p => { if (p.avg_ms > maxVal) maxVal = p.avg_ms; });
+    let lastAvg = 0;
+    history.forEach(p => {
+      if (p.avg_ms > maxVal) maxVal = p.avg_ms;
+      if (p.count > 0) lastAvg = p.avg_ms;
+    });
     if (maxVal === 0) maxVal = 100;
 
     const cell = document.createElement('div');
@@ -212,8 +224,12 @@ function renderLatencyChart(timing) {
     const friendlyName = ENDPOINT_LABELS[name] || name;
     const label = document.createElement('div');
     label.className = 'latency-cell-label';
+    // show "current / max" so a flat-looking sparkline still tells you the absolute number.
+    const numbers = lastAvg > 0
+      ? formatMs(lastAvg) + ' <span class="dim">/ ' + formatMs(maxVal) + '</span>'
+      : '<span class="dim">' + formatMs(maxVal) + '</span>';
     label.innerHTML = '<span class="dot" style="background:' + color + '"></span>' + friendlyName +
-      '<span class="latency-cell-max">' + formatMs(maxVal) + '</span>';
+      '<span class="latency-cell-max">' + numbers + '</span>';
     cell.appendChild(label);
 
     if (history.length === 0 || !history.some(h => h.count > 0)) {
@@ -408,6 +424,14 @@ document.getElementById('timeline-range')?.addEventListener('click', function(e)
   this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   loadTimeline(btn.dataset.range);
+});
+
+document.getElementById('latency-range')?.addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-range]');
+  if (!btn) return;
+  this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadLatency(btn.dataset.range);
 });
 
 function formatTimestamp(hour) {

@@ -94,6 +94,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleDashboardApi(request);
     } else if (mem.eql(u8, path, "/api/timeline")) {
         try handleTimelineApi(request, target);
+    } else if (mem.eql(u8, path, "/api/latency")) {
+        try handleLatencyApi(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -496,6 +498,22 @@ fn handleTimelineApi(request: *http.Server.Request, target: []const u8) !void {
 
     const json_response = dashboard.fetchTimeline(alloc, range) catch {
         try sendJson(request, "{\"error\":\"failed to fetch timeline\"}");
+        return;
+    };
+
+    try sendJson(request, json_response);
+}
+
+fn handleLatencyApi(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const range_str = parseQueryParam(alloc, target, "range") catch "24h";
+    const range = metrics.timing.LatencyRange.fromString(range_str);
+
+    const json_response = dashboard.fetchLatency(alloc, range) catch {
+        try sendJson(request, "{\"error\":\"failed to fetch latency\"}");
         return;
     };
 
