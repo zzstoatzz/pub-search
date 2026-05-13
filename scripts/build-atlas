@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -28,6 +29,14 @@ import numpy as np
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
+
+
+# avatar cache: persists did → avatar URL across runs.
+# lives in site/ so it gets deployed alongside atlas.json — the deployed copy
+# is what the prefect flow (which clones fresh each run) reads on cold start.
+AVATAR_CACHE_PATH = Path(__file__).resolve().parent.parent / "site" / "atlas-avatar-cache.json"
+AVATAR_CACHE_REMOTE = "https://pub-search.waow.tech/atlas-avatar-cache.json"
+AVATAR_CACHE_TTL_SECONDS = 7 * 86400  # refresh entries weekly so changed avatars trickle in
 
 
 def log(msg: str) -> None:
@@ -198,7 +207,6 @@ def llm_refine_labels(
     batch_size: int = 15,
 ) -> dict[int, str]:
     """Refine c-TF-IDF labels with Claude Haiku for human-readable topic names."""
-    import asyncio
     from anthropic import AsyncAnthropic
 
     client = AsyncAnthropic(api_key=api_key)
@@ -281,6 +289,93 @@ def assign_outliers(coords_2d: np.ndarray, labels: np.ndarray, centroids: dict[i
     result[outlier_mask] = np.array(centroid_ids)[nearest]
 
     return result
+
+
+def load_avatar_cache(local_path: Path, remote_url: str) -> dict[str, dict]:
+    """Load avatar cache. Prefer local file (dev re-runs); fall back to the
+    previously-deployed copy on the CDN (prefect flow clones fresh each run).
+    Returns {} on any failure — caller treats that as a cold start."""
+    if local_path.exists():
+        try:
+            data = json.loads(local_path.read_text())
+            log(f"  loaded {len(data)} avatar cache entries from {local_path.name}")
+            return data
+        except (json.JSONDecodeError, OSError) as e:
+            log(f"  warning: local avatar cache unreadable ({e}), trying remote")
+
+    try:
+        resp = httpx.get(remote_url, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict):
+                log(f"  loaded {len(data)} avatar cache entries from {remote_url}")
+                return data
+            log(f"  warning: remote avatar cache has unexpected shape, starting cold")
+        else:
+            log(f"  remote avatar cache returned {resp.status_code}, starting cold")
+    except (httpx.HTTPError, json.JSONDecodeError) as e:
+        log(f"  warning: failed to fetch remote avatar cache ({e}), starting cold")
+
+    return {}
+
+
+def save_avatar_cache(path: Path, entries: dict[str, dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entries, separators=(",", ":"), sort_keys=True))
+
+
+async def resolve_avatars_async(
+    dids: list[str], cache: dict[str, dict], concurrency: int = 20
+) -> dict[str, dict]:
+    """Resolve bsky avatars for the given DIDs.
+
+    Uses cached entries within TTL, fetches the rest concurrently. Returns the
+    new cache state — exactly the DIDs passed in, so unused entries from prior
+    runs naturally drop out and the file stays roughly the size of the corpus.
+    Empty-string avatars are cached too, so we don't hammer the API every run
+    for authors who have no avatar set."""
+    now = time.time()
+    cutoff = now - AVATAR_CACHE_TTL_SECONDS
+
+    fresh: dict[str, dict] = {}
+    missing: list[str] = []
+    for did in dids:
+        entry = cache.get(did)
+        if isinstance(entry, dict) and float(entry.get("ts", 0)) > cutoff:
+            fresh[did] = entry
+        else:
+            missing.append(did)
+
+    log(f"  cache: {len(fresh)} hits, {len(missing)} to fetch")
+    if not missing:
+        return fresh
+
+    sem = asyncio.Semaphore(concurrency)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0),
+        limits=httpx.Limits(
+            max_connections=concurrency,
+            max_keepalive_connections=concurrency,
+        ),
+    ) as client:
+        async def fetch_one(did: str) -> tuple[str, str]:
+            async with sem:
+                try:
+                    r = await client.get(
+                        f"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={did}"
+                    )
+                    if r.status_code == 200:
+                        return did, (r.json().get("avatar") or "")
+                except Exception:
+                    pass
+                return did, ""
+
+        results = await asyncio.gather(*(fetch_one(d) for d in missing))
+
+    for did, avatar in results:
+        fresh[did] = {"avatar": avatar, "ts": now}
+
+    return fresh
 
 
 def main():
@@ -494,25 +589,18 @@ def main():
     publications.sort(key=lambda p: p["count"], reverse=True)
     log(f"  {len(publications)} publications with 2+ documents")
 
-    # fetch author avatars for publications (fallback when no cover image)
+    # fetch author avatars for publications (fallback when no cover image).
+    # see resolve_avatars_async — concurrent fetch + persistent cache keep this
+    # step at ~5s steady-state instead of ~85s serial.
     unique_dids = {p["did"] for p in publications if p["did"]}
     log(f"  resolving avatars for {len(unique_dids)} unique authors...")
-    did_avatars: dict[str, str] = {}
-    did_list = list(unique_dids)
-    with httpx.Client() as avatar_client:
-        for did in did_list:
-            try:
-                resp = avatar_client.get(
-                    f"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={did}",
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    avatar = resp.json().get("avatar", "")
-                    if avatar:
-                        did_avatars[did] = avatar
-            except Exception:
-                pass
-    log(f"  resolved {len(did_avatars)} avatars")
+
+    cache = load_avatar_cache(AVATAR_CACHE_PATH, AVATAR_CACHE_REMOTE)
+    entries = asyncio.run(resolve_avatars_async(sorted(unique_dids), cache))
+    save_avatar_cache(AVATAR_CACHE_PATH, entries)
+
+    did_avatars = {did: e["avatar"] for did, e in entries.items() if e.get("avatar")}
+    log(f"  resolved {len(did_avatars)} avatars ({len(entries) - len(did_avatars)} authors have none)")
 
     # attach avatar URLs to publications
     for pub in publications:
