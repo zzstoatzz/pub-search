@@ -5,6 +5,7 @@ const Allocator = mem.Allocator;
 const websocket = @import("websocket");
 const zat = @import("zat");
 const logfire = @import("logfire");
+const poolio = @import("poolio");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
 const Io = std.Io;
@@ -47,94 +48,26 @@ fn useTls() bool {
 
 /// Bounded queue for decoupling websocket readLoop from turso writes.
 /// ACKs are sent immediately in the readLoop; processing happens in a worker thread.
-/// If the queue is full (turso is slow), new messages are dropped (already ACK'd).
+/// If the queue is full (turso is slow), the OLDEST queued frame is dropped
+/// (already ACK'd) so the freshest data wins.
 const QUEUE_CAPACITY = 256;
 
-const ProcessQueue = struct {
-    mutex: Io.Mutex = Io.Mutex.init,
-    cond: Io.Condition = Io.Condition.init,
-    items: [QUEUE_CAPACITY]?[]u8 = .{null} ** QUEUE_CAPACITY,
-    head: usize = 0,
-    tail: usize = 0,
-    len: usize = 0,
-    stopped: bool = false,
+const TapCtx = struct {
     allocator: Allocator,
-    io: Io,
-    dropped: usize = 0,
-    processed: usize = 0,
 
-    fn push(self: *ProcessQueue, data: []u8) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
-        if (self.len == QUEUE_CAPACITY) {
-            // queue full — drop oldest (already ACK'd)
-            if (self.items[self.head]) |old| {
-                self.allocator.free(old);
-            }
-            self.head = (self.head + 1) % QUEUE_CAPACITY;
-            self.len -= 1;
-            self.dropped += 1;
-            if (self.dropped <= 5 or self.dropped % 100 == 0) {
-                logfire.warn("tap: queue full, dropped {d} messages total", .{self.dropped});
-            }
-        }
-
-        self.items[self.tail] = data;
-        self.tail = (self.tail + 1) % QUEUE_CAPACITY;
-        self.len += 1;
-        self.cond.signal(self.io);
+    fn process(self: *TapCtx, _: Io, frame: []u8) void {
+        defer self.allocator.free(frame);
+        processMessage(self.allocator, frame) catch |err| {
+            logfire.err("message processing error: {}", .{err});
+        };
     }
 
-    fn pop(self: *ProcessQueue) ?[]u8 {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
-        while (self.len == 0 and !self.stopped) {
-            self.cond.waitUncancelable(self.io, &self.mutex);
-        }
-
-        if (self.len == 0) return null; // stopped with empty queue
-
-        const data = self.items[self.head].?;
-        self.items[self.head] = null;
-        self.head = (self.head + 1) % QUEUE_CAPACITY;
-        self.len -= 1;
-        return data;
-    }
-
-    fn stop(self: *ProcessQueue) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-        self.stopped = true;
-        self.cond.signal(self.io);
-    }
-
-    fn drain(self: *ProcessQueue) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-        for (&self.items) |*item| {
-            if (item.*) |data| {
-                self.allocator.free(data);
-                item.* = null;
-            }
-        }
+    fn onDrop(self: *TapCtx, frame: []u8) void {
+        self.allocator.free(frame);
     }
 };
 
-fn processWorker(queue: *ProcessQueue) void {
-    logfire.info("tap: process worker started", .{});
-    while (queue.pop()) |data| {
-        defer queue.allocator.free(data);
-        processMessage(queue.allocator, data) catch |err| {
-            logfire.err("message processing error: {}", .{err});
-        };
-        queue.mutex.lockUncancelable(queue.io);
-        queue.processed += 1;
-        queue.mutex.unlock(queue.io);
-    }
-    logfire.info("tap: process worker stopped (processed {d}, dropped {d})", .{ queue.processed, queue.dropped });
-}
+const TapPool = poolio.Pool([]u8, TapCtx);
 
 pub fn consumer(allocator: Allocator, io: Io) void {
     var backoff: u64 = 1;
@@ -157,8 +90,9 @@ pub fn consumer(allocator: Allocator, io: Io) void {
 
 const Handler = struct {
     allocator: Allocator,
+    io: Io,
     client: *websocket.Client,
-    queue: *ProcessQueue,
+    pool: *TapPool,
     msg_count: usize = 0,
     ack_count: usize = 0,
     no_id_count: usize = 0,
@@ -167,8 +101,9 @@ const Handler = struct {
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
         self.msg_count += 1;
         if (self.msg_count % 1000 == 0) {
-            logfire.info("tap: recv {d}, acks {d}, processed {d}, dropped {d}, queued {d}", .{
-                self.msg_count, self.ack_count, self.queue.processed, self.queue.dropped, self.queue.len,
+            const c = self.pool.counters(self.io);
+            logfire.info("tap: recv {d}, acks {d}, accepted {d}, processed {d}, dropped {d}, queued {d}", .{
+                self.msg_count, self.ack_count, c.accepted, c.processed, c.dropped, c.queued,
             });
         }
 
@@ -186,12 +121,13 @@ const Handler = struct {
             }
         }
 
-        // dupe message data (websocket reuses the buffer) and push to processing queue
+        // dupe message data (websocket reuses the buffer) and offer to processing pool.
+        // drop_oldest shedding means full pool evicts the oldest queued frame, not the new one.
         const data_copy = self.allocator.dupe(u8, data) catch |err| {
             logfire.err("tap: failed to dupe message: {}", .{err});
             return;
         };
-        self.queue.push(data_copy);
+        _ = self.pool.offer(self.io, data_copy);
     }
 
     fn sendAck(self: *Handler, msg_id: i64) void {
@@ -248,20 +184,30 @@ fn connect(allocator: Allocator, io: Io) !void {
 
     logfire.info("tap connected", .{});
 
-    // processing queue + worker thread: decouples readLoop from turso writes
-    // so a slow/hung turso request never blocks ACKs
-    var queue = ProcessQueue{ .allocator = allocator, .io = io };
-    const worker_thread = std.Thread.spawn(.{}, processWorker, .{&queue}) catch |err| {
-        logfire.err("tap: failed to spawn process worker: {}", .{err});
+    // processing pool: decouples readLoop from turso writes so a slow/hung turso
+    // request never blocks ACKs. drop_oldest shedding keeps the freshest data
+    // when turso lags (older frames have already been ACK'd to the TAP outbox).
+    var ctx = TapCtx{ .allocator = allocator };
+    var pool = TapPool.init(allocator, .{
+        .queue_capacity = QUEUE_CAPACITY,
+        .workers = 1,
+        .ctx = &ctx,
+        .process = TapCtx.process,
+        .on_drop = TapCtx.onDrop,
+        .shedding = .drop_oldest,
+    }) catch |err| {
+        logfire.err("tap: failed to init pool: {}", .{err});
         return err;
     };
-    defer {
-        queue.stop();
-        worker_thread.join();
-        queue.drain();
-    }
+    defer pool.deinit();
 
-    var handler = Handler{ .allocator = allocator, .client = &client, .queue = &queue };
+    pool.start(io) catch |err| {
+        logfire.err("tap: failed to start pool: {}", .{err});
+        return err;
+    };
+    defer pool.shutdown(io);
+
+    var handler = Handler{ .allocator = allocator, .io = io, .client = &client, .pool = &pool };
     client.readLoop(&handler) catch |err| {
         logfire.err("websocket read loop error: {}", .{err});
         return err;

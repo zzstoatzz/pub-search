@@ -35,6 +35,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const poolio = b.dependency("poolio", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const imports: []const std.Build.Module.Import = &.{
         .{ .name = "websocket", .module = websocket.module("websocket") },
         .{ .name = "zql", .module = zql.module("zql") },
@@ -42,6 +47,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "zqlite", .module = zqlite.module("zqlite") },
         .{ .name = "logfire", .module = logfire.module("logfire") },
         .{ .name = "zug", .module = zug.module("zug") },
+        .{ .name = "poolio", .module = poolio.module("poolio") },
     };
 
     const exe = b.addExecutable(.{
