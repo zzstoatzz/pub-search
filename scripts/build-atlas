@@ -215,6 +215,22 @@ def llm_refine_labels(
     cluster_ids = sorted(tfidf_labels.keys())
     batches = [cluster_ids[i : i + batch_size] for i in range(0, len(cluster_ids), batch_size)]
 
+    # Split fixed instructions (system, cached) from variable per-batch payload
+    # (user). Each rebuild runs ~18 batches (5 coarse + 13 fine); the
+    # instructions are identical across all of them, so caching the system
+    # block drops input cost to ~10% on every batch after the first within
+    # the 5m TTL.
+    system_instructions = (
+        "You are labeling topic clusters for a document atlas — a 2D map where each cluster "
+        "represents a group of semantically similar blog posts and articles.\n\n"
+        "For each cluster you receive, write a short descriptive label (2-4 lowercase words) "
+        "that captures the theme. The label should read like a topic name on a map.\n\n"
+        "Good labels: \"ai language models\", \"bluesky development\", \"personal journals\", "
+        "\"spanish poetry\", \"game reviews\", \"home cooking\"\n"
+        "Bad labels: \"ai llms llm\", \"results april june\", \"39 let english\"\n\n"
+        "Respond with ONLY a JSON object mapping cluster ID (as string) to label. No other text."
+    )
+
     async def label_batch(batch: list[int]) -> dict[int, str]:
         parts = []
         for cid in batch:
@@ -226,22 +242,17 @@ def llm_refine_labels(
                 f"  Sample titles: {', '.join(repr(t) for t in sample)}"
             )
 
-        prompt = (
-            "You are labeling topic clusters for a document atlas — a 2D map where each cluster "
-            "represents a group of semantically similar blog posts and articles.\n\n"
-            "For each cluster below, write a short descriptive label (2-4 lowercase words) that "
-            "captures the theme. The label should read like a topic name on a map.\n\n"
-            "Good labels: \"ai language models\", \"bluesky development\", \"personal journals\", "
-            "\"spanish poetry\", \"game reviews\", \"home cooking\"\n"
-            "Bad labels: \"ai llms llm\", \"results april june\", \"39 let english\"\n\n"
-            + "\n\n".join(parts)
-            + "\n\nRespond with ONLY a JSON object mapping cluster ID (as string) to label. No other text."
-        )
-
         resp = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
+            system=[
+                {
+                    "type": "text",
+                    "text": system_instructions,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": "\n\n".join(parts)}],
         )
         text = resp.content[0].text.strip()
         # extract JSON from response (handle markdown code fences)
