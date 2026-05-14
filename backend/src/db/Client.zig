@@ -45,8 +45,11 @@ const AUTH_BUF_SIZE = 512;
 allocator: Allocator,
 url: []const u8,
 token: []const u8,
-mutex: Io.Mutex = Io.Mutex.init,
 io: Io,
+// std.http.Client is internally thread-safe at the connection-pool level
+// (see stdlib's http/Client.zig:3) so concurrent fetches share the pool but
+// each acquires its own connection. nothing else on this struct is mutable
+// after init, so no caller-side serialization is needed.
 http_client: http.Client,
 
 pub fn init(allocator_param: Allocator, io: Io) !Client {
@@ -198,9 +201,6 @@ fn executeRawTyped(self: *Client, sql: []const u8, args: []const RuntimeValue) !
 fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_log: []const u8, body: []const u8) ![]const u8 {
     const truncated = truncateSql(sql_for_log);
     defer span.end();
-
-    self.mutex.lockUncancelable(self.io);
-    defer self.mutex.unlock(self.io);
 
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://{s}/v2/pipeline", .{self.url}) catch
