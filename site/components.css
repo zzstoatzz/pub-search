@@ -363,46 +363,44 @@
 
 /* ---------- settings gear button ---------- */
 
-/* default: matches index.html's `?` syntax-help-btn — small circular
- * outline that nests cleanly inside an h1 line of inline text. */
+/* clean SVG icon, no border. desktop: 16px icon + 6px padding (28pt hit).
+ * mobile: 22px icon + 12px padding (46pt hit — boomer-friendly). */
 .lf-settings-btn {
-  font-family: monospace;
-  font-size: 9px;
-  line-height: 1;
   background: none;
-  border: 1px solid var(--text-muted, var(--text-dim));
-  color: var(--text-muted, var(--text-dim));
+  border: none;
   cursor: pointer;
-  border-radius: 50%;
-  width: 14px;
-  height: 14px;
+  color: var(--text-secondary, var(--text-dim));
+  padding: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
   vertical-align: middle;
-  margin-left: 2px;
+  margin-left: 4px;
   -webkit-tap-highlight-color: transparent;
 }
 
-.lf-settings-btn:hover {
-  color: var(--text-secondary, var(--text-dim));
-  border-color: var(--text-secondary, var(--text-dim));
+.lf-settings-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
-/* atlas page sits in .header .nav with 44pt tap-target conventions and
- * its own visual language — promote to a chunkier hit area, no border. */
+.lf-settings-btn:hover { color: var(--text-bright, var(--text)); }
+
+@media (max-width: 600px) {
+  .lf-settings-btn { padding: 12px; }
+  .lf-settings-btn svg { width: 22px; height: 22px; }
+}
+
+/* atlas page sits in .header .nav with its own 44pt tap-target conventions */
 .header .nav .lf-settings-btn {
-  font-size: 14px;
-  border: none;
-  border-radius: 0;
-  width: auto;
-  height: auto;
-  padding: 0;
+  padding: 11px;
+  margin-left: 0;
   min-width: 44px;
   min-height: 44px;
-  margin-left: 0;
 }
+
+.header .nav .lf-settings-btn svg { width: 20px; height: 20px; }
 
 /* ---------- row overflow "⋯" button (inline at end of meta line) ---------- */
 
