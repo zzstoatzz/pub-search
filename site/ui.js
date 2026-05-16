@@ -403,10 +403,11 @@
 
       sheet.querySelector('.lf-typeahead-sheet-cancel').addEventListener('click', closeSheet);
 
-      requestAnimationFrame(function() {
-        sheet.classList.add('open');
-        sheetInput.focus();
-      });
+      // focus synchronously so we stay inside the user-activation chain
+      // (iOS requirement for showing the soft keyboard). animate the
+      // slide-up on the next frame.
+      sheetInput.focus();
+      requestAnimationFrame(function() { sheet.classList.add('open'); });
     }
 
     function closeSheet() {
@@ -434,7 +435,10 @@
     input.addEventListener('focus', function() {
       if (!userInteracted) return;
       if (isMobile() && !sheet) {
-        setTimeout(openSheet, 0);
+        // call openSheet SYNCHRONOUSLY inside the focus event so the
+        // sheet input's focus() preserves the user-activation chain.
+        // iOS Safari refuses to show the keyboard otherwise.
+        openSheet();
         input.blur();
       }
     });
@@ -453,12 +457,14 @@
         '" data-v="' + escapeAttr(c.value) + '" title="' + escapeAttr(c.label) + '" aria-label="' + escapeAttr(c.label) + '">' +
         '<img src="' + escapeAttr(c.iconUrl) + '" alt=""><span>' + escapeAttr(c.label) + '</span></button>';
     }).join('');
+    // copy uses "bsky" as the canonical umbrella (covers bluesky / blacksky
+     // / etc.). "long-press or right-click" is honest across touch + pointer.
     sheet.innerHTML =
       '<div class="lf-settings-card">' +
         '<div class="lf-settings-head"><h3>settings</h3><button class="lf-settings-close" aria-label="close">&#x2715;</button></div>' +
         '<div class="lf-settings-group">' +
-          '<label>preferred bluesky client</label>' +
-          '<p class="lf-settings-hint">tapping an @handle opens that profile in your preferred client. long-press to see all options.</p>' +
+          '<label>preferred bsky client</label>' +
+          '<p class="lf-settings-hint">tapping a @handle opens that profile in your preferred client. long-press or right-click for more options.</p>' +
           '<div class="lf-client-picker">' + clientsHtml + '</div>' +
         '</div>' +
       '</div>';

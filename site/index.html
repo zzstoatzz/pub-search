@@ -128,11 +128,42 @@
       margin-bottom: 0.5rem; /* reduced to accommodate syntax-help popover */
     }
 
+    /* the wrapper IS the visible input box; active-filter chips sit
+     * inline before the actual text field. */
     .lf-typeahead-wrap {
       position: relative;
       flex: 1;
       display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 0.35rem 0.5rem;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      min-height: 38px;
     }
+
+    .lf-typeahead-wrap:focus-within { outline: 1px solid #1B7340; }
+
+    /* `display: contents` lets the chips become direct flex children of
+     * the wrapper so they share its alignment and gap. */
+    .lf-filter-chips { display: contents; }
+
+    /* override the global input[type=text] visual chrome — the wrapper
+     * owns the border/bg now. */
+    .lf-typeahead-wrap input[type="text"] {
+      flex: 1;
+      min-width: 80px;
+      width: auto;
+      border: none;
+      background: transparent;
+      outline: none;
+      padding: 0.15rem 0;
+      font-size: 16px; /* prevent iOS auto-zoom on focus */
+      color: var(--text);
+    }
+
+    .lf-typeahead-wrap input[type="text"]:focus { outline: none; }
 
     .syntax-help-btn {
       font-family: monospace;
@@ -424,9 +455,19 @@
 
     .tags-list {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: 0.5rem;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none; /* firefox */
+      padding-bottom: 2px;
+      /* fade out the right edge so users see there's more content to scroll */
+      mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+      -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
     }
+    .tags-list::-webkit-scrollbar { display: none; }
+    .tags-list > * { flex-shrink: 0; }
 
     .tag {
       font-size: 11px;
@@ -498,8 +539,18 @@
 
     .platform-filter-list {
       display: flex;
+      flex-wrap: nowrap;
       gap: 0.5rem;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      padding-bottom: 2px;
+      mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+      -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
     }
+    .platform-filter-list::-webkit-scrollbar { display: none; }
+    .platform-filter-list > * { flex-shrink: 0; }
 
     .platform-option {
       font-size: 11px;
@@ -744,7 +795,7 @@
         width: 80px;
       }
 
-      button:not(.syntax-help-btn) {
+      button:not(.syntax-help-btn):not(.lf-settings-btn):not(.lf-row-more) {
         min-height: 44px;
         padding: 0.5rem 0.75rem;
       }
@@ -853,6 +904,7 @@
 
     <div class="search-box">
       <div class="lf-typeahead-wrap">
+        <div class="lf-filter-chips" id="filter-chips"></div>
         <input type="text" id="query" placeholder="search content..." autofocus>
       </div>
       <button id="search-btn">search</button>
@@ -867,8 +919,6 @@
     <div id="mode-toggle" class="mode-toggle"></div>
 
     <div id="suggestions"></div>
-
-    <div id="active-filter"></div>
 
     <div id="tags" class="tags"></div>
 
@@ -943,7 +993,9 @@
     const resultsDiv = document.getElementById('results');
     const statsDiv = document.getElementById('stats');
     const tagsDiv = document.getElementById('tags');
-    const activeFilterDiv = document.getElementById('active-filter');
+    // chips render INSIDE the input wrapper now (not as a separate row),
+    // so applied filters are visually attached to the search field.
+    const activeFilterDiv = document.getElementById('filter-chips');
     const suggestionsDiv = document.getElementById('suggestions');
     const platformFilterDiv = document.getElementById('platform-filter');
     const dateFilterDiv = document.getElementById('date-filter');
@@ -1481,6 +1533,8 @@
     const DATE_PRESET_LABELS = { week: 'last week', month: 'last month', year: 'last year' };
 
     function renderActiveFilter() {
+      // chips render inline inside the search input wrapper; emit just
+      // the chips (no outer wrapper, no "active filters:" label).
       if (!currentTag && !currentPlatform && !currentSince && !currentAuthor) {
         activeFilterDiv.innerHTML = '';
         return;
@@ -1501,7 +1555,7 @@
         const label = handle ? `@${handle}` : currentAuthor.slice(0, 20) + '...';
         chips.push(`<span class="filter-chip author">${escapeHtml(label)}<span class="x" onclick="clearAuthor()">\u00d7</span></span>`);
       }
-      activeFilterDiv.innerHTML = `<div class="active-filters"><span class="active-filters-label">active filters:</span>${chips.join('')}</div>`;
+      activeFilterDiv.innerHTML = chips.join('');
     }
 
     function renderTags() {

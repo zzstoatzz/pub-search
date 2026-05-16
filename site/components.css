@@ -363,29 +363,45 @@
 
 /* ---------- settings gear button ---------- */
 
+/* default: matches index.html's `?` syntax-help-btn — small circular
+ * outline that nests cleanly inside an h1 line of inline text. */
 .lf-settings-btn {
+  font-family: monospace;
+  font-size: 9px;
+  line-height: 1;
   background: none;
-  border: none;
-  cursor: pointer;
+  border: 1px solid var(--text-muted, var(--text-dim));
   color: var(--text-muted, var(--text-dim));
-  font-size: 13px;
-  padding: 6px;
+  cursor: pointer;
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-family: monospace;
-  -webkit-tap-highlight-color: transparent;
+  padding: 0;
   vertical-align: middle;
+  margin-left: 2px;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.lf-settings-btn:hover { color: var(--text-secondary, var(--text-dim)); }
+.lf-settings-btn:hover {
+  color: var(--text-secondary, var(--text-dim));
+  border-color: var(--text-secondary, var(--text-dim));
+}
 
-/* atlas page sits in .header .nav with 44pt tap-target conventions */
+/* atlas page sits in .header .nav with 44pt tap-target conventions and
+ * its own visual language — promote to a chunkier hit area, no border. */
 .header .nav .lf-settings-btn {
   font-size: 14px;
+  border: none;
+  border-radius: 0;
+  width: auto;
+  height: auto;
   padding: 0;
   min-width: 44px;
   min-height: 44px;
+  margin-left: 0;
 }
 
 /* ---------- row overflow "⋯" button (inline at end of meta line) ---------- */
