@@ -24,6 +24,7 @@
     })();
   </script>
   <link rel="stylesheet" href="atlas.css">
+  <link rel="stylesheet" href="components.css">
 </head>
 <body>
   <div class="loading-overlay" id="loading">
@@ -39,6 +40,7 @@
         <input type="text" id="search-input" placeholder="search..." autocomplete="off" spellcheck="false">
       </form>
       <a href="/dashboard.html">stats</a>
+      <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings">&#x2699;</button>
       <span class="theme-toggle" id="theme-toggle"></span>
     </div>
   </div>
@@ -83,6 +85,13 @@
     });
     renderThemeToggle();
   </script>
+  <script src="clients.js"></script>
+  <script src="ui.js"></script>
   <script src="atlas.js"></script>
+  <script>
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      window.LeafletUI.openSettings();
+    });
+  </script>
 </body>
 </html>

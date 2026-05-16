@@ -239,6 +239,7 @@ canvas:active {
 .search-form {
   display: flex;
   align-items: center;
+  position: relative; /* anchor for typeahead dropdown */
 }
 
 #search-input {

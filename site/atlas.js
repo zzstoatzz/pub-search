@@ -88,6 +88,7 @@
 
   // --- publication state ---
   var pubData = null; // array from atlas.json
+  var pubByBasePath = null; // Map<basePath, pub> for ?pub=<basePath> deep-links
   var pubImages = {}; // basePath → HTMLImageElement (loaded)
   var pubFailed = {}; // basePath → true (failed to load)
   var pubLoading = {}; // basePath → true (currently loading)
@@ -1197,6 +1198,10 @@
         }
         // load publication data
         pubData = d.publications || [];
+        pubByBasePath = new Map();
+        for (var pi = 0; pi < pubData.length; pi++) {
+          if (pubData[pi].basePath) pubByBasePath.set(pubData[pi].basePath, pubData[pi]);
+        }
         buildSpatialIndex();
         renderLegend();
         var statsText = n.toLocaleString() + ' documents \u00B7 ' +
@@ -1227,6 +1232,17 @@
           }
           pendingUri = null;
         }
+        // jump to publication centroid (from "view publication on atlas" links)
+        else if (pendingPub) {
+          var pub = pubByBasePath && pubByBasePath.get(pendingPub);
+          if (pub) {
+            setSearchStatus(pub.name || pub.basePath);
+            animateTo(pub.cx, pub.cy, 7);
+          } else {
+            setSearchStatus('publication not on atlas');
+          }
+          pendingPub = null;
+        }
         // apply prefetched search results (fired in parallel with atlas.json)
         else if (pendingSearchResults) {
           pendingSearchResults.then(function(resp) {
@@ -1248,18 +1264,22 @@
   var searchStatusEl = null;
   var pendingSearchResults = null; // promise for prefetched search results
   var pendingUri = null; // URI to jump to after data loads (from "view on atlas" links)
+  var pendingPub = null; // basePath to jump to (from "view publication on atlas" links)
 
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
-  // jump to specific document by URI, or prefetch search results
+  // jump to specific document by URI, publication by basePath, or prefetch search results
   var urlParams = new URLSearchParams(window.location.search);
   var urlUri = urlParams.get('uri');
+  var urlPub = urlParams.get('pub');
   var urlQ = urlParams.get('q');
   if (urlUri) {
     pendingUri = urlUri;
+  } else if (urlPub) {
+    pendingPub = urlPub;
   } else if (urlQ) {
     searchInput.value = urlQ;
-    pendingSearchResults = fetch(API_URL + '/search?mode=semantic&limit=20&format=v2&q=' + encodeURIComponent(urlQ))
+    pendingSearchResults = fetch(API_URL + buildSearchUrl(urlQ))
       .then(function(r) { return r.ok ? r.json() : null; })
       .catch(function() { return null; });
   }
@@ -1339,6 +1359,35 @@
     animateTo(searchCenter.x, searchCenter.y, targetZoom);
   }
 
+  // mirrors index.html's `@handle.tld` extraction so the syntax is
+  // consistent across pages. unquoted `@handle.tld` or `@did:plc:...`
+  // becomes an `author=` filter; the rest is the q text.
+  function parseSearchQuery(raw) {
+    var unquoted = raw.replace(/"[^"]*"/g, '');
+    var didMatch = unquoted.match(/(?:^|\s)@(did:[a-z]+:[A-Za-z0-9._:-]+)/);
+    var handleMatch = !didMatch && unquoted.match(/(?:^|\s)@([\w.-]+\.\w+)/);
+    var text = raw.trim();
+    var author = null;
+    if (didMatch) {
+      author = didMatch[1];
+      text = raw.replace(new RegExp('\\s*@' + author.replace(/[.:]/g, '\\$&') + '\\s*'), ' ').trim();
+    } else if (handleMatch) {
+      author = handleMatch[1];
+      text = raw.replace(new RegExp('\\s*@' + author.replace(/\./g, '\\.') + '\\s*'), ' ').trim();
+    }
+    return { text: text, author: author };
+  }
+
+  // when filter-only (author set, no text), use keyword mode — semantic
+  // needs a query to embed and would return nothing.
+  function buildSearchUrl(raw) {
+    var parsed = parseSearchQuery(raw);
+    var mode = (parsed.text.length === 0 && parsed.author) ? 'keyword' : 'semantic';
+    var url = '/search?mode=' + mode + '&limit=20&format=v2&q=' + encodeURIComponent(parsed.text);
+    if (parsed.author) url += '&author=' + encodeURIComponent(parsed.author);
+    return url;
+  }
+
   function doSearch(query, skipPush) {
     if (!query || !data || !uriToIndex) return;
     setSearchStatus('searching...');
@@ -1348,7 +1397,7 @@
       history.replaceState(null, '', url);
     }
 
-    fetch(API_URL + '/search?mode=semantic&limit=20&format=v2&q=' + encodeURIComponent(query))
+    fetch(API_URL + buildSearchUrl(query))
       .then(function(r) {
         if (!r.ok) throw new Error('search failed: ' + r.status);
         return r.json();
@@ -1360,6 +1409,17 @@
       });
   }
 
+  // register typeahead FIRST so its keydown handler intercepts Enter/Escape
+  // before the form submit / clear-search handlers below see them.
+  if (window.LeafletUI) {
+    window.LeafletUI.setupTypeahead(searchInput, {
+      onPick: function() {
+        if (searchForm.requestSubmit) searchForm.requestSubmit();
+        else searchForm.dispatchEvent(new Event('submit', { cancelable: true }));
+      },
+    });
+  }
+
   searchForm.addEventListener('submit', function(e) {
     e.preventDefault();
     var q = searchInput.value.trim();
@@ -1367,6 +1427,9 @@
     else clearSearch();
   });
 
+  // bare Escape (when typeahead is closed) clears the search. typeahead
+  // intercepts Escape via stopImmediatePropagation when its dropdown is
+  // open, so this only fires in the closed state.
   searchInput.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
       searchInput.value = '';

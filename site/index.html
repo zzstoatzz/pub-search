@@ -128,6 +128,12 @@
       margin-bottom: 0.5rem; /* reduced to accommodate syntax-help popover */
     }
 
+    .lf-typeahead-wrap {
+      position: relative;
+      flex: 1;
+      display: flex;
+    }
+
     .syntax-help-btn {
       font-family: monospace;
       font-size: 10px;
@@ -837,13 +843,18 @@
       }
     }
   </style>
+  <link rel="stylesheet" href="components.css">
+  <script src="clients.js"></script>
+  <script src="ui.js"></script>
 </head>
 <body>
   <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="search syntax">?</button></h1>
+    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="search syntax">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings">&#x2699;</button></h1>
 
     <div class="search-box">
-      <input type="text" id="query" placeholder="search content..." autofocus>
+      <div class="lf-typeahead-wrap">
+        <input type="text" id="query" placeholder="search content..." autofocus>
+      </div>
       <button id="search-btn">search</button>
     </div>
 
@@ -920,6 +931,11 @@
         syntaxHelp.classList.remove('open');
         syntaxHelpBtn.classList.remove('active');
       }
+    });
+
+    // settings (preferred client)
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      if (window.LeafletUI) window.LeafletUI.openSettings();
     });
 
     const queryInput = document.getElementById('query');
@@ -1036,6 +1052,20 @@
             ? `<img class="cover-thumb" src="https://cdn.bsky.app/img/feed_thumbnail/plain/${doc.did}/${doc.coverImage}@jpeg" alt="" loading="lazy" onerror="this.remove()">`
             : '';
 
+          // dataset on .result-meta carries everything the post-render
+          // wiring step needs to attach context menus on @handle, the
+          // publication link, and the row "⋯" overflow button.
+          const metaData = [
+            doc.did ? `data-did="${escapeHtml(doc.did)}"` : '',
+            doc.uri ? `data-uri="${escapeHtml(doc.uri)}"` : '',
+            doc.basePath ? `data-base-path="${escapeHtml(doc.basePath)}"` : '',
+            platformHome.url ? `data-ext-url="${escapeHtml(platformHome.url)}"` : '',
+          ].filter(Boolean).join(' ');
+
+          const pubLabelHtml = platformHome.url
+            ? `<a href="${platformHome.url}" target="_blank" class="pub-link">${platformHome.label}</a>`
+            : platformHome.label;
+
           html += `
             <div class="result${coverHtml ? ' has-cover' : ''}">
               ${coverHtml}
@@ -1046,10 +1076,8 @@
                   : escapeHtml(doc.title || 'Untitled')}${sourceBadge}
               </div>
               ${snippetHtml}
-              <div class="result-meta" ${doc.did ? `data-did="${escapeHtml(doc.did)}"` : ''}>
-                ${date ? `${date} | ` : ''}<span class="author-name"></span>${platformHome.url
-                  ? `<a href="${platformHome.url}" target="_blank">${platformHome.label}</a>`
-                  : platformHome.label}<a href="/atlas.html?uri=${encodeURIComponent(doc.uri || '')}" class="atlas-link" title="view on atlas"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="3" cy="4" r="1.2" fill="currentColor"/><circle cx="8" cy="3" r="1" fill="currentColor" opacity=".6"/><circle cx="6" cy="8" r="1.2" fill="currentColor"/><circle cx="10" cy="7" r=".8" fill="currentColor" opacity=".4"/></svg></a>
+              <div class="result-meta" ${metaData}>
+                ${date ? `${date} | ` : ''}<span class="author-name"></span>${pubLabelHtml}<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>
               </div>
             </div>
           `;
@@ -1071,6 +1099,7 @@
         const totalShown = resultsDiv.querySelectorAll('.result').length;
         statsDiv.textContent = `${totalShown} result${totalShown === 1 ? '' : 's'}${extracted.total > totalShown ? ` of ${extracted.total}` : ''}`;
         resolveAuthors(results);
+        wireResultActions();
 
         // add "load more" button if there are more results
         if (currentHasMore) {
@@ -1126,14 +1155,65 @@
         }
       }
 
-      // populate DOM
+      // populate DOM. handle link defaults to the user's preferred client
+      // (Bluesky out of the box, settable via the gear). long-press / right-
+      // click reveals the full destination menu — atlas, all clients, copy.
       document.querySelectorAll('.result-meta[data-did]').forEach(el => {
         const did = el.dataset.did;
         const handle = authorCache.get(did);
         if (!handle) return;
         const nameSpan = el.querySelector('.author-name');
         if (!nameSpan || nameSpan.innerHTML) return; // already populated
-        nameSpan.innerHTML = `<a href="https://bsky.app/profile/${escapeHtml(did)}" target="_blank">@${escapeHtml(handle)}</a> · `;
+        const handleEsc = escapeHtml(handle);
+        const profileUrl = (window.LeafletClients
+          ? window.LeafletClients.profileUrlFor(did)
+          : `https://bsky.app/profile/${encodeURIComponent(did)}`);
+        nameSpan.innerHTML = `<a class="lf-author-link" href="${profileUrl}" target="_blank">@${handleEsc}</a> · `;
+        const link = nameSpan.querySelector('.lf-author-link');
+        if (link && window.LeafletUI) {
+          window.LeafletUI.bindContextMenu(link, () =>
+            window.LeafletUI.authorMenuItems(handle, did));
+        }
+      });
+    }
+
+    // wire long-press menus on result rows after each render. handles three
+    // trigger zones: the "⋯" button (row-level), the publication link
+    // (publication menu), and the author link (set up in resolveAuthors).
+    function wireResultActions() {
+      if (!window.LeafletUI) return;
+      document.querySelectorAll('.result').forEach(row => {
+        if (row.dataset.actionsWired) return;
+        row.dataset.actionsWired = '1';
+
+        const meta = row.querySelector('.result-meta');
+        const data = meta ? meta.dataset : {};
+
+        const moreBtn = row.querySelector('.lf-row-more');
+        if (moreBtn) {
+          const handler = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const handle = data.did ? authorCache.get(data.did) : null;
+            const items = window.LeafletUI.rowMenuItems({
+              uri: data.uri || '',
+              basePath: data.basePath || '',
+              handle: handle || '',
+              externalUrl: data.extUrl || '',
+            });
+            const rect = moreBtn.getBoundingClientRect();
+            window.LeafletUI.showMenu(items, rect.right - 8, rect.bottom + 4);
+          };
+          moreBtn.addEventListener('click', handler);
+          // touch: also expose via long-press for parity with other zones
+          window.LeafletUI.longPress(moreBtn, handler);
+        }
+
+        const pubLink = row.querySelector('.pub-link');
+        if (pubLink && (data.basePath || data.extUrl)) {
+          window.LeafletUI.bindContextMenu(pubLink, () =>
+            window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || ''));
+        }
       });
     }
 
@@ -1502,6 +1582,12 @@
     function searchPopular(query) {
       queryInput.value = query;
       doSearch();
+    }
+
+    // register typeahead BEFORE the existing keydown handler so its
+    // Enter/Escape interception fires first (via stopImmediatePropagation).
+    if (window.LeafletUI) {
+      window.LeafletUI.setupTypeahead(queryInput, { onPick: () => doSearch() });
     }
 
     searchBtn.addEventListener('click', doSearch);

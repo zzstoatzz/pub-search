@@ -1,0 +1,412 @@
+/* shared component styles for leaflet-search.
+ * relies on css vars set per-page: --bg, --bg-subtle, --text, --text-secondary,
+ * --text-dim, --text-muted, --border, --border-focus (or --tooltip-border),
+ * --result-hover (or --bg-hover), --row-border.
+ *
+ * fallbacks via var(--name, fallback) so this file works on both pages
+ * without each having the exact same token set.
+ */
+
+/* ---------- typeahead popover (desktop) ---------- */
+
+.lf-typeahead-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-focus, var(--tooltip-border));
+  font-family: monospace;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.lf-typeahead-dropdown.open { display: block; }
+
+.lf-typeahead-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid var(--row-border, var(--border, var(--tooltip-border)));
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lf-typeahead-item:last-child { border-bottom: none; }
+.lf-typeahead-item:hover,
+.lf-typeahead-item.active { background: var(--result-hover, var(--bg-hover, var(--bg-subtle))); }
+
+.lf-typeahead-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: var(--bg-subtle);
+}
+
+.lf-typeahead-avatar-ph { display: inline-block; }
+
+.lf-typeahead-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lf-typeahead-handle {
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lf-typeahead-name {
+  color: var(--text-dim, var(--text-muted));
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- typeahead full-screen sheet (mobile) ---------- */
+
+.lf-typeahead-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 0.22s ease-out;
+}
+
+.lf-typeahead-sheet.open { transform: translateY(0); }
+
+.lf-typeahead-sheet-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border, var(--tooltip-border));
+  background: var(--bg);
+}
+
+.lf-typeahead-sheet-input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 16px; /* prevent iOS auto-zoom */
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-focus, var(--tooltip-border));
+  color: var(--text);
+  outline: none;
+}
+
+.lf-typeahead-sheet-input:focus {
+  border-color: var(--text-dim);
+}
+
+.lf-typeahead-sheet-cancel {
+  background: none;
+  border: none;
+  color: var(--text-secondary, var(--text-dim));
+  font-family: monospace;
+  font-size: 14px;
+  padding: 8px 4px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.lf-typeahead-sheet-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.lf-typeahead-sheet-list .lf-typeahead-item {
+  padding: 14px 16px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--row-border, var(--border, var(--tooltip-border)));
+}
+
+.lf-typeahead-sheet-list .lf-typeahead-avatar {
+  width: 40px;
+  height: 40px;
+}
+
+.lf-typeahead-sheet-list .lf-typeahead-handle { font-size: 15px; }
+.lf-typeahead-sheet-list .lf-typeahead-name   { font-size: 12px; }
+
+/* ---------- context menu (popover + bottom sheet) ---------- */
+
+.lf-contextmenu {
+  position: fixed;
+  z-index: 2000;
+  background: var(--bg-subtle, var(--tooltip-bg));
+  border: 1px solid var(--border-focus, var(--tooltip-border));
+  font-family: monospace;
+  min-width: 220px;
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transition: opacity 0.12s, transform 0.18s ease-out;
+  overflow: hidden;
+}
+
+.lf-contextmenu.open { opacity: 1; }
+
+.lf-contextmenu-popover {
+  transform: translateY(-4px);
+}
+
+.lf-contextmenu-popover.open {
+  transform: translateY(0);
+}
+
+.lf-contextmenu-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  min-width: 0;
+  border-radius: 14px 14px 0 0;
+  border: none;
+  border-top: 1px solid var(--border, var(--tooltip-border));
+  transform: translateY(100%);
+  padding-bottom: env(safe-area-inset-bottom, 8px);
+}
+
+.lf-contextmenu-sheet.open { transform: translateY(0); }
+
+.lf-contextmenu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1999;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.18s ease-out;
+}
+
+.lf-contextmenu-backdrop.open { opacity: 1; }
+
+.lf-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: monospace;
+  font-size: 13px;
+  padding: 10px 14px;
+  cursor: pointer;
+  min-height: 40px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lf-contextmenu-sheet .lf-menu-item {
+  padding: 14px 16px;
+  font-size: 15px;
+  min-height: 48px;
+}
+
+.lf-menu-item:hover,
+.lf-menu-item:focus {
+  background: var(--result-hover, var(--bg-hover, var(--bg-subtle)));
+  outline: none;
+}
+
+.lf-menu-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.lf-menu-label { flex: 1; }
+
+.lf-menu-divider {
+  height: 1px;
+  background: var(--row-border, var(--border, var(--tooltip-border)));
+  margin: 2px 0;
+}
+
+/* ---------- settings sheet ---------- */
+
+.lf-settings-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.18s ease-out;
+}
+
+.lf-settings-sheet.open { opacity: 1; }
+
+.lf-settings-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg);
+  border: 1px solid var(--border, var(--tooltip-border));
+  border-radius: 14px 14px 0 0;
+  font-family: monospace;
+  color: var(--text);
+  transform: translateY(20px);
+  transition: transform 0.22s ease-out;
+  padding-bottom: env(safe-area-inset-bottom, 12px);
+}
+
+.lf-settings-sheet.open .lf-settings-card { transform: translateY(0); }
+
+@media (min-width: 600px) {
+  .lf-settings-sheet { align-items: center; }
+  .lf-settings-card { border-radius: 10px; }
+}
+
+.lf-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--row-border, var(--border, var(--tooltip-border)));
+}
+
+.lf-settings-head h3 {
+  font-size: 13px;
+  font-weight: normal;
+  color: var(--text);
+  margin: 0;
+  text-transform: lowercase;
+}
+
+.lf-settings-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.lf-settings-group {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lf-settings-group label {
+  font-size: 12px;
+  color: var(--text-secondary, var(--text-dim));
+  text-transform: lowercase;
+}
+
+.lf-settings-hint {
+  font-size: 11px;
+  color: var(--text-dim, var(--text-muted));
+  margin: 0 0 4px;
+  line-height: 1.5;
+}
+
+.lf-client-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 8px;
+}
+
+.lf-client-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border, var(--tooltip-border));
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-family: monospace;
+  font-size: 10px;
+  transition: border-color 0.15s, color 0.15s;
+  min-height: 64px;
+}
+
+.lf-client-btn:hover { border-color: var(--text-dim); color: var(--text); }
+
+.lf-client-btn.active {
+  border-color: #1B7340;
+  color: var(--text);
+}
+
+.lf-client-btn img {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+/* ---------- settings gear button ---------- */
+
+.lf-settings-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, var(--text-dim));
+  font-size: 13px;
+  padding: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: monospace;
+  -webkit-tap-highlight-color: transparent;
+  vertical-align: middle;
+}
+
+.lf-settings-btn:hover { color: var(--text-secondary, var(--text-dim)); }
+
+/* atlas page sits in .header .nav with 44pt tap-target conventions */
+.header .nav .lf-settings-btn {
+  font-size: 14px;
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* ---------- row overflow "⋯" button (inline at end of meta line) ---------- */
+
+.lf-row-more {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  margin-left: 6px;
+  vertical-align: middle;
+  -webkit-tap-highlight-color: transparent;
+  /* honest tap target via padding without making the icon huge visually */
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lf-row-more:hover { color: var(--text-secondary, var(--text-dim)); }
