@@ -2,7 +2,6 @@ const std = @import("std");
 const Io = std.Io;
 const logfire = @import("logfire");
 const db = @import("../db.zig");
-const notifications = @import("../notifications.zig");
 
 /// Hash title+content for cross-platform dedup.
 /// Returns a 16-char hex string (wyhash of "title\x00content").
@@ -236,21 +235,6 @@ pub fn insertDocument(
             &.{ uri, tag },
         ) catch {};
     }
-
-    // fire notifications for any subscribers watching this author /
-    // publication / platform / tag. non-blocking — failures don't affect
-    // the indexer path.
-    notifications.onDocumentIndexed(.{
-        .uri = uri,
-        .did = did,
-        .title = title,
-        .platform = actual_platform,
-        .publication_uri = pub_uri,
-        .base_path = base_path,
-        .path = path orelse "",
-        .created_at = created_at orelse "",
-        .tags = tags,
-    });
 }
 
 pub fn insertPublication(

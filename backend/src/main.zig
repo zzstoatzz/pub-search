@@ -7,10 +7,6 @@ const tpuf = @import("tpuf.zig");
 const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
-const state = @import("state.zig");
-const oauth = @import("oauth.zig");
-const notifications = @import("notifications.zig");
-const bsky_bot = @import("bsky_bot.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -62,26 +58,6 @@ pub fn main() !void {
     // init turso client synchronously (fast, needed for search fallback)
     try db.initTurso(io);
 
-    // init oauth session store (in-memory; ok because subscription records
-    // live on user PDSes — sessions are just the bearer for CRUD)
-    state.init(io, allocator);
-    oauth.init(.{
-        .io = io,
-        .client_id = getenv("OAUTH_CLIENT_ID") orelse "https://leaflet-search-backend.fly.dev/oauth-client-metadata.json",
-        .redirect_uri = getenv("OAUTH_REDIRECT_URI") orelse "https://leaflet-search-backend.fly.dev/oauth/callback",
-        // frontend_origin is where the subscriptions page lives. it's the
-        // origin CORS allows credentials from and where the oauth callback
-        // redirects after login. default: prod frontend on CF Pages.
-        .frontend_origin = getenv("FRONTEND_ORIGIN") orelse "https://pub-search.waow.tech",
-        .client_key_hex = getenv("OAUTH_CLIENT_SECRET_KEY") orelse "",
-    });
-    if (oauth.config().client_key_hex.len != 64) {
-        logfire.warn("OAUTH_CLIENT_SECRET_KEY not set (need 64 hex chars) — oauth flows will fail", .{});
-    }
-
-    // notifications module needs io + alloc for the delivery queue & worker
-    notifications.init(allocator, io);
-
     // metrics modules just need `io` stashed so per-request handlers can
     // record latency / activity safely. these MUST be initialized before
     // the listener accept loop starts, otherwise the first poll of /activity
@@ -90,17 +66,6 @@ pub fn main() !void {
     metrics.activity.init(io);
     metrics.timing.setIo(io);
     metrics.buffer.init(io);
-
-    // bsky bot (sends subscription DMs on behalf of @pub-search.waow.tech)
-    bsky_bot.init(
-        allocator,
-        io,
-        getenv("BSKY_BOT_HANDLE") orelse "pub-search.waow.tech",
-        getenv("BSKY_BOT_APP_PASSWORD") orelse "",
-    );
-    if (!bsky_bot.isConfigured()) {
-        logfire.warn("BSKY_BOT_APP_PASSWORD not set — bsky DM delivery will fail", .{});
-    }
 
     // init local db and other services in background (slow)
     const init_thread = try Thread.spawn(.{}, initServices, .{ allocator, io });
@@ -127,10 +92,6 @@ pub fn main() !void {
     }
 }
 
-fn getenv(name: [*:0]const u8) ?[]const u8 {
-    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
-}
-
 fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // run schema migrations first (idempotent, but may be slow if turso is laggy)
     db.initSchema();
@@ -138,14 +99,6 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // init local db (slow - turso already initialized)
     db.initLocalDb(io);
     db.startSync(io);
-
-    // notifications schema + worker — depends on local db being open
-    notifications.initSchema() catch |err| {
-        std.debug.print("notifications: initSchema failed: {}\n", .{err});
-    };
-    notifications.startWorker() catch |err| {
-        std.debug.print("notifications: startWorker failed: {}\n", .{err});
-    };
 
     // metrics.activity / metrics.buffer / metrics.timing are now initialized
     // up in main() before the listener starts so request handlers can safely
