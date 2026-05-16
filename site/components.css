@@ -75,74 +75,15 @@
   text-overflow: ellipsis;
 }
 
-/* ---------- typeahead full-screen sheet (mobile) ---------- */
-
-.lf-typeahead-sheet {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  transform: translateY(100%);
-  transition: transform 0.22s ease-out;
+@media (max-width: 600px) {
+  .lf-typeahead-item {
+    padding: 12px;
+    font-size: 14px;
+  }
+  .lf-typeahead-avatar { width: 36px; height: 36px; }
+  .lf-typeahead-handle { font-size: 14px; }
+  .lf-typeahead-name { font-size: 12px; }
 }
-
-.lf-typeahead-sheet.open { transform: translateY(0); }
-
-.lf-typeahead-sheet-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border, var(--tooltip-border));
-  background: var(--bg);
-}
-
-.lf-typeahead-sheet-input {
-  flex: 1;
-  font-family: monospace;
-  font-size: 16px; /* prevent iOS auto-zoom */
-  padding: 10px 12px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-focus, var(--tooltip-border));
-  color: var(--text);
-  outline: none;
-}
-
-.lf-typeahead-sheet-input:focus {
-  border-color: var(--text-dim);
-}
-
-.lf-typeahead-sheet-cancel {
-  background: none;
-  border: none;
-  color: var(--text-secondary, var(--text-dim));
-  font-family: monospace;
-  font-size: 14px;
-  padding: 8px 4px;
-  min-height: 44px;
-  cursor: pointer;
-}
-
-.lf-typeahead-sheet-list {
-  flex: 1;
-  overflow-y: auto;
-}
-
-.lf-typeahead-sheet-list .lf-typeahead-item {
-  padding: 14px 16px;
-  font-size: 14px;
-  border-bottom: 1px solid var(--row-border, var(--border, var(--tooltip-border)));
-}
-
-.lf-typeahead-sheet-list .lf-typeahead-avatar {
-  width: 40px;
-  height: 40px;
-}
-
-.lf-typeahead-sheet-list .lf-typeahead-handle { font-size: 15px; }
-.lf-typeahead-sheet-list .lf-typeahead-name   { font-size: 12px; }
 
 /* ---------- context menu (popover + bottom sheet) ---------- */
 

@@ -230,22 +230,18 @@
 
   // ---------- typeahead ----------
 
+  // single popover dropdown anchored below the input on every viewport.
+  // browser-native focus + keyboard behavior; no DOM gymnastics, no sheet,
+  // no second input to focus-shuffle into.
   function setupTypeahead(input, opts) {
     opts = opts || {};
     var DEBOUNCE_MS = 150;
     var LIMIT = 8;
 
-    // dropdown for desktop is positioned below the input;
-    // on phone we lift the input into a full-screen sheet at focus time.
     var dropdown = document.createElement('div');
     dropdown.className = 'lf-typeahead-dropdown';
     dropdown.setAttribute('role', 'listbox');
     input.parentNode.appendChild(dropdown);
-
-    var sheet = null;       // full-screen sheet element (created on phone focus)
-    var sheetInput = null;  // the input inside the sheet (mirrors `input`)
-    var activeInput = input;
-    var activeList = dropdown;
 
     var timer = null;
     var items = [];
@@ -253,9 +249,9 @@
     var lastFetched = '';
     var matchInfo = null;
 
-    function findHandlePartial(el) {
-      var v = el.value;
-      var caret = el.selectionStart;
+    function findHandlePartial() {
+      var v = input.value;
+      var caret = input.selectionStart;
       if (caret == null) caret = v.length;
       var i = caret;
       while (i > 0 && /[\w.-]/.test(v[i - 1])) i--;
@@ -267,14 +263,14 @@
     }
 
     function hide() {
-      activeList.classList.remove('open');
-      activeList.innerHTML = '';
+      dropdown.classList.remove('open');
+      dropdown.innerHTML = '';
       items = [];
       selected = -1;
     }
 
     function render() {
-      activeList.innerHTML = items.map(function(a, i) {
+      dropdown.innerHTML = items.map(function(a, i) {
         var dn = a.displayName ? '<span class="lf-typeahead-name">' + escapeAttr(a.displayName) + '</span>' : '';
         var av = a.avatar
           ? '<img class="lf-typeahead-avatar" src="' + escapeAttr(a.avatar) + '" loading="lazy" alt="">'
@@ -284,24 +280,28 @@
           '<div class="lf-typeahead-text"><span class="lf-typeahead-handle">@' + escapeAttr(a.handle) + '</span>' + dn + '</div>' +
           '</div>';
       }).join('');
-      activeList.classList.toggle('open', items.length > 0);
+      dropdown.classList.toggle('open', items.length > 0);
+      // attach a long-press / right-click menu to each rendered item
+      dropdown.querySelectorAll('.lf-typeahead-item').forEach(function(el, i) {
+        bindContextMenu(el, function() {
+          var a = items[i];
+          return authorMenuItems(a.handle, a.did);
+        });
+      });
     }
 
     function pick(idx) {
       var a = items[idx];
       var info = matchInfo;
       if (!a || !info) return;
-      var v = activeInput.value;
-      activeInput.value = v.slice(0, info.start) + '@' + a.handle + ' ' + v.slice(info.end);
-      // also sync the underlying page input if we're in sheet mode
-      if (activeInput !== input) input.value = activeInput.value;
+      var v = input.value;
+      input.value = v.slice(0, info.start) + '@' + a.handle + ' ' + v.slice(info.end);
       hide();
-      if (sheet) closeSheet();
       if (opts.onPick) opts.onPick(a);
     }
 
     function maybeFetch() {
-      var info = findHandlePartial(activeInput);
+      var info = findHandlePartial();
       matchInfo = info;
       if (!info || info.partial.length < 1) { hide(); return; }
       if (info.partial === lastFetched) return;
@@ -315,132 +315,51 @@
           items = (d.actors || []).slice(0, LIMIT);
           selected = items.length > 0 ? 0 : -1;
           render();
-          // attach a long-press menu to each rendered item
-          activeList.querySelectorAll('.lf-typeahead-item').forEach(function(el, i) {
-            bindContextMenu(el, function() {
-              var a = items[i];
-              return authorMenuItems(a.handle, a.did);
-            });
-          });
         })
         .catch(function() {});
     }
 
-    function bindInput(el) {
-      el.addEventListener('input', function() {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(maybeFetch, DEBOUNCE_MS);
-      });
-      el.addEventListener('keydown', function(e) {
-        if (!activeList.classList.contains('open')) return;
-        if (e.key === 'ArrowDown') {
-          e.preventDefault(); selected = (selected + 1) % items.length; render();
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault(); selected = (selected - 1 + items.length) % items.length; render();
-        } else if (e.key === 'Enter') {
-          e.preventDefault(); e.stopImmediatePropagation(); pick(selected);
-        } else if (e.key === 'Escape') {
-          e.preventDefault(); e.stopImmediatePropagation();
-          if (sheet) closeSheet(); else hide();
-        } else if (e.key === 'Tab') {
-          pick(selected);
-        }
-      });
-    }
+    input.addEventListener('input', function() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(maybeFetch, DEBOUNCE_MS);
+    });
 
-    bindInput(input);
+    input.addEventListener('keydown', function(e) {
+      if (!dropdown.classList.contains('open')) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault(); selected = (selected + 1) % items.length; render();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault(); selected = (selected - 1 + items.length) % items.length; render();
+      } else if (e.key === 'Enter') {
+        e.preventDefault(); e.stopImmediatePropagation(); pick(selected);
+      } else if (e.key === 'Escape') {
+        e.preventDefault(); e.stopImmediatePropagation(); hide();
+      } else if (e.key === 'Tab') {
+        pick(selected);
+      }
+    });
 
-    activeList.addEventListener('mousedown', function(e) {
+    // mousedown picks on pointer devices (fires before blur so we don't lose
+    // the click). touch devices fall back to click since touch doesn't
+    // fire mousedown reliably before blur on iOS.
+    dropdown.addEventListener('mousedown', function(e) {
       var t = e.target.closest('.lf-typeahead-item');
       if (!t) return;
       e.preventDefault();
       pick(parseInt(t.getAttribute('data-i'), 10));
     });
+    dropdown.addEventListener('click', function(e) {
+      var t = e.target.closest('.lf-typeahead-item');
+      if (!t) return;
+      pick(parseInt(t.getAttribute('data-i'), 10));
+    });
 
     document.addEventListener('click', function(e) {
-      if (sheet) return; // sheet manages its own dismissal
       if (!input.contains(e.target) && !dropdown.contains(e.target)) hide();
     });
 
     input.addEventListener('blur', function() {
-      if (sheet) return;
       setTimeout(hide, 150);
-    });
-
-    // ---- mobile full-screen sheet ----
-    function openSheet() {
-      sheet = document.createElement('div');
-      sheet.className = 'lf-typeahead-sheet';
-      sheet.innerHTML =
-        '<div class="lf-typeahead-sheet-bar">' +
-          '<input type="text" class="lf-typeahead-sheet-input" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">' +
-          '<button type="button" class="lf-typeahead-sheet-cancel">Cancel</button>' +
-        '</div>' +
-        '<div class="lf-typeahead-sheet-list" role="listbox"></div>';
-      document.body.appendChild(sheet);
-
-      sheetInput = sheet.querySelector('.lf-typeahead-sheet-input');
-      sheetInput.value = input.value;
-      sheetInput.placeholder = input.placeholder || 'search...';
-      var sheetList = sheet.querySelector('.lf-typeahead-sheet-list');
-
-      activeInput = sheetInput;
-      activeList = sheetList;
-
-      bindInput(sheetInput);
-      sheetList.addEventListener('mousedown', function(e) {
-        var t = e.target.closest('.lf-typeahead-item');
-        if (!t) return;
-        e.preventDefault();
-        pick(parseInt(t.getAttribute('data-i'), 10));
-      });
-      sheetList.addEventListener('click', function(e) {
-        // touch devices fire click not mousedown
-        var t = e.target.closest('.lf-typeahead-item');
-        if (!t) return;
-        pick(parseInt(t.getAttribute('data-i'), 10));
-      });
-
-      sheet.querySelector('.lf-typeahead-sheet-cancel').addEventListener('click', closeSheet);
-
-      // focus synchronously so we stay inside the user-activation chain
-      // (iOS requirement for showing the soft keyboard). animate the
-      // slide-up on the next frame.
-      sheetInput.focus();
-      requestAnimationFrame(function() { sheet.classList.add('open'); });
-    }
-
-    function closeSheet() {
-      if (!sheet) return;
-      sheet.remove();
-      sheet = null;
-      sheetInput = null;
-      activeInput = input;
-      activeList = dropdown;
-      hide();
-    }
-
-    // gate the full-screen mobile sheet on real user interaction —
-    // otherwise an `autofocus` attribute pops the sheet on page load.
-    var userInteracted = false;
-    function markInteracted() { userInteracted = true; }
-    window.addEventListener('pointerdown', markInteracted, { capture: true, once: true });
-    window.addEventListener('keydown', markInteracted, { capture: true, once: true });
-    window.addEventListener('touchstart', markInteracted, { capture: true, once: true, passive: true });
-
-    // also: if autofocus has already landed on the input by the time we
-    // run, blur it on mobile so the sheet doesn't open on first focus.
-    if (isMobile() && document.activeElement === input) input.blur();
-
-    input.addEventListener('focus', function() {
-      if (!userInteracted) return;
-      if (isMobile() && !sheet) {
-        // call openSheet SYNCHRONOUSLY inside the focus event so the
-        // sheet input's focus() preserves the user-activation chain.
-        // iOS Safari refuses to show the keyboard otherwise.
-        openSheet();
-        input.blur();
-      }
     });
   }
 
