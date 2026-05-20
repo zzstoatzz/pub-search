@@ -211,6 +211,11 @@ pub const migrations = [_]zug.Migration{
         .name = "stamp publications.indexed_at = now() for pre-incremental-sync rows",
         .sql = "UPDATE publications SET indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE indexed_at IS NULL",
     },
+    .{
+        .id = "011_add_documents_content_type",
+        .name = "capture content.$type so we can identify the publisher (e.g. org.wordpress.html, at.markpub.markdown, pub.leaflet.content)",
+        .sql = "ALTER TABLE documents ADD COLUMN content_type TEXT",
+    },
 };
 
 // --- tests ---
