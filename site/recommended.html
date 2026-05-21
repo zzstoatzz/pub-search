@@ -119,19 +119,53 @@
       font-size: 18px;
       line-height: 1.3;
       color: var(--text-bright);
-      margin-bottom: 0.4rem;
+      margin-bottom: 1.5rem;
       letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
     }
-    .sublead {
+
+    /* tiny "?" affordance for the nerd-detail tooltip */
+    .info {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 1px solid var(--text-muted);
+      color: var(--text-muted);
+      font-size: 10px;
+      font-family: monospace;
+      cursor: help;
+      user-select: none;
+    }
+    .info:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
+    .info .tip {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      width: max-content;
+      max-width: min(360px, 80vw);
+      padding: 0.5rem 0.65rem;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      color: var(--text-secondary);
       font-size: 11px;
-      color: var(--text-dim);
-      margin-bottom: 2rem;
-      line-height: 1.7;
-      max-width: 60ch;
+      line-height: 1.5;
+      letter-spacing: normal;
+      text-align: left;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s;
+      z-index: 5;
     }
-    .sublead code, .sublead a { color: var(--text-secondary); }
-    .sublead a:hover { color: var(--text-bright); }
-    .sublead .sep { color: var(--text-muted); margin: 0 0.35rem; }
+    .info .tip code { color: var(--text); }
+    .info .tip a { color: var(--accent-dim); }
+    .info .tip a:hover { color: var(--accent); }
+    .info:hover .tip, .info:focus-visible .tip { opacity: 1; pointer-events: auto; }
 
     .status {
       font-size: 11px;
@@ -211,8 +245,7 @@
     @media (max-width: 480px) {
       body { padding: 1rem 0.75rem 2rem; }
       .container { padding: 0; }
-      .lead { font-size: 16px; }
-      .sublead { font-size: 10.5px; margin-bottom: 1.25rem; }
+      .lead { font-size: 16px; margin-bottom: 1.25rem; }
       .row {
         grid-template-columns: 2.25rem 1fr auto;
         column-gap: 0.6rem;
@@ -243,13 +276,11 @@
       </div>
     </div>
 
-    <div class="lead">most-recommended posts</div>
-    <div class="sublead">
-      counts come from
-      <a href="https://standard.site/docs/lexicons/recommend/" target="_blank" rel="noopener"><code>site.standard.graph.recommend</code></a>
-      <span class="sep">+</span>
-      <code>pub.leaflet.interactions.recommend</code>.
-      both normalized into one score.
+    <div class="lead">
+      most-recommended posts
+      <span class="info" tabindex="0" aria-label="how counts are computed">?<span class="tip">
+        counts merge <a href="https://standard.site/docs/lexicons/recommend/" target="_blank" rel="noopener"><code>site.standard.graph.recommend</code></a> and <code>pub.leaflet.interactions.recommend</code> — same idea, different lexicon per platform.
+      </span></span>
     </div>
 
     <div id="status" class="status">loading…</div>
