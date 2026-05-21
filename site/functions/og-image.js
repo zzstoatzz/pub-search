@@ -102,47 +102,55 @@ async function fetchRecommended() {
 }
 
 function buildRecommendedImage(rows) {
-  const top = (rows || []).slice(0, 7);
+  const top = (rows || []).slice(0, 6);
   const totalRecs = (rows || []).reduce((s, r) => s + (r.recommendCount || 0), 0);
 
-  const children = [];
-
-  // top bar: pub search / recommended
-  children.push({
+  // header block: "pub search / recommended" tag, then the page title.
+  // Putting these inside a flex column with explicit gap is more reliable
+  // in satori than mixing marginTop on siblings.
+  const headerBlock = {
     type: "div",
     props: {
       style: {
         display: "flex",
-        alignItems: "center",
-        gap: "12px",
-        color: "#888",
-        fontSize: "26px",
-        fontFamily: '"JetBrains Mono", monospace',
+        flexDirection: "column",
+        gap: "10px",
       },
       children: [
-        "pub search",
-        { type: "span", props: { style: { color: "#444" }, children: "/" } },
-        { type: "span", props: { style: { color: "#555" }, children: "recommended" } },
+        {
+          type: "div",
+          props: {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              color: "#888",
+              fontSize: "24px",
+            },
+            children: [
+              "pub search",
+              { type: "span", props: { style: { color: "#444" }, children: "/" } },
+              { type: "span", props: { style: { color: "#555" }, children: "recommended" } },
+            ],
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#fff",
+              fontSize: "44px",
+              letterSpacing: "-0.5px",
+              lineHeight: "1",
+            },
+            children: "most-recommended posts",
+          },
+        },
       ],
     },
-  });
+  };
 
-  // title
-  children.push({
-    type: "div",
-    props: {
-      style: {
-        color: "#fff",
-        fontSize: "52px",
-        fontFamily: '"JetBrains Mono", monospace',
-        marginTop: "14px",
-        letterSpacing: "-0.5px",
-      },
-      children: "most-recommended posts",
-    },
-  });
-
-  // list of top entries
+  // each row of the leaderboard
   const list = top.map((doc, i) => ({
     type: "div",
     props: {
@@ -150,26 +158,22 @@ function buildRecommendedImage(rows) {
         display: "flex",
         alignItems: "center",
         gap: "20px",
-        marginTop: i === 0 ? "32px" : "10px",
         padding: "10px 0",
         borderBottom: "1px solid #1d1d1d",
       },
       children: [
-        // rank
         {
           type: "div",
           props: {
             style: {
               color: i < 3 ? "#2a9d5c" : "#555",
-              fontSize: "24px",
-              fontFamily: '"JetBrains Mono", monospace',
-              width: "62px",
+              fontSize: "22px",
+              width: "56px",
               textAlign: "right",
             },
             children: `#${i + 1}`,
           },
         },
-        // title + source
         {
           type: "div",
           props: {
@@ -178,6 +182,7 @@ function buildRecommendedImage(rows) {
               flexDirection: "column",
               flex: "1",
               minWidth: "0",
+              gap: "4px",
             },
             children: [
               {
@@ -185,11 +190,10 @@ function buildRecommendedImage(rows) {
                 props: {
                   style: {
                     color: "#fff",
-                    fontSize: "24px",
-                    fontFamily: '"JetBrains Mono", monospace',
+                    fontSize: "22px",
                     overflow: "hidden",
                   },
-                  children: truncate(doc.title || "untitled", 56),
+                  children: truncate(doc.title || "untitled", 52),
                 },
               },
               {
@@ -197,9 +201,7 @@ function buildRecommendedImage(rows) {
                 props: {
                   style: {
                     color: "#555",
-                    fontSize: "16px",
-                    fontFamily: '"JetBrains Mono", monospace',
-                    marginTop: "4px",
+                    fontSize: "15px",
                   },
                   children: doc.basePath || doc.publicationName || doc.platform || "",
                 },
@@ -212,41 +214,47 @@ function buildRecommendedImage(rows) {
           type: "div",
           props: {
             style: {
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
               color: i < 3 ? "#2a9d5c" : "#888",
-              fontSize: "26px",
-              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: "24px",
+              fontVariantNumeric: "tabular-nums",
             },
-            children: [
-              { type: "span", props: { children: "♥" } },
-              { type: "span", props: { children: String(doc.recommendCount || 0) } },
-            ],
+            children: String(doc.recommendCount || 0),
           },
         },
       ],
     },
   }));
 
-  children.push(...list);
-
-  // footer
-  if (totalRecs > 0) {
-    children.push({
-      type: "div",
-      props: {
-        style: {
-          color: "#444",
-          fontSize: "18px",
-          fontFamily: '"JetBrains Mono", monospace',
-          marginTop: "auto",
-          paddingTop: "20px",
-        },
-        children: `${totalRecs.toLocaleString()} recommends in the top 50 · pub-search.waow.tech/recommended`,
+  // wrap the list in its own flex column so we can rely on `gap`
+  // instead of per-row marginTop (which is flaky in satori).
+  const listBlock = {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
       },
-    });
-  }
+      children: list,
+    },
+  };
+
+  const footerBlock = totalRecs > 0
+    ? {
+        type: "div",
+        props: {
+          style: {
+            color: "#444",
+            fontSize: "16px",
+          },
+          children: `${totalRecs.toLocaleString()} total recommends across the top 50 · pub-search.waow.tech/recommended`,
+        },
+      }
+    : null;
+
+  // Outer layout: explicit gap between header / list / footer.
+  // Padding leaves real breathing room on all sides.
+  const outerChildren = [headerBlock, listBlock];
+  if (footerBlock) outerChildren.push(footerBlock);
 
   return {
     type: "div",
@@ -257,10 +265,11 @@ function buildRecommendedImage(rows) {
         width: "1200px",
         height: "630px",
         background: "#050505",
-        padding: "44px 64px",
+        padding: "40px 56px 32px 56px",
         fontFamily: '"JetBrains Mono", monospace',
+        gap: "16px",
       },
-      children,
+      children: outerChildren,
     },
   };
 }
