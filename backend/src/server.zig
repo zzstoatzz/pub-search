@@ -94,6 +94,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleTimelineApi(request, target);
     } else if (mem.eql(u8, path, "/api/latency")) {
         try handleLatencyApi(request, target);
+    } else if (mem.eql(u8, path, "/recommended")) {
+        try handleRecommended(request);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -318,6 +320,90 @@ fn getPopularLocal(alloc: Allocator, local: *db.LocalDb, limit: usize) ![]const 
     try jw.beginArray();
     while (rows.next()) |row| {
         try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+const RecommendedJson = struct {
+    type: []const u8,
+    uri: []const u8,
+    did: []const u8,
+    title: []const u8,
+    createdAt: []const u8,
+    rkey: []const u8,
+    basePath: []const u8,
+    platform: []const u8,
+    path: []const u8,
+    publicationName: []const u8,
+    url: []const u8,
+    recommendCount: i64,
+};
+
+// Recommends live only on Turso (not the local SQLite replica), so this
+// handler queries Turso directly. Volume is small (~500 records at launch);
+// page is not on a hot path. If usage grows, plumb recommends into LocalDb.
+const RECOMMENDED_SQL =
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(r.uri) AS recommend_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\GROUP BY d.uri
+    \\ORDER BY recommend_count DESC, d.created_at DESC
+    \\LIMIT 50
+;
+
+fn handleRecommended(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const span = logfire.span("http.recommended", .{});
+    defer span.end();
+
+    try sendJson(request, try getRecommended(alloc));
+}
+
+fn getRecommended(alloc: Allocator) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var res = c.query(RECOMMENDED_SQL, &.{}) catch {
+        try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+        return try output.toOwnedSlice();
+    };
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| {
+        const did = row.text(1);
+        const rkey = row.text(4);
+        const base_path = row.text(5);
+        const platform = row.text(6);
+        const path = row.text(7);
+        const has_publication = row.int(8) != 0;
+        const doc_type: []const u8 = if (has_publication) "article" else "looseleaf";
+        try jw.write(RecommendedJson{
+            .type = doc_type,
+            .uri = row.text(0),
+            .did = did,
+            .title = row.text(2),
+            .createdAt = row.text(3),
+            .rkey = rkey,
+            .basePath = base_path,
+            .platform = platform,
+            .path = path,
+            .publicationName = row.text(9),
+            .url = search.buildDocUrl(alloc, doc_type, platform, base_path, path, rkey, did),
+            .recommendCount = row.int(10),
+        });
     }
     try jw.endArray();
     return try output.toOwnedSlice();

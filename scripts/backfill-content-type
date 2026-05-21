@@ -1,0 +1,298 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Backfill `documents.content_type` from PDS records.
+
+Reads `content.$type` from each record on its PDS and writes it back to Turso.
+Skips whitewind (no content.$type) and rows already populated.
+
+Does NOT bump `indexed_at` — content_type isn't in the local replica schema yet,
+so we don't want to force a full re-sync of every touched row.
+
+Usage:
+    TURSO_URL=libsql://... TURSO_TOKEN=... ./scripts/backfill-content-type
+    ./scripts/backfill-content-type --dry-run
+    ./scripts/backfill-content-type --limit 100      # cap distinct (did, collection) groups
+    ./scripts/backfill-content-type --workers 10     # PDS concurrency
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+# ---- Turso HTTP pipeline -----------------------------------------------------
+
+
+def turso_pipeline(settings: Settings, requests: list[dict]) -> list[dict]:
+    """POST a batch of statements; return the per-statement results."""
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"https://{settings.turso_host}/v2/pipeline",
+                headers={
+                    "Authorization": f"Bearer {settings.turso_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"requests": [*requests, {"type": "close"}]},
+                timeout=180,
+            )
+            resp.raise_for_status()
+            return resp.json()["results"]
+        except (httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_err = e
+            print(f"  turso pipeline attempt {attempt + 1} failed: {type(e).__name__}; retrying...", file=sys.stderr)
+            time.sleep(2 * (attempt + 1))
+    assert last_err is not None
+    raise last_err
+
+
+def turso_query(settings: Settings, sql: str, args: list | None = None) -> list[list]:
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = [
+            {"type": "null"} if a is None else {"type": "text", "value": str(a)}
+            for a in args
+        ]
+    results = turso_pipeline(settings, [{"type": "execute", "stmt": stmt}])
+    r = results[0]
+    if r["type"] == "error":
+        raise RuntimeError(f"Turso query error: {r['error']}")
+    rows = r["response"]["result"]["rows"]
+    return [[c["value"] if isinstance(c, dict) and "value" in c else None for c in row] for row in rows]
+
+
+def turso_batch_update(settings: Settings, updates: list[tuple[str, str, str]]) -> int:
+    """Apply UPDATE documents SET content_type=? WHERE did=? AND rkey=? in batches."""
+    BATCH = 50
+    written = 0
+    for i in range(0, len(updates), BATCH):
+        chunk = updates[i : i + BATCH]
+        reqs = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": "UPDATE documents SET content_type = ? WHERE did = ? AND rkey = ?",
+                    "args": [
+                        {"type": "text", "value": ct},
+                        {"type": "text", "value": did},
+                        {"type": "text", "value": rkey},
+                    ],
+                },
+            }
+            for (ct, did, rkey) in chunk
+        ]
+        results = turso_pipeline(settings, reqs)
+        for r in results:
+            if r["type"] == "error":
+                print(f"  turso UPDATE error: {r['error']}", file=sys.stderr)
+                continue
+            response = r.get("response") or {}
+            if response.get("type") != "execute":
+                continue  # skip the trailing close response
+            written += int(response.get("result", {}).get("affected_row_count", 0))
+    return written
+
+
+# ---- PDS resolution + fetch --------------------------------------------------
+
+
+_pds_cache: dict[str, str | None] = {}
+
+
+def resolve_pds(did: str) -> str | None:
+    """Return PDS endpoint URL for a DID, or None if unresolvable."""
+    if did in _pds_cache:
+        return _pds_cache[did]
+    url: str | None = None
+    try:
+        if did.startswith("did:plc:"):
+            resp = httpx.get(f"https://plc.directory/{did}", timeout=15)
+            resp.raise_for_status()
+            for svc in resp.json().get("service", []):
+                if svc.get("type") == "AtprotoPersonalDataServer":
+                    url = svc["serviceEndpoint"]
+                    break
+        elif did.startswith("did:web:"):
+            host = did[len("did:web:") :].replace(":", "/")
+            resp = httpx.get(f"https://{host}/.well-known/did.json", timeout=15, follow_redirects=True)
+            resp.raise_for_status()
+            for svc in resp.json().get("service", []):
+                if svc.get("type") == "AtprotoPersonalDataServer":
+                    url = svc["serviceEndpoint"]
+                    break
+    except Exception:
+        url = None
+    _pds_cache[did] = url
+    return url
+
+
+def list_records(pds: str, did: str, collection: str) -> list[dict]:
+    records: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params: dict = {"repo": did, "collection": collection, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        resp = httpx.get(
+            f"{pds}/xrpc/com.atproto.repo.listRecords", params=params, timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        records.extend(data.get("records", []))
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+    return records
+
+
+# ---- Backfill --------------------------------------------------------------
+
+
+@dataclass
+class Group:
+    did: str
+    collection: str
+    expected: int  # how many rows we expect to update in this group
+
+
+def gather_groups(settings: Settings, limit: int | None) -> list[Group]:
+    sql = (
+        "SELECT did, source_collection, COUNT(*) "
+        "FROM documents "
+        "WHERE content_type IS NULL "
+        "  AND source_collection NOT LIKE 'com.whtwnd.%' "
+        "GROUP BY did, source_collection "
+        "ORDER BY COUNT(*) DESC"
+    )
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    rows = turso_query(settings, sql)
+    return [Group(did=r[0], collection=r[1], expected=int(r[2])) for r in rows]
+
+
+def fetch_group(group: Group) -> tuple[Group, list[tuple[str, str, str]] | None, str]:
+    """Return (group, [(content_type, did, rkey), ...] | None, status)."""
+    pds = resolve_pds(group.did)
+    if not pds:
+        return group, None, "no-pds"
+    try:
+        records = list_records(pds, group.did, group.collection)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            return group, [], "empty"
+        return group, None, f"pds-{e.response.status_code}"
+    except Exception as e:
+        return group, None, f"pds-err:{type(e).__name__}"
+
+    updates: list[tuple[str, str, str]] = []
+    for rec in records:
+        uri = rec.get("uri", "")
+        rkey = uri.rsplit("/", 1)[-1] if uri else ""
+        if not rkey:
+            continue
+        value = rec.get("value") or {}
+        content = value.get("content")
+        content_type = ""
+        if isinstance(content, dict):
+            ct = content.get("$type")
+            if isinstance(ct, str):
+                content_type = ct
+        updates.append((content_type, group.did, rkey))
+    return group, updates, "ok"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Backfill documents.content_type from PDS records")
+    parser.add_argument("--dry-run", action="store_true", help="Fetch from PDSes but don't write")
+    parser.add_argument("--limit", type=int, default=None, help="Cap distinct (did, collection) groups (debug)")
+    parser.add_argument("--workers", type=int, default=8, help="PDS concurrency")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        return 1
+
+    print("loading groups...")
+    groups = gather_groups(settings, args.limit)
+    total_expected = sum(g.expected for g in groups)
+    print(f"  {len(groups)} (did, collection) groups, {total_expected} rows to attempt")
+
+    if not groups:
+        print("nothing to backfill")
+        return 0
+
+    pending_writes: list[tuple[str, str, str]] = []
+    started = time.time()
+    done = 0
+    status_counts: dict[str, int] = {}
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(fetch_group, g): g for g in groups}
+        for fut in as_completed(futures):
+            group, updates, status = fut.result()
+            status_counts[status] = status_counts.get(status, 0) + 1
+            done += 1
+            if updates:
+                pending_writes.extend(updates)
+
+            if done % 50 == 0 or done == len(groups):
+                elapsed = time.time() - started
+                rate = done / elapsed if elapsed > 0 else 0
+                print(
+                    f"  [{done}/{len(groups)}] {rate:.1f} groups/s, "
+                    f"{len(pending_writes)} pending writes, statuses={status_counts}"
+                )
+
+    print(f"\nfetched {len(pending_writes)} record-level updates")
+    if args.dry_run:
+        print("dry-run: skipping writes")
+        # show a sample
+        by_ct: dict[str, int] = {}
+        for ct, _, _ in pending_writes:
+            by_ct[ct] = by_ct.get(ct, 0) + 1
+        print("content_type distribution (dry-run):")
+        for ct, n in sorted(by_ct.items(), key=lambda kv: -kv[1])[:20]:
+            print(f"  {n:>6}  {ct!r}")
+        return 0
+
+    print("writing...")
+    written = turso_batch_update(settings, pending_writes)
+    print(f"  wrote {written} rows")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pub search / recommended</title>
+  <meta name="description" content="most-recommended posts across the atproto standard.site network">
+  <meta property="og:title" content="pub search / recommended">
+  <meta property="og:description" content="most-recommended posts across the atproto standard.site network">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://pub-search.waow.tech/og-image">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="pub search / recommended">
+  <meta name="twitter:description" content="most-recommended posts across the atproto standard.site network">
+  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='2' fill='%231B7340'/><circle cx='8' cy='10' r='1.5' fill='%231B7340' opacity='.6'/><circle cx='24' cy='8' r='1' fill='%231B7340' opacity='.4'/><circle cx='22' cy='22' r='1.5' fill='%231B7340' opacity='.5'/><circle cx='6' cy='24' r='1' fill='%231B7340' opacity='.3'/></svg>">
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'dark';
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="components.css">
+  <style>
+    :root, [data-theme="dark"] {
+      --bg: #0a0a0a;
+      --bg-subtle: #111;
+      --bg-hover: #151515;
+      --border: #222;
+      --border-subtle: #252525;
+      --border-focus: #333;
+      --text: #ccc;
+      --text-bright: #fff;
+      --text-secondary: #888;
+      --text-dim: #555;
+      --text-muted: #444;
+      --result-hover: #111;
+      --row-border: #1a1a1a;
+    }
+    [data-theme="light"] {
+      --bg: #f5f5f0;
+      --bg-subtle: #eee;
+      --bg-hover: #e4e4e0;
+      --border: #ddd;
+      --border-subtle: #ccc;
+      --border-focus: #bbb;
+      --text: #333;
+      --text-bright: #111;
+      --text-secondary: #555;
+      --text-dim: #888;
+      --text-muted: #999;
+      --result-hover: #eee;
+      --row-border: #e0e0e0;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1rem;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .container { max-width: 720px; margin: 0 auto; }
+
+    a { color: #1B7340; text-decoration: none; }
+    a:hover { color: #2a9d5c; }
+
+    h1 {
+      font-size: 12px;
+      font-weight: normal;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    h1 a.title { color: var(--text-secondary); }
+    h1 a.title:hover { color: var(--text-bright); }
+    h1 .dim { color: var(--text-dim); }
+
+    .intro {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 1.5rem;
+      line-height: 1.7;
+    }
+    .intro code {
+      color: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    .status {
+      font-size: 11px;
+      color: var(--text-dim);
+      padding: 1rem 0;
+    }
+
+    /* one row per recommended doc. flex row that adapts:
+     * desktop: rank | title+source (flex 1) | count
+     * mobile : rank+count on first line, title and source stack below */
+    .row {
+      display: grid;
+      grid-template-columns: 2.5rem 1fr auto;
+      column-gap: 0.75rem;
+      align-items: baseline;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--row-border);
+    }
+    .row:hover { background: var(--result-hover); margin: 0 -0.5rem; padding: 0.75rem 0.5rem; }
+
+    .rank {
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+    }
+
+    .body { min-width: 0; }
+    .title-line {
+      color: var(--text-bright);
+      word-break: break-word;
+      line-height: 1.4;
+    }
+    .title-line a { color: inherit; }
+    .title-line a:hover { color: #2a9d5c; }
+    .source {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 0.15rem;
+    }
+
+    .count {
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .count .label {
+      color: var(--text-dim);
+      font-size: 10px;
+      margin-left: 0.25rem;
+    }
+
+    .nav-row {
+      margin-bottom: 1.5rem;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .nav-row a { color: var(--text-secondary); }
+    .nav-row a:hover { color: var(--text-bright); }
+
+    /* mobile: same grid shape (rank | body | count) but tighter columns
+     * and slightly smaller title. count stays on the first text line; if
+     * title wraps, source flows under it inside `body`. */
+    @media (max-width: 480px) {
+      .row {
+        grid-template-columns: 2rem 1fr auto;
+        column-gap: 0.5rem;
+        padding: 0.6rem 0;
+        align-items: start;
+      }
+      .title-line { font-size: 13px; }
+      .count .label { display: none; } /* just the number on tight screens */
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>
+      <a href="/" class="title">pub search</a>
+      <span class="dim">/ recommended</span>
+      <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
+    </h1>
+
+    <div class="intro">
+      most-recommended posts across atproto. counts come from <code>site.standard.graph.recommend</code> records.
+    </div>
+
+    <div class="nav-row">
+      &laquo; <a href="/">back to search</a>
+    </div>
+
+    <div id="status" class="status">loading...</div>
+    <div id="list"></div>
+  </div>
+
+  <script>
+    var API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+      ? 'http://localhost:3000'
+      : 'https://leaflet-search-backend.fly.dev';
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function render(rows) {
+      var status = document.getElementById('status');
+      var list = document.getElementById('list');
+      if (!rows || rows.length === 0) {
+        status.textContent = 'no recommends indexed yet.';
+        list.innerHTML = '';
+        return;
+      }
+      status.textContent = '';
+      var html = '';
+      rows.forEach(function(doc, i) {
+        var rank = String(i + 1).padStart(2, '0');
+        var title = escapeHtml(doc.title || 'Untitled');
+        var url = doc.url || '';
+        var source = doc.basePath || doc.publicationName || doc.platform || '';
+        var titleHtml = url
+          ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + title + '</a>'
+          : title;
+        html += '<div class="row">' +
+          '<div class="rank">' + rank + '</div>' +
+          '<div class="body">' +
+            '<div class="title-line">' + titleHtml + '</div>' +
+            (source ? '<div class="source">' + escapeHtml(source) + '</div>' : '') +
+          '</div>' +
+          '<div class="count">' + doc.recommendCount +
+            '<span class="label">rec' + (doc.recommendCount === 1 ? '' : 's') + '</span>' +
+          '</div>' +
+        '</div>';
+      });
+      list.innerHTML = html;
+    }
+
+    fetch(API_BASE + '/recommended')
+      .then(function(r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      })
+      .then(function(data) {
+        if (data && data.error) throw new Error(data.error);
+        render(data);
+      })
+      .catch(function(err) {
+        document.getElementById('status').textContent = 'failed to load: ' + err.message;
+      });
+
+    // settings gear opens the preferred-client picker; index.html owns the
+    // actual modal, so on this page the button just navigates there with a
+    // hash that index.html could pick up later.
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      location.href = '/#settings';
+    });
+  </script>
+</body>
+</html>

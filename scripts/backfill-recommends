@@ -1,0 +1,325 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "httpx",
+#     "pydantic-settings",
+#     "atproto",
+# ]
+# ///
+"""
+Backfill site.standard.graph.recommend records via CAR walk.
+
+Pattern (cribbed from prefect-pack/collection_creators):
+  lightrail listReposByCollection -> enumerate DIDs holding the collection
+  slingshot resolveMiniDoc        -> map DID -> PDS endpoint
+  com.atproto.sync.getRepo        -> fetch full repo as CAR
+  walk MST locally                -> read each key+value with prefix
+  UPSERT into recommends          -> idempotent on (uri)
+
+Why not tap? Tap is for streaming new records going forward. For a one-shot
+backfill, a CAR walk is one HTTP call per DID and gives ground truth.
+
+Usage:
+    TURSO_URL=libsql://... TURSO_TOKEN=... ./scripts/backfill-recommends
+    ./scripts/backfill-recommends --dry-run
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+
+import httpx
+from atproto_core.car import CAR
+from atproto_core.cid import CID
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+SLINGSHOT = "https://slingshot.microcosm.blue"
+COLLECTION = "site.standard.graph.recommend"
+
+# Union DIDs across multiple relays — lightrail's index lags the Bluesky
+# reference relay by ~15% for niche collections (216 vs 254 at last check).
+RELAY_ENDPOINTS = [
+    "https://relay1.us-east.bsky.network",
+    "https://lightrail.microcosm.blue",
+    "https://relay.waow.tech",
+]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+# ---- Turso ----------------------------------------------------------------
+
+
+def turso_pipeline(settings: Settings, requests: list[dict]) -> list[dict]:
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"https://{settings.turso_host}/v2/pipeline",
+                headers={
+                    "Authorization": f"Bearer {settings.turso_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"requests": [*requests, {"type": "close"}]},
+                timeout=180,
+            )
+            resp.raise_for_status()
+            return resp.json()["results"]
+        except (httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_err = e
+            print(
+                f"  turso pipeline attempt {attempt + 1} failed: {type(e).__name__}; retrying",
+                file=sys.stderr,
+            )
+            time.sleep(2 * (attempt + 1))
+    assert last_err is not None
+    raise last_err
+
+
+def turso_upsert_recommends(settings: Settings, rows: list[tuple[str, str, str, str, str]]) -> int:
+    """rows: (uri, did, rkey, document_uri, created_at)."""
+    BATCH = 50
+    written = 0
+    for i in range(0, len(rows), BATCH):
+        chunk = rows[i : i + BATCH]
+        reqs = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": (
+                        "INSERT INTO recommends (uri, did, rkey, document_uri, created_at, indexed_at) "
+                        "VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S','now')) "
+                        "ON CONFLICT(uri) DO UPDATE SET "
+                        "  did = excluded.did, "
+                        "  rkey = excluded.rkey, "
+                        "  document_uri = excluded.document_uri, "
+                        "  created_at = excluded.created_at, "
+                        "  indexed_at = strftime('%Y-%m-%dT%H:%M:%S','now')"
+                    ),
+                    "args": [
+                        {"type": "text", "value": uri},
+                        {"type": "text", "value": did},
+                        {"type": "text", "value": rkey},
+                        {"type": "text", "value": doc_uri},
+                        {"type": "text", "value": created_at},
+                    ],
+                },
+            }
+            for (uri, did, rkey, doc_uri, created_at) in chunk
+        ]
+        results = turso_pipeline(settings, reqs)
+        for r in results:
+            if r["type"] == "error":
+                print(f"  upsert error: {r['error']}", file=sys.stderr)
+                continue
+            response = r.get("response") or {}
+            if response.get("type") != "execute":
+                continue
+            written += int(response.get("result", {}).get("affected_row_count", 0))
+    return written
+
+
+# ---- Enumeration + resolution -------------------------------------------
+
+
+def _enumerate_from_relay(client: httpx.Client, base: str, collection: str) -> list[str]:
+    dids: list[str] = []
+    cursor: str | None = None
+    while True:
+        params: dict = {"collection": collection, "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            r = client.get(
+                f"{base}/xrpc/com.atproto.sync.listReposByCollection",
+                params=params,
+                timeout=30,
+            )
+            r.raise_for_status()
+        except Exception as e:
+            print(f"  {base}: relay error {type(e).__name__}", file=sys.stderr)
+            return dids
+        body = r.json()
+        for repo in body.get("repos", []):
+            dids.append(repo["did"])
+        cursor = body.get("cursor")
+        if not cursor:
+            return dids
+
+
+def enumerate_creator_dids(collection: str) -> list[str]:
+    all_dids: set[str] = set()
+    with httpx.Client() as client:
+        for base in RELAY_ENDPOINTS:
+            from_relay = _enumerate_from_relay(client, base, collection)
+            print(f"  {base}: {len(from_relay)} DIDs")
+            all_dids.update(from_relay)
+    return sorted(all_dids)
+
+
+def resolve_pds(client: httpx.Client, did: str) -> str | None:
+    try:
+        r = client.get(
+            f"{SLINGSHOT}/xrpc/blue.microcosm.identity.resolveMiniDoc",
+            params={"identifier": did},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json().get("pds")
+    except Exception:
+        return None
+
+
+# ---- CAR walk ------------------------------------------------------------
+
+
+def _walk_mst(car: CAR, collection: str) -> list[tuple[str, dict]]:
+    """Return [(rkey, decoded_value_dict), ...] for every entry whose key
+    starts with f"{collection}/".
+
+    MST nodes are nested via CIDs in `l` (left subtree) and `e[i].t` (right
+    subtree after entry i). Keys are byte-encoded with prefix compression
+    (`p` = chars shared with previous key, `k` = unique suffix).
+    """
+    blocks = car.blocks
+    root = blocks[car.root]
+    data_cid = CID.decode(root["data"])
+
+    prefix_bytes = f"{collection}/".encode()
+    out: list[tuple[str, dict]] = []
+    stack = [data_cid]
+    while stack:
+        node = blocks[stack.pop()]
+        if (left := node.get("l")) is not None:
+            stack.append(CID.decode(left))
+        prev_key = b""
+        for entry in node["e"]:
+            key = prev_key[: entry["p"]] + entry["k"]
+            prev_key = key
+            if key.startswith(prefix_bytes):
+                value_cid = CID.decode(entry["v"])
+                value = blocks[value_cid]
+                rkey = key[len(prefix_bytes) :].decode("utf-8", errors="replace")
+                out.append((rkey, value))
+            if (t := entry.get("t")) is not None:
+                stack.append(CID.decode(t))
+    return out
+
+
+# ---- Fetch one DID's recommends ------------------------------------------
+
+
+@dataclass
+class FetchResult:
+    did: str
+    rows: list[tuple[str, str, str, str, str]]
+    status: str  # "ok", "unresolved", "no-pds", "fetch-err:<type>", "parse-err"
+
+
+def fetch_recommends_for_did(client: httpx.Client, did: str) -> FetchResult:
+    pds = resolve_pds(client, did)
+    if not pds:
+        return FetchResult(did, [], "no-pds")
+    try:
+        r = client.get(
+            f"{pds}/xrpc/com.atproto.sync.getRepo",
+            params={"did": did},
+            timeout=60,
+        )
+        r.raise_for_status()
+        car = CAR.from_bytes(r.content)
+    except httpx.HTTPStatusError as e:
+        return FetchResult(did, [], f"fetch-err:{e.response.status_code}")
+    except Exception as e:
+        return FetchResult(did, [], f"fetch-err:{type(e).__name__}")
+    try:
+        entries = _walk_mst(car, COLLECTION)
+    except Exception:
+        return FetchResult(did, [], "parse-err")
+
+    rows: list[tuple[str, str, str, str, str]] = []
+    for rkey, value in entries:
+        uri = f"at://{did}/{COLLECTION}/{rkey}"
+        document_uri = value.get("document") if isinstance(value, dict) else None
+        created_at = value.get("createdAt") if isinstance(value, dict) else None
+        if not isinstance(document_uri, str):
+            continue  # spec requires document; skip malformed
+        rows.append((uri, did, rkey, document_uri, str(created_at) if created_at else ""))
+    return FetchResult(did, rows, "ok")
+
+
+# ---- Main ---------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Backfill site.standard.graph.recommend records via CAR walk")
+    parser.add_argument("--dry-run", action="store_true", help="Don't write to Turso")
+    parser.add_argument("--workers", type=int, default=8, help="Concurrent PDS fetches")
+    parser.add_argument("--limit", type=int, default=None, help="Cap DIDs (debug)")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        return 1
+
+    print("enumerating creator DIDs via lightrail...")
+    dids = enumerate_creator_dids(COLLECTION)
+    if args.limit:
+        dids = dids[: args.limit]
+    print(f"  {len(dids)} DIDs")
+
+    if not dids:
+        return 0
+
+    started = time.time()
+    done = 0
+    statuses: dict[str, int] = {}
+    rows_acc: list[tuple[str, str, str, str, str]] = []
+
+    with httpx.Client() as client, ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(fetch_recommends_for_did, client, did): did for did in dids}
+        for fut in as_completed(futures):
+            res = fut.result()
+            statuses[res.status] = statuses.get(res.status, 0) + 1
+            rows_acc.extend(res.rows)
+            done += 1
+            if done % 25 == 0 or done == len(dids):
+                elapsed = time.time() - started
+                rate = done / elapsed if elapsed > 0 else 0
+                print(f"  [{done}/{len(dids)}] {rate:.1f} dids/s, {len(rows_acc)} records, statuses={statuses}")
+
+    print(f"\ncollected {len(rows_acc)} records from {statuses.get('ok', 0)} DIDs")
+    if args.dry_run:
+        print("dry-run: skipping writes")
+        return 0
+
+    print("upserting...")
+    written = turso_upsert_recommends(settings, rows_acc)
+    print(f"  wrote {written} rows")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

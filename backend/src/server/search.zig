@@ -108,7 +108,7 @@ const Doc = struct {
 
 /// Build canonical URL for a document/publication from its fields.
 /// Mirrors the frontend's buildDocUrl logic (site/index.html:1174).
-fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, base_path: []const u8, path: []const u8, rkey: []const u8, did: []const u8) []const u8 {
+pub fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, base_path: []const u8, path: []const u8, rkey: []const u8, did: []const u8) []const u8 {
     // publication → https://{basePath}
     if (std.mem.eql(u8, doc_type, "publication") and base_path.len > 0) {
         return std.fmt.allocPrint(alloc, "https://{s}", .{base_path}) catch "";
