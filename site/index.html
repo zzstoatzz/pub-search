@@ -278,6 +278,9 @@
       color: var(--text-secondary);
       margin-bottom: 0.5rem;
       line-height: 1.5;
+      /* break unbreakable runs (e.g. embedded image URLs) so they wrap
+       * instead of forcing horizontal overflow of the result card. */
+      overflow-wrap: anywhere;
     }
 
     .result-snippet mark {
