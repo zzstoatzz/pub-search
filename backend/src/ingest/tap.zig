@@ -18,6 +18,7 @@ const LEAFLET_PUBLICATION = "pub.leaflet.publication";
 // standard.site collections (cross-platform)
 const STANDARD_DOCUMENT = "site.standard.document";
 const STANDARD_PUBLICATION = "site.standard.publication";
+const STANDARD_RECOMMEND = "site.standard.graph.recommend";
 
 // whitewind blog entries
 const WHITEWIND_ENTRY = "com.whtwnd.blog.entry";
@@ -31,6 +32,10 @@ fn isDocumentCollection(collection: []const u8) bool {
 fn isPublicationCollection(collection: []const u8) bool {
     return mem.eql(u8, collection, LEAFLET_PUBLICATION) or
         mem.eql(u8, collection, STANDARD_PUBLICATION);
+}
+
+fn isRecommendCollection(collection: []const u8) bool {
+    return mem.eql(u8, collection, STANDARD_RECOMMEND);
 }
 
 fn getTapHost() []const u8 {
@@ -305,6 +310,10 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
             processPublication(allocator, uri, did.raw, rec.rkey, inner_record) catch |err| {
                 logfire.err("publication processing error: {}", .{err});
             };
+        } else if (isRecommendCollection(rec.collection)) {
+            processRecommend(uri, did.raw, rec.rkey, inner_record) catch |err| {
+                logfire.err("recommend processing error: {}", .{err});
+            };
         }
     } else if (rec.isDelete()) {
         if (isDocumentCollection(rec.collection)) {
@@ -314,6 +323,8 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
             tpuf.delete(allocator, &.{&hashed}) catch {};
         } else if (isPublicationCollection(rec.collection)) {
             indexer.deletePublication(uri);
+        } else if (isRecommendCollection(rec.collection)) {
+            indexer.deleteRecommend(uri);
         }
     }
 }
@@ -374,6 +385,19 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 
     try indexer.insertPublication(uri, did, rkey, name, description, base_path);
     logfire.counter("tap.publications_indexed", 1);
+}
+
+fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+    const record_val: json.Value = .{ .object = record };
+
+    const document_uri = zat.json.getString(record_val, "document") orelse {
+        logfire.span("tap.dropped", .{ .reason = "recommend_missing_document", .uri = uri }).end();
+        return;
+    };
+    const created_at = zat.json.getString(record_val, "createdAt");
+
+    try indexer.insertRecommend(uri, did, rkey, document_uri, created_at);
+    logfire.counter("tap.recommends_indexed", 1);
 }
 
 fn stripUrlScheme(url: ?[]const u8) ?[]const u8 {

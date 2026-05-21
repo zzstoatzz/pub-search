@@ -216,6 +216,23 @@ pub const migrations = [_]zug.Migration{
         .name = "capture content.$type so we can identify the publisher (e.g. org.wordpress.html, at.markpub.markdown, pub.leaflet.content)",
         .sql = "ALTER TABLE documents ADD COLUMN content_type TEXT",
     },
+    .{
+        .id = "012_create_recommends",
+        .name = "site.standard.graph.recommend table for endorsement aggregation",
+        .sql =
+        \\CREATE TABLE IF NOT EXISTS recommends (
+        \\  uri TEXT PRIMARY KEY,
+        \\  did TEXT NOT NULL,
+        \\  rkey TEXT NOT NULL,
+        \\  document_uri TEXT NOT NULL,
+        \\  created_at TEXT,
+        \\  indexed_at TEXT
+        \\);
+        \\CREATE UNIQUE INDEX IF NOT EXISTS idx_recommends_did_rkey ON recommends(did, rkey);
+        \\CREATE INDEX IF NOT EXISTS idx_recommends_document_uri ON recommends(document_uri);
+        \\CREATE INDEX IF NOT EXISTS idx_recommends_did ON recommends(did);
+        ,
+    },
 };
 
 // --- tests ---

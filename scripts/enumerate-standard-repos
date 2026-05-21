@@ -4,13 +4,15 @@
 # dependencies = ["httpx"]
 # ///
 """
-Enumerate repos with site.standard.* records and add them to TAP.
+Enumerate repos with records in a given atproto collection and add them to TAP.
 
-TAP only signals on one collection, so we use this to discover repos
-that use site.standard.publication (pckt, etc) and add them to TAP.
+TAP only signals on one collection, so we use this to discover repos that
+hold records of other collections we care about — e.g. site.standard.publication
+to pull pckt/offprint/etc, or site.standard.graph.recommend to pull endorsements.
 
 Usage:
     ./scripts/enumerate-standard-repos
+    ./scripts/enumerate-standard-repos --collection site.standard.graph.recommend
     ./scripts/enumerate-standard-repos --dry-run
 """
 
@@ -21,7 +23,7 @@ import httpx
 
 RELAY_URL = "https://relay1.us-east.bsky.network"
 TAP_URL = "http://leaflet-search-tap.internal:2480"  # fly internal network
-COLLECTION = "site.standard.publication"
+DEFAULT_COLLECTION = "site.standard.publication"
 
 
 def enumerate_repos(relay_url: str, collection: str) -> list[str]:
@@ -79,14 +81,15 @@ def add_repos_to_tap(tap_url: str, dids: list[str]) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Enumerate and add standard.site repos to TAP")
+    parser = argparse.ArgumentParser(description="Enumerate creators of an atproto collection and queue them in TAP")
+    parser.add_argument("--collection", default=DEFAULT_COLLECTION, help=f"Collection NSID to enumerate (default: {DEFAULT_COLLECTION})")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     parser.add_argument("--relay-url", default=RELAY_URL, help="Relay URL")
     parser.add_argument("--tap-url", default=TAP_URL, help="TAP URL")
     args = parser.parse_args()
 
-    dids = enumerate_repos(args.relay_url, COLLECTION)
-    print(f"found {len(dids)} repos with {COLLECTION}")
+    dids = enumerate_repos(args.relay_url, args.collection)
+    print(f"found {len(dids)} repos with {args.collection}")
 
     if not dids:
         print("no repos to add")

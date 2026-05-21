@@ -319,6 +319,42 @@ pub fn deleteDocument(uri: []const u8) void {
     c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{uri}) catch {};
 }
 
+pub fn insertRecommend(
+    uri: []const u8,
+    did: []const u8,
+    rkey: []const u8,
+    document_uri: []const u8,
+    created_at: ?[]const u8,
+) !void {
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    try c.exec(
+        \\INSERT INTO recommends (uri, did, rkey, document_uri, created_at, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        \\ON CONFLICT(uri) DO UPDATE SET
+        \\  did = excluded.did,
+        \\  rkey = excluded.rkey,
+        \\  document_uri = excluded.document_uri,
+        \\  created_at = excluded.created_at,
+        \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
+    ,
+        &.{ uri, did, rkey, document_uri, created_at orelse "" },
+    );
+}
+
+pub fn deleteRecommend(uri: []const u8) void {
+    const c = db.getClient() orelse return;
+
+    // record tombstone
+    var ts_buf: [20]u8 = undefined;
+    const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
+    c.exec(
+        "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'recommend', ?)",
+        &.{ uri, ts },
+    ) catch {};
+    c.exec("DELETE FROM recommends WHERE uri = ?", &.{uri}) catch {};
+}
+
 pub fn deletePublication(uri: []const u8) void {
     const c = db.getClient() orelse return;
 
