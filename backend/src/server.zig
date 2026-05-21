@@ -95,7 +95,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     } else if (mem.eql(u8, path, "/api/latency")) {
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
-        try handleRecommended(request);
+        try handleRecommended(request, io);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -368,13 +368,13 @@ const RECOMMENDED_SQL =
 const RECOMMENDED_CACHE_TTL_NS: i128 = 60 * std.time.ns_per_s;
 
 const RecommendedCache = struct {
-    mu: std.Thread.Mutex = .{},
+    mu: Io.Mutex = Io.Mutex.init,
     body: ?[]u8 = null, // page_allocator-owned
     fetched_at_ns: i128 = 0,
 };
 var recommended_cache: RecommendedCache = .{};
 
-fn handleRecommended(request: *http.Server.Request) !void {
+fn handleRecommended(request: *http.Server.Request, io: Io) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -382,12 +382,12 @@ fn handleRecommended(request: *http.Server.Request) !void {
     const span = logfire.span("http.recommended", .{});
     defer span.end();
 
-    const now_ns: i128 = std.time.nanoTimestamp();
+    const now_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
 
     // fast path: serve from cache if fresh.
     {
-        recommended_cache.mu.lock();
-        defer recommended_cache.mu.unlock();
+        recommended_cache.mu.lockUncancelable(io);
+        defer recommended_cache.mu.unlock(io);
         if (recommended_cache.body) |body| {
             if (now_ns - recommended_cache.fetched_at_ns < RECOMMENDED_CACHE_TTL_NS) {
                 span.setAttribute("cache", "hit");
@@ -404,8 +404,8 @@ fn handleRecommended(request: *http.Server.Request) !void {
 
     const stored = std.heap.page_allocator.dupe(u8, fresh) catch null;
     if (stored) |s| {
-        recommended_cache.mu.lock();
-        defer recommended_cache.mu.unlock();
+        recommended_cache.mu.lockUncancelable(io);
+        defer recommended_cache.mu.unlock(io);
         if (recommended_cache.body) |old| std.heap.page_allocator.free(old);
         recommended_cache.body = s;
         recommended_cache.fetched_at_ns = now_ns;
