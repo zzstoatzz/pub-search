@@ -343,12 +343,16 @@ const RecommendedJson = struct {
 // Recommends live only on Turso (not the local SQLite replica), so this
 // handler queries Turso directly. Volume is small (~500 records at launch);
 // page is not on a hot path. If usage grows, plumb recommends into LocalDb.
+// We aggregate across two NSIDs (site.standard.graph.recommend +
+// pub.leaflet.interactions.recommend), so the same person may show up
+// twice for one document. COUNT(DISTINCT r.did) treats it as one vote
+// — matches what Leaflet's own UI counts within its lexicon.
 const RECOMMENDED_SQL =
     \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
     \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
     \\  COALESCE(d.path, '') AS path, d.has_publication,
     \\  COALESCE(p.name, '') AS publication_name,
-    \\  COUNT(r.uri) AS recommend_count
+    \\  COUNT(DISTINCT r.did) AS recommend_count
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN recommends r ON r.document_uri = d.uri
