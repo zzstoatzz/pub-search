@@ -2,7 +2,7 @@ app = 'leaflet-search-tap'
 primary_region = 'ewr'
 
 [build]
-  image = 'ghcr.io/bluesky-social/indigo/tap:0.1.10'
+  image = 'ghcr.io/bluesky-social/indigo/tap:0.1.9'
 
 [env]
   TAP_DATABASE_URL = 'sqlite:///data/tap.db'
