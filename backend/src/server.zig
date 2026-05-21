@@ -379,10 +379,13 @@ const RECOMMENDED_REFRESH_INTERVAL_MS: u64 = 45_000;
 /// Spawn a background thread that keeps the /recommended cache warm.
 /// User requests then always read from memory — they never block on the
 /// underlying Turso JOIN+GROUP BY (which can take 5–11s on cold connections).
+///
+/// Returns immediately. The first refresh happens on the background thread
+/// without blocking the caller — initServices must not stall here, since
+/// `tap.consumer` is invoked downstream and a stuck Turso call would leave
+/// the firehose subscription unstarted.
 pub fn initRecommendedCache(io: Io) void {
     recommended_refresh_io = io;
-    // seed synchronously so the very first request is fast too.
-    refreshRecommendedCache();
     recommended_refresh_thread = std.Thread.spawn(.{}, recommendedRefreshLoop, .{}) catch |err| {
         logfire.warn("recommended cache: refresh thread failed to start: {}", .{err});
         return;
@@ -393,6 +396,8 @@ pub fn initRecommendedCache(io: Io) void {
 
 fn recommendedRefreshLoop() void {
     const io = recommended_refresh_io orelse return;
+    // first refresh immediately (no sleep), then on the configured cadence.
+    refreshRecommendedCache();
     while (true) {
         io.sleep(Io.Duration.fromMilliseconds(RECOMMENDED_REFRESH_INTERVAL_MS), .awake) catch {};
         refreshRecommendedCache();
