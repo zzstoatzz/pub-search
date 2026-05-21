@@ -95,7 +95,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     } else if (mem.eql(u8, path, "/api/latency")) {
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
-        try handleRecommended(request, io);
+        try handleRecommended(request, target, io);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -358,7 +358,7 @@ const RECOMMENDED_SQL =
     \\JOIN recommends r ON r.document_uri = d.uri
     \\GROUP BY d.uri
     \\ORDER BY recommend_count DESC, d.created_at DESC
-    \\LIMIT 50
+    \\LIMIT 250
 ;
 
 // /recommended is served from an in-memory cache that a background thread
@@ -428,7 +428,7 @@ fn refreshRecommendedCache() void {
     recommended_cache.fetched_at_ns = now_ns;
 }
 
-fn handleRecommended(request: *http.Server.Request, io: Io) !void {
+fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -436,24 +436,57 @@ fn handleRecommended(request: *http.Server.Request, io: Io) !void {
     const span = logfire.span("http.recommended", .{});
     defer span.end();
 
-    // serve from cache. background refresh loop keeps this populated; we
-    // synchronously seed in init() so it's ready by the time accept() starts.
+    const limit_str = parseQueryParam(alloc, target, "limit") catch null;
+    const offset_str = parseQueryParam(alloc, target, "offset") catch null;
+    const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
+    const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
+
+    // Grab a snapshot of the cached top-N JSON. Background loop refreshes
+    // it every 45s, so user requests never block on Turso.
+    var snapshot: ?[]u8 = null;
     {
         recommended_cache.mu.lockUncancelable(io);
         defer recommended_cache.mu.unlock(io);
         if (recommended_cache.body) |body| {
+            snapshot = try alloc.dupe(u8, body);
             span.setAttribute("cache", "hit");
-            const copy = try alloc.dupe(u8, body);
-            try sendJson(request, copy);
-            return;
         }
     }
 
-    // cold fallback (init hasn't seeded yet, or refresh failed every time
-    // since boot). compute inline so the user still gets a response.
-    span.setAttribute("cache", "cold");
-    const fresh = try getRecommended(alloc);
-    try sendJson(request, fresh);
+    if (snapshot == null) {
+        // cold fallback (init hasn't seeded yet, or refresh failed every time
+        // since boot). compute inline so the user still gets a response.
+        span.setAttribute("cache", "cold");
+        snapshot = try alloc.dupe(u8, try getRecommended(alloc));
+    }
+
+    const sliced = try sliceRecommendedJson(alloc, snapshot.?, limit, offset);
+    try sendJson(request, sliced);
+}
+
+/// Parse the cached top-N JSON array and re-emit only [offset, offset+limit).
+/// The cache layer keeps the slow Turso JOIN off the hot path; this slice is
+/// pure in-process work (~ms for N=250).
+fn sliceRecommendedJson(alloc: Allocator, body: []const u8, limit: usize, offset: usize) ![]const u8 {
+    var parsed = json.parseFromSlice(json.Value, alloc, body, .{}) catch {
+        // body was an error envelope, not an array — pass it through.
+        return alloc.dupe(u8, body);
+    };
+    defer parsed.deinit();
+
+    if (parsed.value != .array) return alloc.dupe(u8, body);
+    const items = parsed.value.array.items;
+
+    const start = @min(offset, items.len);
+    const end = @min(start + limit, items.len);
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (items[start..end]) |item| try jw.write(item);
+    try jw.endArray();
+    return try output.toOwnedSlice();
 }
 
 fn getRecommended(alloc: Allocator) ![]const u8 {

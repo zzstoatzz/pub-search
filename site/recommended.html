@@ -233,6 +233,9 @@
     .title-line a { color: inherit; }
     .title-line a:hover { color: var(--accent); }
     .source {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
       font-size: 11px;
       color: var(--text-dim);
       margin-top: 0.25rem;
@@ -257,6 +260,44 @@
       flex-shrink: 0;
     }
     .heart svg { width: 100%; height: 100%; display: block; }
+
+    .source .pub-link {
+      color: inherit;
+      text-decoration: none;
+    }
+    .source .pub-link:hover { color: var(--text-secondary); }
+
+    /* row "⋯" overflow button — matches .lf-row-more styling from
+     * components.css but scoped tight to the leaderboard row. */
+    .row .lf-row-more {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 14px;
+      line-height: 1;
+      letter-spacing: 1px;
+      padding: 4px 6px;
+      margin-left: 6px;
+      cursor: pointer;
+      vertical-align: middle;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .row .lf-row-more:hover { color: var(--text-secondary); }
+
+    .load-more {
+      text-align: center;
+      padding: 1.25rem 0;
+    }
+    .load-more button {
+      background: none;
+      border: 1px solid var(--border-focus);
+      color: var(--text-secondary);
+      font-family: monospace;
+      font-size: 12px;
+      padding: 0.4rem 0.9rem;
+      cursor: pointer;
+    }
+    .load-more button:hover { background: var(--bg-subtle); color: var(--text-bright); }
 
     /* tighter mobile layout */
     @media (max-width: 480px) {
@@ -338,55 +379,143 @@
       + '<path d="M12 21s-7-4.5-9.5-9C.83 8.5 2.5 5 6 5c2 0 3.5 1 4 2.5C10.5 6 12 5 14 5c3.5 0 5.17 3.5 3.5 7-2.5 4.5-9.5 9-9.5 9z" '
       + 'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 
+    var PAGE_SIZE = 20;
+    var currentOffset = 0;
+    var totalRendered = 0;
+
     function escapeHtml(s) {
       return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-    function render(rows) {
+    function rowHtml(doc, rank) {
+      var podium = rank <= 3 ? ' podium' : '';
+      var title = escapeHtml(doc.title || 'Untitled');
+      var url = doc.url || '';
+      var source = doc.basePath || doc.publicationName || doc.platform || '';
+      var extUrl = doc.basePath ? ('https://' + doc.basePath) : '';
+      var titleHtml = url
+        ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + title + '</a>'
+        : title;
+      var sourceHtml = '';
+      if (source) {
+        sourceHtml = extUrl
+          ? '<a class="pub-link" href="' + escapeHtml(extUrl) + '" target="_blank" rel="noopener">' + escapeHtml(source) + '</a>'
+          : escapeHtml(source);
+      }
+      // data-* mirrors what wireResultActions on the homepage uses, so the
+      // shared row menu + publication menu in window.LeafletUI work as-is.
+      var dataAttrs = [
+        doc.did ? 'data-did="' + escapeHtml(doc.did) + '"' : '',
+        doc.uri ? 'data-uri="' + escapeHtml(doc.uri) + '"' : '',
+        doc.basePath ? 'data-base-path="' + escapeHtml(doc.basePath) + '"' : '',
+        extUrl ? 'data-ext-url="' + escapeHtml(extUrl) + '"' : '',
+      ].filter(Boolean).join(' ');
+      return '<div class="row' + podium + '" ' + dataAttrs + '>' +
+        '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
+        '<div class="body">' +
+          '<div class="title-line">' + titleHtml + '</div>' +
+          (sourceHtml ? '<div class="source">' + sourceHtml + '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>' : '') +
+        '</div>' +
+        '<div class="score">' +
+          '<span class="heart">' + HEART_SVG + '</span>' +
+          doc.recommendCount +
+        '</div>' +
+      '</div>';
+    }
+
+    function renderRows(rows, append) {
       var status = document.getElementById('status');
       var list = document.getElementById('list');
-      if (!rows || rows.length === 0) {
-        status.textContent = 'no recommends indexed yet.';
+
+      if (!append) {
+        totalRendered = 0;
         list.innerHTML = '';
+      }
+      // strip any prior load-more (always re-add below if needed)
+      var oldLoadMore = list.querySelector('.load-more');
+      if (oldLoadMore) oldLoadMore.remove();
+
+      if ((!rows || rows.length === 0) && totalRendered === 0) {
+        status.textContent = 'no recommends indexed yet.';
         return;
       }
       status.textContent = '';
+
       var html = '';
-      rows.forEach(function(doc, i) {
-        var podium = i < 3 ? ' podium' : '';
-        var rank = i + 1;
-        var title = escapeHtml(doc.title || 'Untitled');
-        var url = doc.url || '';
-        var source = doc.basePath || doc.publicationName || doc.platform || '';
-        var titleHtml = url
-          ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + title + '</a>'
-          : title;
-        html += '<div class="row' + podium + '">' +
-          '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
-          '<div class="body">' +
-            '<div class="title-line">' + titleHtml + '</div>' +
-            (source ? '<div class="source">' + escapeHtml(source) + '</div>' : '') +
-          '</div>' +
-          '<div class="score">' +
-            '<span class="heart">' + HEART_SVG + '</span>' +
-            doc.recommendCount +
-          '</div>' +
-        '</div>';
-      });
-      list.innerHTML = html;
+      for (var i = 0; i < rows.length; i++) {
+        html += rowHtml(rows[i], totalRendered + i + 1);
+      }
+      list.insertAdjacentHTML('beforeend', html);
+      totalRendered += rows.length;
+
+      // if the batch came back full, there might be more — offer load-more.
+      // (we don't know the total upstream; a full batch is the only signal.)
+      if (rows.length === PAGE_SIZE) {
+        var moreHtml = '<div class="load-more"><button onclick="loadMore()">load more</button></div>';
+        list.insertAdjacentHTML('beforeend', moreHtml);
+      }
+
+      wireRowActions(list);
     }
 
-    fetch(API_BASE + '/recommended')
-      .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
-      .then(function(data) {
-        if (data && data.error) throw new Error(data.error);
-        render(data);
-      })
-      .catch(function(err) {
-        document.getElementById('status').textContent = 'failed to load: ' + err.message;
+    // Mirrors index.html's wireResultActions but scoped to this page's rows
+    // (which use .row instead of .result). Shares window.LeafletUI menus.
+    function wireRowActions(scope) {
+      if (!window.LeafletUI) return;
+      scope.querySelectorAll('.row').forEach(function(row) {
+        if (row.dataset.actionsWired) return;
+        row.dataset.actionsWired = '1';
+
+        var data = row.dataset;
+        var moreBtn = row.querySelector('.lf-row-more');
+        if (moreBtn) {
+          var handler = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var items = window.LeafletUI.rowMenuItems({
+              uri: data.uri || '',
+              basePath: data.basePath || '',
+              handle: '',
+              externalUrl: data.extUrl || '',
+            });
+            var rect = moreBtn.getBoundingClientRect();
+            window.LeafletUI.showMenu(items, rect.right - 8, rect.bottom + 4);
+          };
+          moreBtn.addEventListener('click', handler);
+          window.LeafletUI.longPress(moreBtn, handler);
+        }
+
+        var pubLink = row.querySelector('.pub-link');
+        if (pubLink && (data.basePath || data.extUrl)) {
+          window.LeafletUI.bindContextMenu(pubLink, function() {
+            return window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || '');
+          });
+        }
       });
+    }
+
+    function fetchPage(offset, append) {
+      var url = API_BASE + '/recommended?limit=' + PAGE_SIZE + '&offset=' + offset;
+      fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+        .then(function(data) {
+          if (data && data.error) throw new Error(data.error);
+          renderRows(data || [], append);
+        })
+        .catch(function(err) {
+          document.getElementById('status').textContent = 'failed to load: ' + err.message;
+        });
+    }
+
+    function loadMore() {
+      currentOffset += PAGE_SIZE;
+      fetchPage(currentOffset, true);
+    }
+    window.loadMore = loadMore;
+
+    fetchPage(0, false);
 
     document.getElementById('settings-btn').addEventListener('click', function() {
       if (window.LeafletUI && window.LeafletUI.openSettings) {
