@@ -86,6 +86,185 @@ async function fetchSearchResults(params) {
   }
 }
 
+async function fetchRecommended() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
+  try {
+    const res = await fetch(`${API_URL}/recommended`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await res.json();
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
+function buildRecommendedImage(rows) {
+  const top = (rows || []).slice(0, 7);
+  const totalRecs = (rows || []).reduce((s, r) => s + (r.recommendCount || 0), 0);
+
+  const children = [];
+
+  // top bar: pub search / recommended
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+        color: "#888",
+        fontSize: "26px",
+        fontFamily: '"JetBrains Mono", monospace',
+      },
+      children: [
+        "pub search",
+        { type: "span", props: { style: { color: "#444" }, children: "/" } },
+        { type: "span", props: { style: { color: "#555" }, children: "recommended" } },
+      ],
+    },
+  });
+
+  // title
+  children.push({
+    type: "div",
+    props: {
+      style: {
+        color: "#fff",
+        fontSize: "52px",
+        fontFamily: '"JetBrains Mono", monospace',
+        marginTop: "14px",
+        letterSpacing: "-0.5px",
+      },
+      children: "most-recommended posts",
+    },
+  });
+
+  // list of top entries
+  const list = top.map((doc, i) => ({
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: "20px",
+        marginTop: i === 0 ? "32px" : "10px",
+        padding: "10px 0",
+        borderBottom: "1px solid #1d1d1d",
+      },
+      children: [
+        // rank
+        {
+          type: "div",
+          props: {
+            style: {
+              color: i < 3 ? "#2a9d5c" : "#555",
+              fontSize: "24px",
+              fontFamily: '"JetBrains Mono", monospace',
+              width: "62px",
+              textAlign: "right",
+            },
+            children: `#${i + 1}`,
+          },
+        },
+        // title + source
+        {
+          type: "div",
+          props: {
+            style: {
+              display: "flex",
+              flexDirection: "column",
+              flex: "1",
+              minWidth: "0",
+            },
+            children: [
+              {
+                type: "div",
+                props: {
+                  style: {
+                    color: "#fff",
+                    fontSize: "24px",
+                    fontFamily: '"JetBrains Mono", monospace',
+                    overflow: "hidden",
+                  },
+                  children: truncate(doc.title || "untitled", 56),
+                },
+              },
+              {
+                type: "div",
+                props: {
+                  style: {
+                    color: "#555",
+                    fontSize: "16px",
+                    fontFamily: '"JetBrains Mono", monospace',
+                    marginTop: "4px",
+                  },
+                  children: doc.basePath || doc.publicationName || doc.platform || "",
+                },
+              },
+            ],
+          },
+        },
+        // heart + count
+        {
+          type: "div",
+          props: {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              color: i < 3 ? "#2a9d5c" : "#888",
+              fontSize: "26px",
+              fontFamily: '"JetBrains Mono", monospace',
+            },
+            children: [
+              { type: "span", props: { children: "♥" } },
+              { type: "span", props: { children: String(doc.recommendCount || 0) } },
+            ],
+          },
+        },
+      ],
+    },
+  }));
+
+  children.push(...list);
+
+  // footer
+  if (totalRecs > 0) {
+    children.push({
+      type: "div",
+      props: {
+        style: {
+          color: "#444",
+          fontSize: "18px",
+          fontFamily: '"JetBrains Mono", monospace',
+          marginTop: "auto",
+          paddingTop: "20px",
+        },
+        children: `${totalRecs.toLocaleString()} recommends in the top 50 · pub-search.waow.tech/recommended`,
+      },
+    });
+  }
+
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        width: "1200px",
+        height: "630px",
+        background: "#050505",
+        padding: "44px 64px",
+        fontFamily: '"JetBrains Mono", monospace',
+      },
+      children,
+    },
+  };
+}
+
 async function fetchStats() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
@@ -439,6 +618,26 @@ export async function onRequest(context) {
       ],
       headers: {
         "Cache-Control": "public, max-age=3600",
+      },
+    });
+  }
+
+  // recommended leaderboard page
+  if (page === "recommended") {
+    const rows = await fetchRecommended();
+    const html = buildRecommendedImage(rows);
+    return new ImageResponse(html, {
+      width: 1200,
+      height: 630,
+      fonts: [
+        {
+          name: "JetBrains Mono",
+          data: await loadGoogleFont("JetBrains Mono"),
+          style: "normal",
+        },
+      ],
+      headers: {
+        "Cache-Control": "public, max-age=1800",
       },
     });
   }

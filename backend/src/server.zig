@@ -361,18 +361,67 @@ const RECOMMENDED_SQL =
     \\LIMIT 50
 ;
 
-// /recommended is served from a 60s in-memory cache. The underlying query
-// (Turso JOIN + GROUP BY across remote DB) takes 1–8s depending on Turso
-// connection latency; the leaderboard moves slowly, so trading mild staleness
-// for ~ms response times is a clear win.
-const RECOMMENDED_CACHE_TTL_NS: i128 = 60 * std.time.ns_per_s;
-
+// /recommended is served from an in-memory cache that a background thread
+// refreshes every ~45s. The underlying query (Turso JOIN + GROUP BY across
+// remote DB) takes 1–11s depending on Turso connection latency; the
+// leaderboard moves slowly, so we never want a user request to block on it.
 const RecommendedCache = struct {
     mu: Io.Mutex = Io.Mutex.init,
     body: ?[]u8 = null, // page_allocator-owned
     fetched_at_ns: i128 = 0,
 };
 var recommended_cache: RecommendedCache = .{};
+var recommended_refresh_io: ?Io = null;
+var recommended_refresh_thread: ?std.Thread = null;
+
+const RECOMMENDED_REFRESH_INTERVAL_MS: u64 = 45_000;
+
+/// Spawn a background thread that keeps the /recommended cache warm.
+/// User requests then always read from memory — they never block on the
+/// underlying Turso JOIN+GROUP BY (which can take 5–11s on cold connections).
+pub fn initRecommendedCache(io: Io) void {
+    recommended_refresh_io = io;
+    // seed synchronously so the very first request is fast too.
+    refreshRecommendedCache();
+    recommended_refresh_thread = std.Thread.spawn(.{}, recommendedRefreshLoop, .{}) catch |err| {
+        logfire.warn("recommended cache: refresh thread failed to start: {}", .{err});
+        return;
+    };
+    if (recommended_refresh_thread) |t| t.detach();
+    logfire.info("recommended cache: refresh loop running every {d}ms", .{RECOMMENDED_REFRESH_INTERVAL_MS});
+}
+
+fn recommendedRefreshLoop() void {
+    const io = recommended_refresh_io orelse return;
+    while (true) {
+        io.sleep(Io.Duration.fromMilliseconds(RECOMMENDED_REFRESH_INTERVAL_MS), .awake) catch {};
+        refreshRecommendedCache();
+    }
+}
+
+fn refreshRecommendedCache() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const fresh = getRecommended(alloc) catch |err| {
+        logfire.warn("recommended cache: refresh failed: {}", .{err});
+        return;
+    };
+
+    const stored = std.heap.page_allocator.dupe(u8, fresh) catch return;
+    const io = recommended_refresh_io orelse {
+        std.heap.page_allocator.free(stored);
+        return;
+    };
+    const now_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
+
+    recommended_cache.mu.lockUncancelable(io);
+    defer recommended_cache.mu.unlock(io);
+    if (recommended_cache.body) |old| std.heap.page_allocator.free(old);
+    recommended_cache.body = stored;
+    recommended_cache.fetched_at_ns = now_ns;
+}
 
 fn handleRecommended(request: *http.Server.Request, io: Io) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -382,34 +431,23 @@ fn handleRecommended(request: *http.Server.Request, io: Io) !void {
     const span = logfire.span("http.recommended", .{});
     defer span.end();
 
-    const now_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
-
-    // fast path: serve from cache if fresh.
+    // serve from cache. background refresh loop keeps this populated; we
+    // synchronously seed in init() so it's ready by the time accept() starts.
     {
         recommended_cache.mu.lockUncancelable(io);
         defer recommended_cache.mu.unlock(io);
         if (recommended_cache.body) |body| {
-            if (now_ns - recommended_cache.fetched_at_ns < RECOMMENDED_CACHE_TTL_NS) {
-                span.setAttribute("cache", "hit");
-                const copy = try alloc.dupe(u8, body);
-                try sendJson(request, copy);
-                return;
-            }
+            span.setAttribute("cache", "hit");
+            const copy = try alloc.dupe(u8, body);
+            try sendJson(request, copy);
+            return;
         }
     }
 
-    // slow path: recompute and cache.
-    span.setAttribute("cache", "miss");
+    // cold fallback (init hasn't seeded yet, or refresh failed every time
+    // since boot). compute inline so the user still gets a response.
+    span.setAttribute("cache", "cold");
     const fresh = try getRecommended(alloc);
-
-    const stored = std.heap.page_allocator.dupe(u8, fresh) catch null;
-    if (stored) |s| {
-        recommended_cache.mu.lockUncancelable(io);
-        defer recommended_cache.mu.unlock(io);
-        if (recommended_cache.body) |old| std.heap.page_allocator.free(old);
-        recommended_cache.body = s;
-        recommended_cache.fetched_at_ns = now_ns;
-    }
     try sendJson(request, fresh);
 }
 
