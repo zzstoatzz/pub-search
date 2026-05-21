@@ -143,12 +143,24 @@
       user-select: none;
     }
     .info:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
+    /* Tip sits flush against the `?` (top: 100%) so there's no dead space
+     * for the cursor to traverse on its way to the link inside. The visible
+     * 8px offset comes from padding-top on the tip itself, which keeps the
+     * whole hover region contiguous. */
     .info .tip {
       position: absolute;
-      top: calc(100% + 8px);
+      top: 100%;
       left: 0;
+      padding-top: 8px;
       width: max-content;
       max-width: min(360px, 80vw);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s;
+      z-index: 5;
+    }
+    .info .tip-inner {
+      display: block;
       padding: 0.5rem 0.65rem;
       background: var(--bg-subtle);
       border: 1px solid var(--border-focus);
@@ -157,15 +169,11 @@
       line-height: 1.5;
       letter-spacing: normal;
       text-align: left;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.12s;
-      z-index: 5;
     }
     .info .tip code { color: var(--text); }
     .info .tip a { color: var(--accent-dim); }
     .info .tip a:hover { color: var(--accent); }
-    .info:hover .tip, .info:focus-visible .tip { opacity: 1; pointer-events: auto; }
+    .info:hover .tip, .info:focus-within .tip { opacity: 1; pointer-events: auto; }
 
     .status {
       font-size: 11px;
@@ -278,9 +286,9 @@
 
     <div class="lead">
       most-recommended posts
-      <span class="info" tabindex="0" aria-label="how counts are computed">?<span class="tip">
+      <span class="info" tabindex="0" aria-label="how counts are computed">?<span class="tip"><span class="tip-inner">
         counts merge <a href="https://standard.site/docs/lexicons/recommend/" target="_blank" rel="noopener"><code>site.standard.graph.recommend</code></a> and <code>pub.leaflet.interactions.recommend</code> — same idea, different lexicon per platform.
-      </span></span>
+      </span></span></span>
     </div>
 
     <div id="status" class="status">loading…</div>
