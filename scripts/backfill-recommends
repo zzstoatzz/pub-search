@@ -40,7 +40,13 @@ from atproto_core.cid import CID
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SLINGSHOT = "https://slingshot.microcosm.blue"
-COLLECTION = "site.standard.graph.recommend"
+
+# Recommend-shaped lexicons in the wild, surveyed via constellation 2026-05-21.
+# Each entry: (collection NSID, field in record holding the document at-uri).
+DEFAULT_LEXICONS = [
+    ("site.standard.graph.recommend", "document"),
+    ("pub.leaflet.interactions.recommend", "subject"),
+]
 
 # Union DIDs across multiple relays — lightrail's index lags the Bluesky
 # reference relay by ~15% for niche collections (216 vs 254 at last check).
@@ -235,7 +241,7 @@ class FetchResult:
     status: str  # "ok", "unresolved", "no-pds", "fetch-err:<type>", "parse-err"
 
 
-def fetch_recommends_for_did(client: httpx.Client, did: str) -> FetchResult:
+def fetch_recommends_for_did(client: httpx.Client, did: str, collection: str, doc_field: str) -> FetchResult:
     pds = resolve_pds(client, did)
     if not pds:
         return FetchResult(did, [], "no-pds")
@@ -252,17 +258,17 @@ def fetch_recommends_for_did(client: httpx.Client, did: str) -> FetchResult:
     except Exception as e:
         return FetchResult(did, [], f"fetch-err:{type(e).__name__}")
     try:
-        entries = _walk_mst(car, COLLECTION)
+        entries = _walk_mst(car, collection)
     except Exception:
         return FetchResult(did, [], "parse-err")
 
     rows: list[tuple[str, str, str, str, str]] = []
     for rkey, value in entries:
-        uri = f"at://{did}/{COLLECTION}/{rkey}"
-        document_uri = value.get("document") if isinstance(value, dict) else None
+        uri = f"at://{did}/{collection}/{rkey}"
+        document_uri = value.get(doc_field) if isinstance(value, dict) else None
         created_at = value.get("createdAt") if isinstance(value, dict) else None
         if not isinstance(document_uri, str):
-            continue  # spec requires document; skip malformed
+            continue  # malformed; skip
         rows.append((uri, did, rkey, document_uri, str(created_at) if created_at else ""))
     return FetchResult(did, rows, "ok")
 
@@ -270,26 +276,13 @@ def fetch_recommends_for_did(client: httpx.Client, did: str) -> FetchResult:
 # ---- Main ---------------------------------------------------------------
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Backfill site.standard.graph.recommend records via CAR walk")
-    parser.add_argument("--dry-run", action="store_true", help="Don't write to Turso")
-    parser.add_argument("--workers", type=int, default=8, help="Concurrent PDS fetches")
-    parser.add_argument("--limit", type=int, default=None, help="Cap DIDs (debug)")
-    args = parser.parse_args()
-
-    try:
-        settings = Settings()  # type: ignore
-    except Exception as e:
-        print(f"error loading settings: {e}", file=sys.stderr)
-        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
-        return 1
-
-    print("enumerating creator DIDs via lightrail...")
-    dids = enumerate_creator_dids(COLLECTION)
+def run_one_lexicon(settings: Settings, collection: str, doc_field: str, args) -> int:
+    print(f"\n=== {collection} (.{doc_field}) ===")
+    print("enumerating creator DIDs...")
+    dids = enumerate_creator_dids(collection)
     if args.limit:
         dids = dids[: args.limit]
     print(f"  {len(dids)} DIDs")
-
     if not dids:
         return 0
 
@@ -299,7 +292,10 @@ def main() -> int:
     rows_acc: list[tuple[str, str, str, str, str]] = []
 
     with httpx.Client() as client, ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(fetch_recommends_for_did, client, did): did for did in dids}
+        futures = {
+            pool.submit(fetch_recommends_for_did, client, did, collection, doc_field): did
+            for did in dids
+        }
         for fut in as_completed(futures):
             res = fut.result()
             statuses[res.status] = statuses.get(res.status, 0) + 1
@@ -310,14 +306,42 @@ def main() -> int:
                 rate = done / elapsed if elapsed > 0 else 0
                 print(f"  [{done}/{len(dids)}] {rate:.1f} dids/s, {len(rows_acc)} records, statuses={statuses}")
 
-    print(f"\ncollected {len(rows_acc)} records from {statuses.get('ok', 0)} DIDs")
+    print(f"collected {len(rows_acc)} records from {statuses.get('ok', 0)} DIDs")
     if args.dry_run:
         print("dry-run: skipping writes")
         return 0
-
     print("upserting...")
     written = turso_upsert_recommends(settings, rows_acc)
     print(f"  wrote {written} rows")
+    return written
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Backfill recommend-shaped records via CAR walk")
+    parser.add_argument("--dry-run", action="store_true", help="Don't write to Turso")
+    parser.add_argument("--workers", type=int, default=8, help="Concurrent PDS fetches")
+    parser.add_argument("--limit", type=int, default=None, help="Cap DIDs per lexicon (debug)")
+    parser.add_argument("--collection", default=None, help="Override: only process this NSID")
+    parser.add_argument("--doc-field", default=None, help="Field holding the document at-uri (paired with --collection)")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        print("required env vars: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        return 1
+
+    if args.collection:
+        field = args.doc_field or "document"
+        lexicons = [(args.collection, field)]
+    else:
+        lexicons = DEFAULT_LEXICONS
+
+    total = 0
+    for collection, doc_field in lexicons:
+        total += run_one_lexicon(settings, collection, doc_field, args)
+    print(f"\ngrand total: {total} rows written across {len(lexicons)} lexicon(s)")
     return 0
 
 

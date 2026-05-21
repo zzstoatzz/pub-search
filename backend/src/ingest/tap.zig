@@ -20,6 +20,10 @@ const STANDARD_DOCUMENT = "site.standard.document";
 const STANDARD_PUBLICATION = "site.standard.publication";
 const STANDARD_RECOMMEND = "site.standard.graph.recommend";
 
+// leaflet's parallel "interactions" lexicon. Most leaflet UI writes
+// recommends here (.subject), not to the cross-platform standard one.
+const LEAFLET_RECOMMEND = "pub.leaflet.interactions.recommend";
+
 // whitewind blog entries
 const WHITEWIND_ENTRY = "com.whtwnd.blog.entry";
 
@@ -35,7 +39,16 @@ fn isPublicationCollection(collection: []const u8) bool {
 }
 
 fn isRecommendCollection(collection: []const u8) bool {
-    return mem.eql(u8, collection, STANDARD_RECOMMEND);
+    return mem.eql(u8, collection, STANDARD_RECOMMEND) or
+        mem.eql(u8, collection, LEAFLET_RECOMMEND);
+}
+
+/// Lexicons disagree on the field name for the recommended doc:
+///   site.standard.graph.recommend -> .document
+///   pub.leaflet.interactions.recommend -> .subject
+/// Normalize at the ingest boundary so downstream code reads one column.
+fn recommendDocFieldName(collection: []const u8) []const u8 {
+    return if (mem.eql(u8, collection, LEAFLET_RECOMMEND)) "subject" else "document";
 }
 
 fn getTapHost() []const u8 {
@@ -311,7 +324,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
                 logfire.err("publication processing error: {}", .{err});
             };
         } else if (isRecommendCollection(rec.collection)) {
-            processRecommend(uri, did.raw, rec.rkey, inner_record) catch |err| {
+            processRecommend(uri, did.raw, rec.rkey, rec.collection, inner_record) catch |err| {
                 logfire.err("recommend processing error: {}", .{err});
             };
         }
@@ -387,11 +400,12 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
     logfire.counter("tap.publications_indexed", 1);
 }
 
-fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collection: []const u8, record: json.ObjectMap) !void {
     const record_val: json.Value = .{ .object = record };
 
-    const document_uri = zat.json.getString(record_val, "document") orelse {
-        logfire.span("tap.dropped", .{ .reason = "recommend_missing_document", .uri = uri }).end();
+    const field = recommendDocFieldName(collection);
+    const document_uri = zat.json.getString(record_val, field) orelse {
+        logfire.span("tap.dropped", .{ .reason = "recommend_missing_document", .uri = uri, .collection = collection }).end();
         return;
     };
     const created_at = zat.json.getString(record_val, "createdAt");

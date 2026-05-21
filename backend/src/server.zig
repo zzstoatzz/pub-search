@@ -357,6 +357,19 @@ const RECOMMENDED_SQL =
     \\LIMIT 50
 ;
 
+// /recommended is served from a 60s in-memory cache. The underlying query
+// (Turso JOIN + GROUP BY across remote DB) takes 1–8s depending on Turso
+// connection latency; the leaderboard moves slowly, so trading mild staleness
+// for ~ms response times is a clear win.
+const RECOMMENDED_CACHE_TTL_NS: i128 = 60 * std.time.ns_per_s;
+
+const RecommendedCache = struct {
+    mu: std.Thread.Mutex = .{},
+    body: ?[]u8 = null, // page_allocator-owned
+    fetched_at_ns: i128 = 0,
+};
+var recommended_cache: RecommendedCache = .{};
+
 fn handleRecommended(request: *http.Server.Request) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -365,7 +378,35 @@ fn handleRecommended(request: *http.Server.Request) !void {
     const span = logfire.span("http.recommended", .{});
     defer span.end();
 
-    try sendJson(request, try getRecommended(alloc));
+    const now_ns: i128 = std.time.nanoTimestamp();
+
+    // fast path: serve from cache if fresh.
+    {
+        recommended_cache.mu.lock();
+        defer recommended_cache.mu.unlock();
+        if (recommended_cache.body) |body| {
+            if (now_ns - recommended_cache.fetched_at_ns < RECOMMENDED_CACHE_TTL_NS) {
+                span.setAttribute("cache", "hit");
+                const copy = try alloc.dupe(u8, body);
+                try sendJson(request, copy);
+                return;
+            }
+        }
+    }
+
+    // slow path: recompute and cache.
+    span.setAttribute("cache", "miss");
+    const fresh = try getRecommended(alloc);
+
+    const stored = std.heap.page_allocator.dupe(u8, fresh) catch null;
+    if (stored) |s| {
+        recommended_cache.mu.lock();
+        defer recommended_cache.mu.unlock();
+        if (recommended_cache.body) |old| std.heap.page_allocator.free(old);
+        recommended_cache.body = s;
+        recommended_cache.fetched_at_ns = now_ns;
+    }
+    try sendJson(request, fresh);
 }
 
 fn getRecommended(alloc: Allocator) ![]const u8 {
