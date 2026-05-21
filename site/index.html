@@ -85,6 +85,14 @@
       font-size: 12px;
       font-weight: normal;
       margin-bottom: 1.5rem;
+      /* anchor the settings gear top-right; reserve space so wrapping
+       * text never tucks under it. mobile gear is 46px (22 svg + 12*2 pad). */
+      position: relative;
+      padding-right: 32px;
+    }
+
+    @media (max-width: 600px) {
+      h1 { padding-right: 50px; }
     }
 
     h1 a.title {
