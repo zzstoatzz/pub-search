@@ -143,15 +143,24 @@
       user-select: none;
     }
     .info:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
-    /* Tip sits flush against the `?` (top: 100%) so there's no dead space
-     * for the cursor to traverse on its way to the link inside. The visible
-     * 8px offset comes from padding-top on the tip itself, which keeps the
-     * whole hover region contiguous. */
-    .info .tip {
+
+    /* Invisible bridge directly below the `?` so the cursor never lands in
+     * dead space when traveling from the button to the tooltip. Without it,
+     * leaving the `?` even briefly drops :hover and closes the tip before
+     * the cursor reaches the link. */
+    .info::after {
+      content: "";
       position: absolute;
       top: 100%;
+      left: -16px;
+      right: -16px;
+      height: 14px;
+    }
+
+    .info .tip {
+      position: absolute;
+      top: calc(100% + 10px);
       left: 0;
-      padding-top: 8px;
       width: max-content;
       max-width: min(360px, 80vw);
       opacity: 0;
