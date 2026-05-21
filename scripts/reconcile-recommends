@@ -1,0 +1,308 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Reconcile our `recommends` table against constellation's view of the network.
+
+For each document that already has at least one recommend in our index,
+ask constellation which DIDs have recommended it across both lexicons:
+  - site.standard.graph.recommend (.document)
+  - pub.leaflet.interactions.recommend (.subject)
+
+For every (did, recommend_uri) constellation knows about but we don't,
+insert a row. This closes the gap from PDSes that don't expose records
+to our CAR-walk backfill (notably Bridgy Fed bridged accounts on
+atproto.brid.gy, which return empty from listRecords + getRepo).
+
+Run intermittently (cron, manual). The live tap path stays primary.
+
+Usage:
+    TURSO_URL=libsql://... TURSO_TOKEN=... ./scripts/reconcile-recommends
+    ./scripts/reconcile-recommends --dry-run
+    ./scripts/reconcile-recommends --workers 16
+    ./scripts/reconcile-recommends --limit-docs 50         # debug
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+CONSTELLATION = "https://constellation.microcosm.blue"
+
+# (collection_nsid, path_in_record) — same pair the backfill script uses.
+LEXICONS = [
+    ("site.standard.graph.recommend", ".document"),
+    ("pub.leaflet.interactions.recommend", ".subject"),
+]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+# ---- Turso ----------------------------------------------------------------
+
+
+def turso_pipeline(settings: Settings, requests: list[dict]) -> list[dict]:
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"https://{settings.turso_host}/v2/pipeline",
+                headers={
+                    "Authorization": f"Bearer {settings.turso_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"requests": [*requests, {"type": "close"}]},
+                timeout=180,
+            )
+            resp.raise_for_status()
+            return resp.json()["results"]
+        except (httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_err = e
+            print(
+                f"  turso pipeline attempt {attempt + 1} failed: {type(e).__name__}; retrying",
+                file=sys.stderr,
+            )
+            time.sleep(2 * (attempt + 1))
+    assert last_err is not None
+    raise last_err
+
+
+def turso_query_rows(settings: Settings, sql: str) -> list[list]:
+    results = turso_pipeline(
+        settings, [{"type": "execute", "stmt": {"sql": sql}}]
+    )
+    r = results[0]
+    if r["type"] == "error":
+        raise RuntimeError(f"Turso query error: {r['error']}")
+    rows = r["response"]["result"]["rows"]
+    return [[c["value"] if isinstance(c, dict) and "value" in c else None for c in row] for row in rows]
+
+
+def turso_upsert_recommends(settings: Settings, rows: list[tuple[str, str, str, str, str]]) -> int:
+    """rows: (uri, did, rkey, document_uri, created_at).
+    Idempotent on uri via ON CONFLICT — safe to re-run."""
+    BATCH = 50
+    written = 0
+    for i in range(0, len(rows), BATCH):
+        chunk = rows[i : i + BATCH]
+        reqs = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": (
+                        "INSERT INTO recommends (uri, did, rkey, document_uri, created_at, indexed_at) "
+                        "VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S','now')) "
+                        "ON CONFLICT(uri) DO UPDATE SET "
+                        "  did = excluded.did, "
+                        "  rkey = excluded.rkey, "
+                        "  document_uri = excluded.document_uri, "
+                        "  created_at = COALESCE(NULLIF(excluded.created_at,''), recommends.created_at), "
+                        "  indexed_at = strftime('%Y-%m-%dT%H:%M:%S','now')"
+                    ),
+                    "args": [
+                        {"type": "text", "value": uri},
+                        {"type": "text", "value": did},
+                        {"type": "text", "value": rkey},
+                        {"type": "text", "value": doc_uri},
+                        {"type": "text", "value": created_at},
+                    ],
+                },
+            }
+            for (uri, did, rkey, doc_uri, created_at) in chunk
+        ]
+        results = turso_pipeline(settings, reqs)
+        for r in results:
+            if r["type"] == "error":
+                print(f"  upsert error: {r['error']}", file=sys.stderr)
+                continue
+            response = r.get("response") or {}
+            if response.get("type") != "execute":
+                continue
+            written += int(response.get("result", {}).get("affected_row_count", 0))
+    return written
+
+
+# ---- Constellation -------------------------------------------------------
+
+
+def constellation_links(
+    client: httpx.Client, target_uri: str, collection: str, path: str
+) -> list[dict]:
+    """Returns linking_records [{did, uri, ...}] pointing at the target."""
+    out: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params: dict = {
+            "target": target_uri,
+            "collection": collection,
+            "path": path,
+            "limit": 200,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            r = client.get(f"{CONSTELLATION}/links", params=params, timeout=20)
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            print(
+                f"  constellation HTTP {e.response.status_code} for {target_uri} ({collection})",
+                file=sys.stderr,
+            )
+            return out
+        except Exception as e:
+            print(f"  constellation error for {target_uri} ({collection}): {type(e).__name__}", file=sys.stderr)
+            return out
+        data = r.json()
+        for rec in data.get("linking_records", []):
+            out.append(rec)
+        cursor = data.get("cursor")
+        if not cursor:
+            return out
+
+
+# ---- Per-document reconciliation ----------------------------------------
+
+
+@dataclass
+class ReconcileResult:
+    doc_uri: str
+    inserted: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    statuses: dict[str, int] = field(default_factory=dict)
+
+
+def reconcile_doc(
+    client: httpx.Client,
+    doc_uri: str,
+    our_keys: set[str],
+) -> ReconcileResult:
+    """Check both lexicons against constellation; return missing rows."""
+    res = ReconcileResult(doc_uri=doc_uri)
+    for collection, path in LEXICONS:
+        const_records = constellation_links(client, doc_uri, collection, path)
+        if not const_records:
+            res.statuses[f"{collection}:empty"] = res.statuses.get(f"{collection}:empty", 0) + 1
+            continue
+        for rec in const_records:
+            # constellation returns {did, collection, rkey} — construct uri
+            did = rec.get("did") or ""
+            rkey = rec.get("rkey") or ""
+            if not did or not rkey:
+                continue
+            link_uri = f"at://{did}/{collection}/{rkey}"
+            key = f"{did}|{collection}|{rkey}"
+            if key in our_keys:
+                continue
+            # we don't get createdAt from constellation; leave empty.
+            # the upsert SQL preserves any prior non-empty value.
+            res.inserted.append((link_uri, did, rkey, doc_uri, ""))
+            res.statuses[f"{collection}:missing"] = res.statuses.get(f"{collection}:missing", 0) + 1
+    return res
+
+
+# ---- Main ---------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Reconcile recommends against constellation")
+    parser.add_argument("--dry-run", action="store_true", help="Don't write to Turso")
+    parser.add_argument("--workers", type=int, default=10, help="Concurrent constellation requests")
+    parser.add_argument("--limit-docs", type=int, default=None, help="Cap docs to check (debug)")
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}", file=sys.stderr)
+        return 1
+
+    # 1. Load every (doc_uri, did, collection_inferred_from_uri, rkey) we already have.
+    # We key on did|collection|rkey so constellation hits can be diffed exactly.
+    print("loading our current recommends...")
+    rows = turso_query_rows(
+        settings,
+        "SELECT document_uri, did, uri FROM recommends",
+    )
+    by_doc: dict[str, set[str]] = {}
+    counts: dict[str, int] = {}
+    for doc_uri, did, link_uri in rows:
+        try:
+            _, _, _, collection, rkey = link_uri.split("/", 4)
+        except ValueError:
+            continue
+        key = f"{did}|{collection}|{rkey}"
+        by_doc.setdefault(doc_uri, set()).add(key)
+        counts[doc_uri] = counts.get(doc_uri, 0) + 1
+    print(f"  {len(rows)} existing rows across {len(by_doc)} documents")
+
+    # process most-recommended docs first — that's where gaps matter most
+    # and where constellation has the largest result sets to validate.
+    doc_uris = sorted(by_doc.keys(), key=lambda u: -counts.get(u, 0))
+    if args.limit_docs:
+        doc_uris = doc_uris[: args.limit_docs]
+
+    # 2. For each doc, ask constellation what it knows.
+    started = time.time()
+    done = 0
+    pending: list[tuple[str, str, str, str, str]] = []
+    status_totals: dict[str, int] = {}
+
+    with httpx.Client() as client, ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(reconcile_doc, client, doc_uri, by_doc[doc_uri]): doc_uri
+            for doc_uri in doc_uris
+        }
+        for fut in as_completed(futures):
+            res = fut.result()
+            for k, v in res.statuses.items():
+                status_totals[k] = status_totals.get(k, 0) + v
+            pending.extend(res.inserted)
+            done += 1
+            if done % 50 == 0 or done == len(doc_uris):
+                elapsed = time.time() - started
+                rate = done / elapsed if elapsed > 0 else 0
+                missing = sum(v for k, v in status_totals.items() if k.endswith(":missing"))
+                print(f"  [{done}/{len(doc_uris)}] {rate:.1f} docs/s, {missing} missing recommends found")
+
+    missing_total = sum(v for k, v in status_totals.items() if k.endswith(":missing"))
+    print(f"\nfound {missing_total} recommends not yet in our index")
+    if args.dry_run:
+        print("dry-run: skipping writes")
+        # show a sample
+        for r in pending[:10]:
+            print(f"  would insert {r[0]} -> {r[3]}")
+        return 0
+    if not pending:
+        print("nothing to insert")
+        return 0
+    print("upserting...")
+    written = turso_upsert_recommends(settings, pending)
+    print(f"  wrote {written} rows")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
