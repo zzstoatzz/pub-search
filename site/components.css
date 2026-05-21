@@ -328,13 +328,10 @@
 
 .lf-settings-btn:hover { color: var(--text-bright, var(--text)); }
 
-/* in the homepage h1, pin to the top-right corner so the chunky mobile
- * tap target never wraps onto its own line beneath the title. */
+/* in the homepage h1 (flex row), push the gear to the right edge of the
+ * content area so it never sits mid-line with awkward whitespace. */
 h1 .lf-settings-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
-  margin-left: 0;
+  margin-left: auto;
 }
 
 @media (max-width: 600px) {
