@@ -70,12 +70,12 @@ canvas:active {
   font-weight: normal;
 }
 
-.header h1 a {
+.header h1 a.title {
   color: var(--text-secondary);
   text-decoration: none;
 }
 
-.header h1 a:hover {
+.header h1 a.title:hover {
   color: var(--text-bright);
 }
 
