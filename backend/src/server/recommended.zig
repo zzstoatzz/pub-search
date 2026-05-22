@@ -117,15 +117,58 @@ const TrendingQuery = zql.Query(
     \\LIMIT 250
 );
 
-// Comptime safety: both queries must select the same columns in the same
-// order so Row's column lookup via TopQuery works for both.
+// Author-filtered variants: same shape with `WHERE d.did = ?`. Author
+// queries bypass the cache (one user one author at a time = unbounded
+// cache key space), so they hit Turso live. Sub-100ms because the WHERE
+// drastically narrows the JOIN.
+const TopByAuthorQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\WHERE d.did = ?
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY recommend_count DESC, d.created_at DESC
+    \\LIMIT 250
+);
+
+const TrendingByAuthorQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\WHERE d.did = ?
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY CAST(recommend_count AS REAL)
+    \\  / MAX(1, julianday('now') - julianday(COALESCE(NULLIF(d.created_at, ''), '1970-01-01'))) DESC,
+    \\  d.created_at DESC
+    \\LIMIT 250
+);
+
+// Comptime safety: all four queries must select the same columns in the
+// same order so Row's column lookup via TopQuery works for all of them.
 comptime {
-    if (TopQuery.columns.len != TrendingQuery.columns.len) {
-        @compileError("Top/Trending column count drift");
-    }
-    for (TopQuery.columns, TrendingQuery.columns) |a, b| {
-        if (!std.mem.eql(u8, a, b)) {
-            @compileError("Top/Trending column name drift: " ++ a ++ " vs " ++ b);
+    const all_queries = .{ TopQuery, TrendingQuery, TopByAuthorQuery, TrendingByAuthorQuery };
+    for (all_queries) |Q| {
+        if (Q.columns.len != TopQuery.columns.len) @compileError("recommended query column count drift");
+        for (Q.columns, TopQuery.columns) |a, b| {
+            if (!std.mem.eql(u8, a, b)) @compileError("recommended query column drift: " ++ a ++ " vs " ++ b);
         }
     }
 }
@@ -163,9 +206,10 @@ const JsonRow = struct {
     totalCount: i64,
 };
 
-/// Fetch top-250 for (window, sort) directly from Turso. Used by the cache
-/// refresh thread and the cold fallback path in the handler.
-pub fn fetch(alloc: Allocator, window: Window, sort: Sort) ![]const u8 {
+/// Fetch top-250 for (window, sort), optionally narrowed to one author.
+/// Used by the cache refresh thread (author=null) and the cold fallback
+/// path / live author-filter path in the handler.
+pub fn fetch(alloc: Allocator, window: Window, sort: Sort, author_did: ?[]const u8) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -173,15 +217,30 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort) ![]const u8 {
 
     // `c.query` takes a comptime SQL string, so we have to branch here
     // rather than pre-select a runtime `sql` value.
-    var res = switch (sort) {
-        .top => c.query(TopQuery.positional, &.{window.dateModifier()}) catch {
-            try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-            return try output.toOwnedSlice();
-        },
-        .trending => c.query(TrendingQuery.positional, &.{window.dateModifier()}) catch {
-            try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-            return try output.toOwnedSlice();
-        },
+    const date_mod = window.dateModifier();
+    var res = blk: {
+        if (author_did) |did| {
+            break :blk switch (sort) {
+                .top => c.query(TopByAuthorQuery.positional, &.{ date_mod, did }) catch {
+                    try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+                    return try output.toOwnedSlice();
+                },
+                .trending => c.query(TrendingByAuthorQuery.positional, &.{ date_mod, did }) catch {
+                    try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+                    return try output.toOwnedSlice();
+                },
+            };
+        }
+        break :blk switch (sort) {
+            .top => c.query(TopQuery.positional, &.{date_mod}) catch {
+                try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+                return try output.toOwnedSlice();
+            },
+            .trending => c.query(TrendingQuery.positional, &.{date_mod}) catch {
+                try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+                return try output.toOwnedSlice();
+            },
+        };
     };
     defer res.deinit();
 
@@ -213,11 +272,11 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort) ![]const u8 {
 }
 
 fn refreshTop(slot: Window, alloc: Allocator) anyerror![]const u8 {
-    return fetch(alloc, slot, .top);
+    return fetch(alloc, slot, .top, null);
 }
 
 fn refreshTrending(slot: Window, alloc: Allocator) anyerror![]const u8 {
-    return fetch(alloc, slot, .trending);
+    return fetch(alloc, slot, .trending, null);
 }
 
 /// Two parallel caches keyed by Sort, each storing 5 window slots. Two

@@ -98,7 +98,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     } else if (mem.eql(u8, path, "/api/latency")) {
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
-        try handleRecommended(request, target);
+        try handleRecommended(request, target, io);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -329,10 +329,9 @@ fn getPopularLocal(alloc: Allocator, local: *db.LocalDb, limit: usize) ![]const 
 }
 
 /// Thin wrapper around `server/recommended.zig`. Parses query params,
-/// pulls a cache snapshot (cold-falls-back to a live Turso fetch), slices
-/// for pagination, returns JSON. All recommended-specific logic — SQL,
-/// types, cache, refresh loop — lives in the sub-module.
-fn handleRecommended(request: *http.Server.Request, target: []const u8) !void {
+/// pulls a cache snapshot (or live-queries for author-filtered views,
+/// which can't reasonably be cached). Slices for pagination, returns JSON.
+fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -344,6 +343,7 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8) !void {
     const offset_str = parseQueryParam(alloc, target, "offset") catch null;
     const since_str = parseQueryParam(alloc, target, "since") catch null;
     const sort_str = parseQueryParam(alloc, target, "sort") catch null;
+    const author_param = parseQueryParam(alloc, target, "author") catch null;
     const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
     const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
     const window = recommended.Window.fromString(since_str);
@@ -351,16 +351,33 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8) !void {
     span.setAttribute("window", window.slug());
     span.setAttribute("sort", sort.slug());
 
-    var snapshot = try recommended.snapshot(sort, window, alloc);
-    if (snapshot != null) {
-        span.setAttribute("cache", "hit");
+    // resolve author → DID (accept either form, matches search.zig's pattern)
+    const author_did: ?[]const u8 = if (author_param) |ap| blk: {
+        if (mem.startsWith(u8, ap, "did:")) break :blk ap;
+        break :blk resolveHandle(alloc, ap, io) catch null;
+    } else null;
+    if (author_did) |d| span.setAttribute("author", d);
+
+    var body: []u8 = undefined;
+    if (author_did) |did| {
+        // author-filtered queries bypass the cache — narrow scope means
+        // sub-100ms Turso turnaround, and per-(author, window, sort) cache
+        // slots would explode the working set.
+        span.setAttribute("cache", "bypass");
+        body = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort, did));
     } else {
-        // cold fallback — refresh thread hasn't populated this slot yet.
-        span.setAttribute("cache", "cold");
-        snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort));
+        var snapshot = try recommended.snapshot(sort, window, alloc);
+        if (snapshot != null) {
+            span.setAttribute("cache", "hit");
+        } else {
+            // cold fallback — refresh thread hasn't populated this slot yet.
+            span.setAttribute("cache", "cold");
+            snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort, null));
+        }
+        body = snapshot.?;
     }
 
-    const sliced = try recommended.sliceJson(alloc, snapshot.?, limit, offset);
+    const sliced = try recommended.sliceJson(alloc, body, limit, offset);
     try sendJson(request, sliced);
 }
 
