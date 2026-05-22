@@ -125,10 +125,22 @@
       font-size: 11px;
       color: var(--text-dim);
       margin-bottom: 1.25rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.4rem;
     }
     .subhead a { color: var(--text-dim); }
     .subhead a:hover { color: var(--text-bright); }
-    .subhead .sep { color: var(--text-muted); margin: 0 0.4rem; }
+    .subhead .src {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .subhead .stats-link {
+      font-size: 10px;
+      color: #553;
+    }
+    .subhead .stats-link:hover { color: #d4956a; }
 
     .search-box {
       display: flex;
@@ -919,7 +931,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="components.css">
+  <link rel="stylesheet" href="components.css?v=1779491569">
   <script src="clients.js"></script>
   <script src="ui.js"></script>
 </head>
@@ -938,8 +950,8 @@
 
     <div class="subhead">
       by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a>
-      <span class="sep">·</span>
-      <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank">source</a>
+      <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a>
+      <a id="header-stats" href="/dashboard.html" class="stats-link"></a>
     </div>
 
     <div class="search-box">
@@ -1800,9 +1812,10 @@
     fetch(`${API_URL}/stats`)
       .then(r => r.json())
       .then(data => {
-        // doc count now lives in the subhead so the header strip stays
-        // clean; footer keeps the nav links.
-        statsDiv.innerHTML = `${data.documents.toLocaleString()} documents · <a href="/dashboard.html">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a>`;
+        // doc count lives in the subhead next to attribution.
+        const headerStats = document.getElementById('header-stats');
+        if (headerStats) headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
+        statsDiv.innerHTML = `<a href="/dashboard.html">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a>`;
       })
       .catch(() => {
         statsDiv.textContent = 'connecting...';
