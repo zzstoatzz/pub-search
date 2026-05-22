@@ -284,6 +284,34 @@
     }
     .row .lf-row-more:hover { color: var(--text-secondary); }
 
+    /* window picker (since=day|week|month|year|all) */
+    .windows {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: -0.25rem 0 1rem;
+    }
+    .win-pill {
+      font-size: 11px;
+      padding: 3px 9px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-subtle);
+      border-radius: 3px;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-family: monospace;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .win-pill:hover {
+      color: var(--text);
+      border-color: var(--border-focus);
+    }
+    .win-pill.active {
+      background: rgba(14, 165, 233, 0.18);
+      border-color: #0ea5e9;
+      color: #38bdf8;
+    }
+
     .load-more {
       text-align: center;
       padding: 1.25rem 0;
@@ -341,6 +369,14 @@
       </span></span></span>
     </div>
 
+    <div class="windows" id="windows" role="tablist" aria-label="time window">
+      <button class="win-pill" data-window="day"   role="tab">day</button>
+      <button class="win-pill" data-window="week"  role="tab">week</button>
+      <button class="win-pill" data-window="month" role="tab">month</button>
+      <button class="win-pill" data-window="year"  role="tab">year</button>
+      <button class="win-pill" data-window="all"   role="tab">all-time</button>
+    </div>
+
     <div id="status" class="status">loading…</div>
     <div id="list"></div>
   </div>
@@ -380,8 +416,13 @@
       + 'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 
     var PAGE_SIZE = 20;
+    var WINDOWS = ['day', 'week', 'month', 'year', 'all'];
     var currentOffset = 0;
     var totalRendered = 0;
+    var currentWindow = (function() {
+      var p = new URLSearchParams(location.search).get('since');
+      return WINDOWS.indexOf(p) >= 0 ? p : 'all';
+    })();
 
     function escapeHtml(s) {
       return String(s == null ? '' : s)
@@ -497,7 +538,8 @@
     }
 
     function fetchPage(offset, append) {
-      var url = API_BASE + '/recommended?limit=' + PAGE_SIZE + '&offset=' + offset;
+      var url = API_BASE + '/recommended?limit=' + PAGE_SIZE + '&offset=' + offset
+        + '&since=' + encodeURIComponent(currentWindow);
       fetch(url)
         .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
         .then(function(data) {
@@ -514,6 +556,33 @@
       fetchPage(currentOffset, true);
     }
     window.loadMore = loadMore;
+
+    function syncWindowPills() {
+      document.querySelectorAll('.win-pill').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.window === currentWindow);
+      });
+    }
+
+    function setWindow(w) {
+      if (currentWindow === w) return;
+      currentWindow = w;
+      currentOffset = 0;
+      // mirror in URL; "all" is the default, leave it bare for clean links.
+      var u = new URL(location.href);
+      if (w === 'all') u.searchParams.delete('since');
+      else u.searchParams.set('since', w);
+      history.replaceState(null, '', u);
+      syncWindowPills();
+      document.getElementById('status').textContent = 'loading…';
+      document.getElementById('list').innerHTML = '';
+      totalRendered = 0;
+      fetchPage(0, false);
+    }
+
+    document.querySelectorAll('.win-pill').forEach(function(b) {
+      b.addEventListener('click', function() { setWindow(b.dataset.window); });
+    });
+    syncWindowPills();
 
     fetchPage(0, false);
 

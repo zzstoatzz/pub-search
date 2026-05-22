@@ -86,11 +86,12 @@ async function fetchSearchResults(params) {
   }
 }
 
-async function fetchRecommended() {
+async function fetchRecommended(since) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
+  const qs = since && since !== "all" ? `?since=${encodeURIComponent(since)}&limit=20` : `?limit=20`;
   try {
-    const res = await fetch(`${API_URL}/recommended`, {
+    const res = await fetch(`${API_URL}/recommended${qs}`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -101,9 +102,17 @@ async function fetchRecommended() {
   }
 }
 
-function buildRecommendedImage(rows) {
+const WINDOW_LABELS = {
+  day: "in the last day",
+  week: "this week",
+  month: "this month",
+  year: "this year",
+};
+
+function buildRecommendedImage(rows, since) {
   const top = (rows || []).slice(0, 6);
   const totalRecs = (rows || []).reduce((s, r) => s + (r.recommendCount || 0), 0);
+  const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
 
   // header block: "pub search / recommended" tag, then the page title.
   // Putting these inside a flex column with explicit gap is more reliable
@@ -142,8 +151,21 @@ function buildRecommendedImage(rows) {
               fontSize: "44px",
               letterSpacing: "-0.5px",
               lineHeight: "1",
+              display: "flex",
+              alignItems: "baseline",
+              gap: "14px",
+              flexWrap: "wrap",
             },
-            children: "most-recommended posts",
+            children: [
+              "most-recommended posts",
+              {
+                type: "div",
+                props: {
+                  style: { color: "#38bdf8", fontSize: "22px" },
+                  children: windowLabel,
+                },
+              },
+            ],
           },
         },
       ],
@@ -633,8 +655,9 @@ export async function onRequest(context) {
 
   // recommended leaderboard page
   if (page === "recommended") {
-    const rows = await fetchRecommended();
-    const html = buildRecommendedImage(rows);
+    const since = url.searchParams.get("since");
+    const rows = await fetchRecommended(since);
+    const html = buildRecommendedImage(rows, since);
     return new ImageResponse(html, {
       width: 1200,
       height: 630,
