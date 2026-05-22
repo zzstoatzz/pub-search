@@ -55,10 +55,31 @@ pub const Window = enum {
     }
 };
 
-// One query, parameterized by date modifier. `recommend_count` is windowed
-// (drives rank); `total_count` is all-time (displayed). They're equal for
-// `.all`.
-const Query = zql.Query(
+pub const Sort = enum {
+    /// most recommenders in the window, period.
+    top,
+    /// recommends-per-day-since-publish — surfaces recent velocity, not raw size.
+    trending,
+
+    pub fn fromString(s: ?[]const u8) Sort {
+        const str = s orelse return .top;
+        if (std.mem.eql(u8, str, "trending")) return .trending;
+        return .top;
+    }
+
+    pub fn slug(self: Sort) []const u8 {
+        return @tagName(self);
+    }
+};
+
+// Two queries with IDENTICAL column projection — only ORDER BY differs.
+// `recommend_count` is windowed (drives rank); `total_count` is all-time
+// (displayed). They're equal for `.all`.
+//
+// TopQuery: rank by raw count.
+// TrendingQuery: rank by recommends-per-day-since-publish. The `+1` and
+// COALESCE-to-epoch defensively handle malformed/missing created_at.
+const TopQuery = zql.Query(
     \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
     \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
     \\  COALESCE(d.path, '') AS path, d.has_publication,
@@ -75,6 +96,39 @@ const Query = zql.Query(
     \\ORDER BY recommend_count DESC, d.created_at DESC
     \\LIMIT 250
 );
+
+const TrendingQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY CAST(recommend_count AS REAL)
+    \\  / MAX(1, julianday('now') - julianday(COALESCE(NULLIF(d.created_at, ''), '1970-01-01'))) DESC,
+    \\  d.created_at DESC
+    \\LIMIT 250
+);
+
+// Comptime safety: both queries must select the same columns in the same
+// order so Row's column lookup via TopQuery works for both.
+comptime {
+    if (TopQuery.columns.len != TrendingQuery.columns.len) {
+        @compileError("Top/Trending column count drift");
+    }
+    for (TopQuery.columns, TrendingQuery.columns) |a, b| {
+        if (!std.mem.eql(u8, a, b)) {
+            @compileError("Top/Trending column name drift: " ++ a ++ " vs " ++ b);
+        }
+    }
+}
 
 const Row = struct {
     uri: []const u8,
@@ -109,24 +163,34 @@ const JsonRow = struct {
     totalCount: i64,
 };
 
-/// Fetch top-250 for `window` directly from Turso. Used by the cache refresh
-/// thread and the cold fallback path in the handler.
-pub fn fetch(alloc: Allocator, window: Window) ![]const u8 {
+/// Fetch top-250 for (window, sort) directly from Turso. Used by the cache
+/// refresh thread and the cold fallback path in the handler.
+pub fn fetch(alloc: Allocator, window: Window, sort: Sort) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
-    var res = c.query(Query.positional, &.{window.dateModifier()}) catch {
-        try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-        return try output.toOwnedSlice();
+    // `c.query` takes a comptime SQL string, so we have to branch here
+    // rather than pre-select a runtime `sql` value.
+    var res = switch (sort) {
+        .top => c.query(TopQuery.positional, &.{window.dateModifier()}) catch {
+            try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+            return try output.toOwnedSlice();
+        },
+        .trending => c.query(TrendingQuery.positional, &.{window.dateModifier()}) catch {
+            try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+            return try output.toOwnedSlice();
+        },
     };
     defer res.deinit();
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = Query.fromRow(Row, row);
+        // Both queries share the column projection (asserted at comptime
+        // above), so either one's fromRow works.
+        const r = TopQuery.fromRow(Row, row);
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(JsonRow{
             .type = doc_type,
@@ -148,18 +212,39 @@ pub fn fetch(alloc: Allocator, window: Window) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
-fn refreshCb(slot: Window, alloc: Allocator) anyerror![]const u8 {
-    return fetch(alloc, slot);
+fn refreshTop(slot: Window, alloc: Allocator) anyerror![]const u8 {
+    return fetch(alloc, slot, .top);
 }
 
-pub const Cache = cache.WindowedJsonCache(Window, .{
-    .name = "recommended",
-    .refresh = &refreshCb,
+fn refreshTrending(slot: Window, alloc: Allocator) anyerror![]const u8 {
+    return fetch(alloc, slot, .trending);
+}
+
+/// Two parallel caches keyed by Sort, each storing 5 window slots. Two
+/// refresh threads run in parallel (Turso handles concurrent connections
+/// fine and total tick work is well under the 45s interval).
+pub const TopCache = cache.WindowedJsonCache(Window, .{
+    .name = "recommended.top",
+    .refresh = &refreshTop,
+});
+pub const TrendingCache = cache.WindowedJsonCache(Window, .{
+    .name = "recommended.trending",
+    .refresh = &refreshTrending,
 });
 
-/// Spawn the background refresh thread. Call from initServices.
+/// Allocator-duped cached body for (sort, window), or null if no cache
+/// instance has populated it yet. Caller owns the slice.
+pub fn snapshot(sort: Sort, window: Window, alloc: Allocator) !?[]u8 {
+    return switch (sort) {
+        .top => TopCache.snapshot(window, alloc),
+        .trending => TrendingCache.snapshot(window, alloc),
+    };
+}
+
+/// Spawn background refresh threads. Call from initServices.
 pub fn init(io: Io) void {
-    Cache.init(io);
+    TopCache.init(io);
+    TrendingCache.init(io);
 }
 
 /// Parse the cached top-N JSON array and re-emit only [offset, offset+limit).

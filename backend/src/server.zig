@@ -343,18 +343,21 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8) !void {
     const limit_str = parseQueryParam(alloc, target, "limit") catch null;
     const offset_str = parseQueryParam(alloc, target, "offset") catch null;
     const since_str = parseQueryParam(alloc, target, "since") catch null;
+    const sort_str = parseQueryParam(alloc, target, "sort") catch null;
     const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
     const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
     const window = recommended.Window.fromString(since_str);
+    const sort = recommended.Sort.fromString(sort_str);
     span.setAttribute("window", window.slug());
+    span.setAttribute("sort", sort.slug());
 
-    var snapshot = try recommended.Cache.snapshot(window, alloc);
+    var snapshot = try recommended.snapshot(sort, window, alloc);
     if (snapshot != null) {
         span.setAttribute("cache", "hit");
     } else {
         // cold fallback — refresh thread hasn't populated this slot yet.
         span.setAttribute("cache", "cold");
-        snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window));
+        snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort));
     }
 
     const sliced = try recommended.sliceJson(alloc, snapshot.?, limit, offset);
