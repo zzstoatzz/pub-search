@@ -464,6 +464,7 @@
     });
   </script>
   <script src="clients.js"></script>
+  <script src="identity.js"></script>
   <script src="ui.js"></script>
   <script>
     var API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
@@ -624,25 +625,17 @@
       wireRowActions(list);
     }
 
-    // Batch-resolve DID → handle via bsky's getProfiles, swap in-place once
-    // resolved. Used by the curators view; the posts view doesn't need this
-    // because rows already display titles.
+    // Batch-resolve DID → handle via LeafletIdentity (typeahead.waow.tech),
+    // swap in-place once resolved. Used by the curators view; the posts view
+    // doesn't need this because rows already display titles.
     function resolveHandles(rows) {
       var dids = rows.map(function(r) { return r.did; }).filter(function(d) {
         return d && !handleCache.has(d);
       });
       if (dids.length === 0) { applyHandles(); return; }
-      var chunks = [];
-      for (var i = 0; i < dids.length; i += 25) chunks.push(dids.slice(i, i + 25));
-      Promise.all(chunks.map(function(chunk) {
-        var qs = chunk.map(function(d) { return 'actors=' + encodeURIComponent(d); }).join('&');
-        return fetch('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?' + qs)
-          .then(function(r) { return r.ok ? r.json() : null; })
-          .catch(function() { return null; });
-      })).then(function(results) {
-        results.forEach(function(d) {
-          if (!d || !d.profiles) return;
-          d.profiles.forEach(function(p) { handleCache.set(p.did, p.handle); });
+      window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
+        profiles.forEach(function(p, key) {
+          if (key.indexOf('did:') === 0 && p.handle) handleCache.set(key, p.handle);
         });
         applyHandles();
       });
@@ -765,15 +758,11 @@
       if (x) x.addEventListener('click', clearAuthor);
 
       // If we only have a DID, kick off a handle lookup so the chip updates
-      // once bsky responds. Reuses the same path the curator rows use.
+      // once identity resolution returns. Reuses LeafletIdentity (typeahead).
       if (currentAuthor.indexOf('did:') === 0 && !handleCache.has(currentAuthor)) {
-        fetch('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=' +
-          encodeURIComponent(currentAuthor))
-          .then(function(r) { return r.ok ? r.json() : null; })
-          .then(function(d) {
-            if (d && d.handle) { handleCache.set(currentAuthor, d.handle); renderAuthorChip(); }
-          })
-          .catch(function() {});
+        window.LeafletIdentity.resolveProfile(currentAuthor).then(function(p) {
+          if (p && p.handle) { handleCache.set(currentAuthor, p.handle); renderAuthorChip(); }
+        });
       }
     }
 

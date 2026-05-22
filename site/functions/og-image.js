@@ -100,10 +100,11 @@ async function fetchCurators(since) {
   }
 }
 
-function buildCuratorsImage(rows, since) {
+function buildCuratorsImage(rows, since, handleMap) {
   const top = (rows || []).slice(0, 6);
   const totalRecs = (rows || []).reduce((s, r) => s + (r.totalRecommends || 0), 0);
   const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
+  const handles = handleMap || new Map();
 
   const shortDid = (did) => {
     const parts = String(did || "").split(":");
@@ -180,7 +181,10 @@ function buildCuratorsImage(rows, since) {
             children: [
               {
                 type: "div",
-                props: { style: { color: "#fff", fontSize: "22px" }, children: shortDid(c.did) },
+                props: {
+                  style: { color: "#fff", fontSize: "22px" },
+                  children: handles.get(c.did) ? "@" + handles.get(c.did) : shortDid(c.did),
+                },
               },
               {
                 type: "div",
@@ -262,26 +266,45 @@ async function fetchRecommended(since, sort, author) {
   }
 }
 
-// resolve a DID via bsky's public AppView; returns handle or null on failure.
-// Used so the OG card can show "@nate.leaflet.pub" instead of "did:plc:xyz".
-async function resolveHandle(didOrHandle) {
-  if (!didOrHandle) return null;
-  if (!didOrHandle.startsWith("did:")) return didOrHandle.replace(/^@/, "");
+// Identity lookups go through typeahead.waow.tech (drop-in for
+// app.bsky.actor.getProfiles) so the OG worker doesn't hit
+// public.api.bsky.app directly. Both single + batch use the plural
+// endpoint — `getProfile` (singular) isn't exposed by typeahead.
+const TYPEAHEAD_BASE = "https://typeahead.waow.tech";
+
+async function resolveHandles(actors) {
+  const out = new Map();
+  if (!actors || actors.length === 0) return out;
+  const unique = Array.from(new Set(actors.filter(Boolean))).slice(0, 25);
+  if (unique.length === 0) return out;
+  const qs = unique.map((a) => "actors=" + encodeURIComponent(a)).join("&");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1500);
   try {
     const res = await fetch(
-      `https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(didOrHandle)}`,
+      `${TYPEAHEAD_BASE}/xrpc/app.bsky.actor.getProfiles?${qs}`,
       { signal: controller.signal },
     );
     clearTimeout(timeout);
-    if (!res.ok) return null;
+    if (!res.ok) return out;
     const d = await res.json();
-    return d && d.handle ? d.handle : null;
+    if (d && Array.isArray(d.profiles)) {
+      for (const p of d.profiles) {
+        if (p.handle && p.did) out.set(p.did, p.handle);
+      }
+    }
+    return out;
   } catch {
     clearTimeout(timeout);
-    return null;
+    return out;
   }
+}
+
+async function resolveHandle(didOrHandle) {
+  if (!didOrHandle) return null;
+  if (!didOrHandle.startsWith("did:")) return didOrHandle.replace(/^@/, "");
+  const map = await resolveHandles([didOrHandle]);
+  return map.get(didOrHandle) || null;
 }
 
 function shortDidImg(did) {
@@ -864,7 +887,11 @@ export async function onRequest(context) {
   if (page === "curators") {
     const since = url.searchParams.get("since");
     const rows = await fetchCurators(since);
-    const html = buildCuratorsImage(rows, since);
+    // resolve handles for the rows that will actually render on the card
+    // so the leaderboard shows @handles instead of raw DID stems.
+    const topDids = (rows || []).slice(0, 6).map((r) => r.did).filter(Boolean);
+    const handles = await resolveHandles(topDids);
+    const html = buildCuratorsImage(rows, since, handles);
     return new ImageResponse(html, {
       width: 1200,
       height: 630,

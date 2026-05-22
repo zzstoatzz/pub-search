@@ -919,6 +919,7 @@
   </style>
   <link rel="stylesheet" href="components.css?v=1779491569">
   <script src="clients.js"></script>
+  <script src="identity.js"></script>
   <script src="ui.js"></script>
 </head>
 <body>
@@ -1213,18 +1214,10 @@
 
       if (toFetch.length > 0) {
         try {
-          // batch up to 25 per request
-          for (let i = 0; i < toFetch.length; i += 25) {
-            const batch = toFetch.slice(i, i + 25);
-            const params = batch.map(d => `actors=${encodeURIComponent(d)}`).join('&');
-            const res = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?${params}`);
-            if (res.ok) {
-              const data = await res.json();
-              for (const profile of data.profiles) {
-                authorCache.set(profile.did, profile.handle);
-              }
-            }
-          }
+          const profiles = await window.LeafletIdentity.resolveProfiles(toFetch);
+          profiles.forEach((p, key) => {
+            if (key.startsWith('did:') && p.handle) authorCache.set(key, p.handle);
+          });
         } catch (e) {
           // graceful degradation — results already visible without names
         }
@@ -1708,15 +1701,12 @@
       currentAuthor = initialAuthor;
       // resolve author handle if it's a DID and not yet cached
       if (initialAuthor.startsWith('did:') && !authorCache.has(initialAuthor)) {
-        fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?actors=${encodeURIComponent(initialAuthor)}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
-            if (data?.profiles?.[0]) {
-              authorCache.set(data.profiles[0].did, data.profiles[0].handle);
-              renderActiveFilter();
-            }
-          })
-          .catch(() => {});
+        window.LeafletIdentity.resolveProfile(initialAuthor).then(p => {
+          if (p && p.did && p.handle) {
+            authorCache.set(p.did, p.handle);
+            renderActiveFilter();
+          }
+        });
       }
     }
     if (initialMode) currentMode = initialMode;
