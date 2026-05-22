@@ -167,11 +167,22 @@
     try { navigator.clipboard.writeText(text); } catch (e) {}
   }
 
+  // Single "Open in <preferred client>" entry — honors the choice the
+  // user persisted via openSettings(). The settings sheet is where
+  // alternate clients live; the menu just routes to whatever they picked.
+  function preferredClientItem(handleOrDid) {
+    var c = window.LeafletClients.getPreferredClient();
+    return {
+      label: 'Open in ' + c.label,
+      iconUrl: c.iconUrl,
+      onSelect: function() { window.open(c.profileUrl(handleOrDid), '_blank'); },
+    };
+  }
+
   // Per-author menu — used on result-row @handle links, typeahead
   // suggestions, and the resolved handle on /curators rows. Accepts
   // bare handle (no leading @) and did.
   function authorMenuItems(handle, did) {
-    var clients = window.LeafletClients.CLIENTS;
     var items = [
       { label: 'View on atlas', onSelect: function() {
         location.href = '/atlas.html?q=' + encodeURIComponent('@' + handle);
@@ -183,13 +194,7 @@
       }});
     }
     items.push({ divider: true });
-    clients.forEach(function(c) {
-      items.push({
-        label: 'Open in ' + c.label,
-        iconUrl: c.iconUrl,
-        onSelect: function() { window.open(c.profileUrl(did || handle), '_blank'); },
-      });
-    });
+    items.push(preferredClientItem(did || handle));
     items.push({ divider: true });
     items.push({ label: 'Copy handle', onSelect: function() { copyToClipboard('@' + handle); } });
     return items;
@@ -198,7 +203,6 @@
   // Per-curator menu — same person-like shape as author but framed around
   // their curation work. handle may be empty before bsky resolution returns.
   function curatorMenuItems(handle, did) {
-    var clients = window.LeafletClients.CLIENTS;
     var items = [];
     if (did) {
       items.push({ label: "View this curator's recommended posts", onSelect: function() {
@@ -211,13 +215,7 @@
       }});
     }
     items.push({ divider: true });
-    clients.forEach(function(c) {
-      items.push({
-        label: 'Open in ' + c.label,
-        iconUrl: c.iconUrl,
-        onSelect: function() { window.open(c.profileUrl(did || handle), '_blank'); },
-      });
-    });
+    items.push(preferredClientItem(did || handle));
     if (handle) {
       items.push({ divider: true });
       items.push({ label: 'Copy handle', onSelect: function() { copyToClipboard('@' + handle); } });

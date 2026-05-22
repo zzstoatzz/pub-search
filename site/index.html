@@ -81,66 +81,52 @@
     a { color: #1B7340; text-decoration: none; }
     a:hover { color: #2a9d5c; }
 
-    /* shared top-strip header — matches atlas, recommended, dashboard.
-     * h1 on the left, nav (page links + settings + theme) on the right. */
-    .top {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 12px;
-      margin-bottom: 1rem;
-    }
-    .top h1 {
+    h1 {
       font-size: 12px;
       font-weight: normal;
-    }
-    .top h1 a.title { color: var(--text-secondary); }
-    .top h1 a.title:hover { color: var(--text-bright); }
-    .top h1 .dim { color: var(--text-dim); }
-    .top .nav {
-      margin-left: auto;
+      margin-bottom: 1.5rem;
+      /* flex row so the gear can be pushed to the right edge of the
+       * content area instead of floating mid-line. wraps if needed. */
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      font-size: 11px;
-    }
-    .top .nav a {
-      color: var(--text-dim);
-      padding: 0.3rem 0.1rem;
-    }
-    .top .nav a:hover { color: var(--text-bright); }
-    .theme-toggle {
-      cursor: pointer;
-      color: var(--text-dim);
-      user-select: none;
-      padding: 0.3rem 0.4rem;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .theme-toggle:hover { color: var(--text-secondary); }
-
-    /* small attribution + dynamic doc-count line under the strip, homepage-only */
-    .subhead {
-      font-size: 11px;
-      color: var(--text-dim);
-      margin-bottom: 1.25rem;
-      display: flex;
       flex-wrap: wrap;
-      align-items: baseline;
       gap: 0.4rem;
     }
-    .subhead a { color: var(--text-dim); }
-    .subhead a:hover { color: var(--text-bright); }
-    .subhead .src {
+
+    h1 a.title {
+      color: var(--text-secondary);
+    }
+
+    h1 a.title:hover {
+      color: var(--text-bright);
+    }
+
+    h1 a.src {
       font-size: 10px;
       color: var(--text-muted);
     }
-    .subhead .stats-link {
+
+    h1 a.stats-link {
       font-size: 10px;
       color: #553;
     }
-    .subhead .stats-link:hover { color: #d4956a; }
+
+    h1 a.stats-link:hover {
+      color: #d4956a;
+    }
+
+    h1 .by {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+
+    h1 .by a {
+      color: var(--text-dim);
+    }
+
+    h1 .by a:hover {
+      color: #1B7340;
+    }
 
     .search-box {
       display: flex;
@@ -937,22 +923,7 @@
 </head>
 <body>
   <div class="container">
-    <div class="top">
-      <h1><a href="/" class="title">pub search</a></h1>
-      <div class="nav">
-        <a href="/dashboard.html">stats</a>
-        <a href="/atlas.html">atlas</a>
-        <a href="/recommended.html">recommended</a>
-        <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
-        <span class="theme-toggle" id="theme-toggle"></span>
-      </div>
-    </div>
-
-    <div class="subhead">
-      by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a>
-      <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a>
-      <a id="header-stats" href="/dashboard.html" class="stats-link"></a>
-    </div>
+    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="search syntax">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button></h1>
 
     <div class="search-box">
       <div class="lf-typeahead-wrap">
@@ -960,7 +931,6 @@
         <input type="text" id="query" placeholder="search content..." autofocus>
       </div>
       <button id="search-btn">search</button>
-      <button class="syntax-help-btn" id="syntax-help-btn" title="search syntax">?</button>
     </div>
 
     <div class="syntax-help" id="syntax-help">
@@ -987,6 +957,7 @@
     </div>
 
     <div id="stats" class="stats"></div>
+    <div class="stats" style="margin-top:0.5rem"><span class="theme-toggle" id="theme-toggle"></span></div>
   </div>
 
   <script>
@@ -1812,10 +1783,10 @@
     fetch(`${API_URL}/stats`)
       .then(r => r.json())
       .then(data => {
-        // doc count lives in the subhead next to attribution.
-        const headerStats = document.getElementById('header-stats');
-        if (headerStats) headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
         statsDiv.innerHTML = `<a href="/dashboard.html">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a>`;
+        const headerStats = document.getElementById('header-stats');
+        headerStats.href = '/dashboard.html';
+        headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
       })
       .catch(() => {
         statsDiv.textContent = 'connecting...';

@@ -72,38 +72,28 @@
       line-height: 1.6;
     }
 
-    .container { max-width: 760px; margin: 0 auto; }
+    .container { max-width: 600px; margin: 0 auto; }
 
     a { color: var(--accent-dim); text-decoration: none; }
     a:hover { color: var(--accent); }
 
-    /* header row matches atlas: title left, nav right */
-    .top {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 12px;
-      margin-bottom: 1.5rem;
-    }
-    .top h1 {
+    /* Header matches the homepage shape: title + dim suffix + inline
+     * controls (settings, theme). Flex so the gear/theme sit at the right. */
+    h1 {
       font-size: 12px;
       font-weight: normal;
-    }
-    .top h1 a.title { color: var(--text-secondary); }
-    .top h1 a.title:hover { color: var(--text-bright); }
-    .top .dim { color: var(--text-dim); }
-    .top .nav {
-      margin-left: auto;
+      margin-bottom: 1.5rem;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      font-size: 11px;
+      flex-wrap: wrap;
+      gap: 0.4rem;
     }
-    .top .nav a {
-      color: var(--text-dim);
-      padding: 0.3rem 0.1rem;
-    }
-    .top .nav a:hover { color: var(--text-bright); }
+    h1 a.title { color: var(--text-secondary); }
+    h1 a.title:hover { color: var(--text-bright); }
+    h1 .dim { color: var(--text-dim); }
+    /* push the settings gear to the right edge so it sits at the line's
+     * end, matching the homepage's pinned gear behavior. */
+    h1 .lf-settings-btn { margin-left: auto; }
     .theme-toggle {
       cursor: pointer;
       color: var(--text-dim);
@@ -335,6 +325,28 @@
       color: var(--text-bright);
     }
 
+    /* active-author chip: shown when ?author= is in the URL */
+    .filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 4px 10px;
+      background: rgba(42, 157, 92, 0.15);
+      border: 1px solid var(--accent-dim);
+      border-radius: 3px;
+      color: #34d399;
+      font-size: 12px;
+      margin: 0 0 1rem;
+    }
+    .filter-chip .x {
+      cursor: pointer;
+      opacity: 0.7;
+      padding: 0 2px;
+      line-height: 1;
+    }
+    .filter-chip .x:hover { opacity: 1; color: #f87171; }
+    .filter-chip .label-handle { color: var(--text-bright); }
+
     /* window picker (since=day|week|month|year|all) */
     .windows {
       display: flex;
@@ -400,18 +412,9 @@
 </head>
 <body>
   <div class="container">
-    <div class="top">
-      <h1>
-        <a href="/" class="title">pub search</a>
-        <span class="dim">/ recommended</span>
-      </h1>
-      <div class="nav">
-        <a href="/dashboard.html">stats</a>
-        <a href="/atlas.html">atlas</a>
-        <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
-        <span class="theme-toggle" id="theme-toggle"></span>
-      </div>
-    </div>
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ recommended</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <span class="theme-toggle" id="theme-toggle"></span></h1>
+
+    <div id="author-chip-host"></div>
 
     <div class="views" role="tablist" aria-label="view">
       <button class="view-pill" data-view="posts"    role="tab">posts</button>
@@ -484,6 +487,14 @@
       var p = new URLSearchParams(location.search).get('view');
       return VIEWS.indexOf(p) >= 0 ? p : 'posts';
     })();
+    // ?author=did:... or @handle filters the posts view to one writer.
+    // Curators view + author doesn't make sense (you don't filter curators
+    // by who they wrote) — when an author is set we force the posts view.
+    var currentAuthor = (function() {
+      var p = new URLSearchParams(location.search).get('author');
+      return p || '';
+    })();
+    if (currentAuthor) currentView = 'posts';
     // DID → handle cache for curator rows (and post rows' author menu)
     var handleCache = new Map();
 
@@ -706,6 +717,10 @@
       var endpoint = (currentView === 'curators') ? '/curators' : '/recommended';
       var url = API_BASE + endpoint + '?limit=' + PAGE_SIZE + '&offset=' + offset
         + '&since=' + encodeURIComponent(currentWindow);
+      // author filter only applies to posts view; backend ignores it on /curators
+      if (currentAuthor && currentView === 'posts') {
+        url += '&author=' + encodeURIComponent(currentAuthor);
+      }
       fetch(url)
         .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
         .then(function(data) {
@@ -727,6 +742,48 @@
       document.querySelectorAll('.win-pill').forEach(function(b) {
         b.classList.toggle('active', b.dataset.window === currentWindow);
       });
+    }
+
+    // Render the active-author chip (if any) and resolve DID → handle for
+    // a nicer label. Clicking × clears the filter and re-fetches.
+    function renderAuthorChip() {
+      var host = document.getElementById('author-chip-host');
+      if (!host) return;
+      if (!currentAuthor) { host.innerHTML = ''; return; }
+      var labelHandle = '';
+      if (currentAuthor.indexOf('did:') === 0) {
+        var cached = handleCache.get(currentAuthor);
+        labelHandle = cached ? '@' + escapeHtml(cached) : escapeHtml(shortDid(currentAuthor));
+      } else {
+        labelHandle = escapeHtml(currentAuthor.charAt(0) === '@' ? currentAuthor : '@' + currentAuthor);
+      }
+      host.innerHTML = '<div class="filter-chip">' +
+        'posts by <span class="label-handle">' + labelHandle + '</span>' +
+        '<span class="x" role="button" aria-label="clear author filter">×</span>' +
+        '</div>';
+      var x = host.querySelector('.x');
+      if (x) x.addEventListener('click', clearAuthor);
+
+      // If we only have a DID, kick off a handle lookup so the chip updates
+      // once bsky responds. Reuses the same path the curator rows use.
+      if (currentAuthor.indexOf('did:') === 0 && !handleCache.has(currentAuthor)) {
+        fetch('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=' +
+          encodeURIComponent(currentAuthor))
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(d) {
+            if (d && d.handle) { handleCache.set(currentAuthor, d.handle); renderAuthorChip(); }
+          })
+          .catch(function() {});
+      }
+    }
+
+    function clearAuthor() {
+      currentAuthor = '';
+      var u = new URL(location.href);
+      u.searchParams.delete('author');
+      history.replaceState(null, '', u);
+      renderAuthorChip();
+      resetAndFetch();
     }
 
     function syncViewPills() {
@@ -770,6 +827,13 @@
       var u = new URL(location.href);
       if (v === 'posts') u.searchParams.delete('view');
       else u.searchParams.set('view', v);
+      // curators view doesn't accept an author filter — drop it so the
+      // user isn't left with an inert chip and a URL that lies about state.
+      if (v === 'curators' && currentAuthor) {
+        currentAuthor = '';
+        u.searchParams.delete('author');
+        renderAuthorChip();
+      }
       history.replaceState(null, '', u);
       syncViewPills();
       resetAndFetch();
@@ -783,6 +847,7 @@
     });
     syncWindowPills();
     syncViewPills();
+    renderAuthorChip();
 
     fetchPage(0, false);
 

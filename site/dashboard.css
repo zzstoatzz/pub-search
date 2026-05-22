@@ -47,33 +47,14 @@ body {
 a { color: #1B7340; text-decoration: none; }
 a:hover { color: #2a9d5c; }
 
-/* shared top-strip header — matches index, atlas, recommended */
-.top {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 12px;
-  margin-bottom: 1.5rem;
-}
-.top h1 {
+h1 {
   font-size: 12px;
   font-weight: normal;
+  margin-bottom: 1.5rem;
 }
-.top h1 a.title { color: var(--text-secondary); }
-.top h1 a.title:hover { color: var(--text-bright); }
-.top h1 .dim { color: var(--text-dim); }
-.top .nav {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 11px;
-}
-.top .nav a {
-  color: var(--text-dim);
-  padding: 0.3rem 0.1rem;
-}
-.top .nav a:hover { color: var(--text-bright); }
+h1 a.title { color: var(--text-secondary); }
+h1 a.title:hover { color: var(--text-bright); }
+h1 .dim { color: var(--text-dim); }
 
 section { margin-bottom: 2rem; }
 

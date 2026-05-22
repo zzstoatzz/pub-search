@@ -12,20 +12,11 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="components.css?v=1779491569">
   <link rel="stylesheet" href="dashboard.css?v=1779491569">
 </head>
 <body>
   <div class="container">
-    <div class="top">
-      <h1><a href="/" class="title">pub search</a> <span class="dim">/ stats</span></h1>
-      <div class="nav">
-        <a href="/atlas.html">atlas</a>
-        <a href="/recommended.html">recommended</a>
-        <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
-        <span class="theme-toggle" id="theme-toggle"></span>
-      </div>
-    </div>
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ stats</span></h1>
 
     <section>
       <div class="metrics">
@@ -122,7 +113,7 @@
     </section>
 
     <footer>
-      source on <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search">tangled</a>
+      <a href="/">back</a> · <a href="/atlas.html">atlas</a> · source on <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search">tangled</a> · <span class="theme-toggle" id="theme-toggle"></span>
     </footer>
   </div>
 
@@ -147,13 +138,6 @@
     });
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
       if (currentTheme === 'system') applyTheme('system');
-    });
-  </script>
-  <script src="clients.js"></script>
-  <script src="ui.js"></script>
-  <script>
-    document.getElementById('settings-btn').addEventListener('click', function() {
-      if (window.LeafletUI && window.LeafletUI.openSettings) window.LeafletUI.openSettings();
     });
   </script>
   <script src="loading.js"></script>
