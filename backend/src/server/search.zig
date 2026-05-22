@@ -54,18 +54,18 @@ const Doc = struct {
 
     fn fromRow(row: db.Row) Doc {
         return .{
-            .uri = row.text(0),
-            .did = row.text(1),
-            .title = row.text(2),
-            .snippet = row.text(3),
-            .createdAt = row.text(4),
-            .rkey = row.text(5),
-            .basePath = row.text(6),
-            .hasPublication = row.int(7) != 0,
-            .platform = row.text(8),
-            .path = row.text(9),
-            .coverImage = row.text(10),
-            .publicationName = row.text(11),
+            .uri = row.text(docCol("uri")),
+            .did = row.text(docCol("did")),
+            .title = row.text(docCol("title")),
+            .snippet = row.text(docCol("snippet")),
+            .createdAt = row.text(docCol("created_at")),
+            .rkey = row.text(docCol("rkey")),
+            .basePath = row.text(docCol("base_path")),
+            .hasPublication = row.int(docCol("has_publication")) != 0,
+            .platform = row.text(docCol("platform")),
+            .path = row.text(docCol("path")),
+            .coverImage = row.text(docCol("cover_image")),
+            .publicationName = row.text(docCol("publication_name")),
         };
     }
 
@@ -349,6 +349,34 @@ const DocsByPubBasePathAndPlatformAndSince = zql.Query(
     \\WHERE publications_fts MATCH :query AND d.platform = :platform AND d.created_at >= :since
     \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
 );
+
+// Every doc query above shares the same column projection. Picking one as
+// the canonical column-index source lets Doc.fromRow look up by name
+// instead of positional index — adding/removing/reordering columns is a
+// compile error rather than a silent runtime miscount. The comptime
+// assertion below catches the case where one of the queries drifts from
+// the rest.
+const DocQueries = .{
+    DocsByTag,                       DocsByFtsAndTag,
+    DocsByFts,                       DocsByFtsAndSince,
+    DocsByFtsAndPlatform,            DocsByFtsAndPlatformAndSince,
+    DocsByTagAndPlatform,            DocsByFtsAndTagAndPlatform,
+    DocsByPlatform,                  DocsByAuthor,
+    DocsByAuthorAndPlatform,         DocsByPubBasePath,
+    DocsByPubBasePathAndPlatform,    DocsByPubBasePathAndSince,
+    DocsByPubBasePathAndPlatformAndSince,
+};
+
+inline fn docCol(comptime name: []const u8) comptime_int {
+    @setEvalBranchQuota(20000);
+    const canonical = DocsByTag.columnIndex(name);
+    inline for (DocQueries) |Q| {
+        if (Q.columnIndex(name) != canonical) {
+            @compileError("doc query column index drift for '" ++ name ++ "'");
+        }
+    }
+    return canonical;
+}
 
 /// Publication search result (internal)
 const Pub = struct {
