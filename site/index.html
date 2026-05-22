@@ -1783,7 +1783,7 @@
     fetch(`${API_URL}/stats`)
       .then(r => r.json())
       .then(data => {
-        statsDiv.innerHTML = `<a href="/dashboard.html">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a> · <a href="/curators.html">curators</a>`;
+        statsDiv.innerHTML = `<a href="/dashboard.html">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a>`;
         const headerStats = document.getElementById('header-stats');
         headerStats.href = '/dashboard.html';
         headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
