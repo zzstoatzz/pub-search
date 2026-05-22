@@ -1,0 +1,26 @@
+name: Reconcile Recommends
+
+# Closes the small gap left by tap drops and PDSes that don't expose records
+# (Bridgy Fed bridged accounts on atproto.brid.gy, etc.) by checking each
+# indexed doc against constellation's view of the network.
+
+on:
+  schedule:
+    # hourly at :15 — far enough from other cron'd jobs to avoid pile-ups
+    - cron: '15 * * * *'
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run reconcile
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+        run: ./scripts/reconcile-recommends --workers 8
