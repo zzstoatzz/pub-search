@@ -11,6 +11,9 @@ const db = @import("db.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
 const dashboard = @import("server/dashboard.zig");
+const recommended = @import("server/recommended.zig");
+
+pub const initRecommendedCache = recommended.init;
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -95,7 +98,7 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     } else if (mem.eql(u8, path, "/api/latency")) {
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
-        try handleRecommended(request, target, io);
+        try handleRecommended(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -325,183 +328,11 @@ fn getPopularLocal(alloc: Allocator, local: *db.LocalDb, limit: usize) ![]const 
     return try output.toOwnedSlice();
 }
 
-const RecommendedJson = struct {
-    type: []const u8,
-    uri: []const u8,
-    did: []const u8,
-    title: []const u8,
-    createdAt: []const u8,
-    rkey: []const u8,
-    basePath: []const u8,
-    platform: []const u8,
-    path: []const u8,
-    publicationName: []const u8,
-    url: []const u8,
-    /// distinct recommenders WITHIN the chosen window (drives rank).
-    recommendCount: i64,
-    /// distinct recommenders ALL-TIME (always shown on the row, even when
-    /// ranked by a windowed count — gives the at-a-glance "how big overall").
-    totalCount: i64,
-};
-
-// Recommends live only on Turso (not the local SQLite replica), so this
-// handler queries Turso directly. Volume is small (~500 records at launch);
-// page is not on a hot path. If usage grows, plumb recommends into LocalDb.
-// We aggregate across two NSIDs (site.standard.graph.recommend +
-// pub.leaflet.interactions.recommend), so the same person may show up
-// twice for one document. COUNT(DISTINCT r.did) treats it as one vote
-// — matches what Leaflet's own UI counts within its lexicon.
-
-const RecommendWindow = enum {
-    all,
-    day,
-    week,
-    month,
-    year,
-
-    fn fromString(s: ?[]const u8) RecommendWindow {
-        const str = s orelse return .all;
-        if (mem.eql(u8, str, "day")) return .day;
-        if (mem.eql(u8, str, "week")) return .week;
-        if (mem.eql(u8, str, "month")) return .month;
-        if (mem.eql(u8, str, "year")) return .year;
-        return .all;
-    }
-
-    fn slug(self: RecommendWindow) []const u8 {
-        return @tagName(self);
-    }
-
-    /// SQLite modifier for `DATE('now', ...)`. For `.all` we pick a far-past
-    /// sentinel so the same SQL works — every record's date falls inside.
-    fn dateModifier(self: RecommendWindow) []const u8 {
-        return switch (self) {
-            .all => "-100 years",
-            .day => "-1 days",
-            .week => "-7 days",
-            .month => "-30 days",
-            .year => "-365 days",
-        };
-    }
-};
-
-// Single SQL handles every window. The CASE WHEN counts only recommends
-// inside the chosen window for `recommend_count` (used for ranking), but
-// `total_count` always reflects all-time distinct recommenders. The two
-// columns differ for non-`all` windows and are equal for `all`.
-//
-// Wrapped in zql.Query so we read rows by column name (RecommendedRow)
-// instead of brittle positional indices.
-const RecommendedQuery = zql.Query(
-    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
-    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
-    \\  COALESCE(d.path, '') AS path, d.has_publication,
-    \\  COALESCE(p.name, '') AS publication_name,
-    \\  COUNT(DISTINCT CASE
-    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
-    \\    THEN r.did END) AS recommend_count,
-    \\  COUNT(DISTINCT r.did) AS total_count
-    \\FROM documents d
-    \\LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\JOIN recommends r ON r.document_uri = d.uri
-    \\GROUP BY d.uri
-    \\HAVING recommend_count > 0
-    \\ORDER BY recommend_count DESC, d.created_at DESC
-    \\LIMIT 250
-);
-
-const RecommendedRow = struct {
-    uri: []const u8,
-    did: []const u8,
-    title: []const u8,
-    created_at: []const u8,
-    rkey: []const u8,
-    base_path: []const u8,
-    platform: []const u8,
-    path: []const u8,
-    has_publication: bool,
-    publication_name: []const u8,
-    recommend_count: i64,
-    total_count: i64,
-};
-
-// /recommended is served from an in-memory cache that a background thread
-// refreshes every ~45s. The underlying query (Turso JOIN + GROUP BY across
-// remote DB) takes 1–11s depending on Turso connection latency; the
-// leaderboard moves slowly, so we never want a user request to block on it.
-// One cache slot per supported time window so each `?since=` is fast.
-const RecommendedCache = struct {
-    mu: Io.Mutex = Io.Mutex.init,
-    body: ?[]u8 = null, // page_allocator-owned
-    fetched_at_ns: i128 = 0,
-};
-const WINDOW_COUNT = @typeInfo(RecommendWindow).@"enum".fields.len;
-var recommended_caches: [WINDOW_COUNT]RecommendedCache = [_]RecommendedCache{.{}} ** WINDOW_COUNT;
-var recommended_refresh_io: ?Io = null;
-var recommended_refresh_thread: ?std.Thread = null;
-
-const RECOMMENDED_REFRESH_INTERVAL_MS: u64 = 45_000;
-
-/// Spawn a background thread that keeps the /recommended cache warm.
-/// User requests then always read from memory — they never block on the
-/// underlying Turso JOIN+GROUP BY (which can take 5–11s on cold connections).
-///
-/// Returns immediately. The first refresh happens on the background thread
-/// without blocking the caller — initServices must not stall here, since
-/// `tap.consumer` is invoked downstream and a stuck Turso call would leave
-/// the firehose subscription unstarted.
-pub fn initRecommendedCache(io: Io) void {
-    recommended_refresh_io = io;
-    recommended_refresh_thread = std.Thread.spawn(.{}, recommendedRefreshLoop, .{}) catch |err| {
-        logfire.warn("recommended cache: refresh thread failed to start: {}", .{err});
-        return;
-    };
-    if (recommended_refresh_thread) |t| t.detach();
-    logfire.info("recommended cache: refresh loop running every {d}ms", .{RECOMMENDED_REFRESH_INTERVAL_MS});
-}
-
-fn recommendedRefreshLoop() void {
-    const io = recommended_refresh_io orelse return;
-    // first refresh immediately (no sleep), then on the configured cadence.
-    refreshAllRecommendedCaches();
-    while (true) {
-        io.sleep(Io.Duration.fromMilliseconds(RECOMMENDED_REFRESH_INTERVAL_MS), .awake) catch {};
-        refreshAllRecommendedCaches();
-    }
-}
-
-fn refreshAllRecommendedCaches() void {
-    inline for (@typeInfo(RecommendWindow).@"enum".fields) |f| {
-        refreshRecommendedCache(@as(RecommendWindow, @enumFromInt(f.value)));
-    }
-}
-
-fn refreshRecommendedCache(window: RecommendWindow) void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-
-    const fresh = getRecommended(alloc, window) catch |err| {
-        logfire.warn("recommended cache: refresh failed ({s}): {}", .{ window.slug(), err });
-        return;
-    };
-
-    const stored = std.heap.page_allocator.dupe(u8, fresh) catch return;
-    const io = recommended_refresh_io orelse {
-        std.heap.page_allocator.free(stored);
-        return;
-    };
-    const now_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
-
-    var cache = &recommended_caches[@intFromEnum(window)];
-    cache.mu.lockUncancelable(io);
-    defer cache.mu.unlock(io);
-    if (cache.body) |old| std.heap.page_allocator.free(old);
-    cache.body = stored;
-    cache.fetched_at_ns = now_ns;
-}
-
-fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) !void {
+/// Thin wrapper around `server/recommended.zig`. Parses query params,
+/// pulls a cache snapshot (cold-falls-back to a live Turso fetch), slices
+/// for pagination, returns JSON. All recommended-specific logic — SQL,
+/// types, cache, refresh loop — lives in the sub-module.
+fn handleRecommended(request: *http.Server.Request, target: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -514,93 +345,20 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
     const since_str = parseQueryParam(alloc, target, "since") catch null;
     const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
     const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
-    const window = RecommendWindow.fromString(since_str);
+    const window = recommended.Window.fromString(since_str);
     span.setAttribute("window", window.slug());
 
-    // Grab a snapshot of the cached top-N JSON. Background loop refreshes
-    // each window every 45s, so user requests never block on Turso.
-    var snapshot: ?[]u8 = null;
-    {
-        var cache = &recommended_caches[@intFromEnum(window)];
-        cache.mu.lockUncancelable(io);
-        defer cache.mu.unlock(io);
-        if (cache.body) |body| {
-            snapshot = try alloc.dupe(u8, body);
-            span.setAttribute("cache", "hit");
-        }
-    }
-
-    if (snapshot == null) {
-        // cold fallback (init hasn't seeded yet, or refresh failed every time
-        // since boot). compute inline so the user still gets a response.
+    var snapshot = try recommended.Cache.snapshot(window, alloc);
+    if (snapshot != null) {
+        span.setAttribute("cache", "hit");
+    } else {
+        // cold fallback — refresh thread hasn't populated this slot yet.
         span.setAttribute("cache", "cold");
-        snapshot = try alloc.dupe(u8, try getRecommended(alloc, window));
+        snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window));
     }
 
-    const sliced = try sliceRecommendedJson(alloc, snapshot.?, limit, offset);
+    const sliced = try recommended.sliceJson(alloc, snapshot.?, limit, offset);
     try sendJson(request, sliced);
-}
-
-/// Parse the cached top-N JSON array and re-emit only [offset, offset+limit).
-/// The cache layer keeps the slow Turso JOIN off the hot path; this slice is
-/// pure in-process work (~ms for N=250).
-fn sliceRecommendedJson(alloc: Allocator, body: []const u8, limit: usize, offset: usize) ![]const u8 {
-    var parsed = json.parseFromSlice(json.Value, alloc, body, .{}) catch {
-        // body was an error envelope, not an array — pass it through.
-        return alloc.dupe(u8, body);
-    };
-    defer parsed.deinit();
-
-    if (parsed.value != .array) return alloc.dupe(u8, body);
-    const items = parsed.value.array.items;
-
-    const start = @min(offset, items.len);
-    const end = @min(start + limit, items.len);
-
-    var output: std.Io.Writer.Allocating = .init(alloc);
-    errdefer output.deinit();
-    var jw: json.Stringify = .{ .writer = &output.writer };
-    try jw.beginArray();
-    for (items[start..end]) |item| try jw.write(item);
-    try jw.endArray();
-    return try output.toOwnedSlice();
-}
-
-fn getRecommended(alloc: Allocator, window: RecommendWindow) ![]const u8 {
-    const c = db.getClient() orelse return error.NotInitialized;
-
-    var output: std.Io.Writer.Allocating = .init(alloc);
-    errdefer output.deinit();
-
-    var res = c.query(RecommendedQuery.positional, &.{window.dateModifier()}) catch {
-        try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-        return try output.toOwnedSlice();
-    };
-    defer res.deinit();
-
-    var jw: json.Stringify = .{ .writer = &output.writer };
-    try jw.beginArray();
-    for (res.rows) |row| {
-        const r = RecommendedQuery.fromRow(RecommendedRow, row);
-        const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
-        try jw.write(RecommendedJson{
-            .type = doc_type,
-            .uri = r.uri,
-            .did = r.did,
-            .title = r.title,
-            .createdAt = r.created_at,
-            .rkey = r.rkey,
-            .basePath = r.base_path,
-            .platform = r.platform,
-            .path = r.path,
-            .publicationName = r.publication_name,
-            .url = search.buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
-            .recommendCount = r.recommend_count,
-            .totalCount = r.total_count,
-        });
-    }
-    try jw.endArray();
-    return try output.toOwnedSlice();
 }
 
 fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const u8) ![]const u8 {
