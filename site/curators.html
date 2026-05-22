@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>pub search / recommended</title>
-  <meta name="description" content="most-recommended posts across the atproto standard.site network">
-  <meta property="og:title" content="pub search / recommended">
-  <meta property="og:description" content="most-recommended posts across the atproto standard.site network">
+  <title>pub search / curators</title>
+  <meta name="description" content="people who recommend the most posts on atproto">
+  <meta property="og:title" content="pub search / curators">
+  <meta property="og:description" content="people who recommend the most posts on atproto">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="https://pub-search.waow.tech/og-image?page=recommended">
+  <meta property="og:image" content="https://pub-search.waow.tech/og-image?page=curators">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="pub search / recommended">
-  <meta name="twitter:description" content="most-recommended posts across the atproto standard.site network">
-  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image?page=recommended">
+  <meta name="twitter:title" content="pub search / curators">
+  <meta name="twitter:description" content="people who recommend the most posts on atproto">
+  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image?page=curators">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='2' fill='%231B7340'/><circle cx='8' cy='10' r='1.5' fill='%231B7340' opacity='.6'/><circle cx='24' cy='8' r='1' fill='%231B7340' opacity='.4'/><circle cx='22' cy='22' r='1.5' fill='%231B7340' opacity='.5'/><circle cx='6' cy='24' r='1' fill='%231B7340' opacity='.3'/></svg>">
   <script>
     (function() {
@@ -77,7 +77,6 @@
     a { color: var(--accent-dim); text-decoration: none; }
     a:hover { color: var(--accent); }
 
-    /* header row matches atlas: title left, nav right */
     .top {
       display: flex;
       align-items: center;
@@ -85,10 +84,7 @@
       font-size: 12px;
       margin-bottom: 1.5rem;
     }
-    .top h1 {
-      font-size: 12px;
-      font-weight: normal;
-    }
+    .top h1 { font-size: 12px; font-weight: normal; }
     .top h1 a.title { color: var(--text-secondary); }
     .top h1 a.title:hover { color: var(--text-bright); }
     .top .dim { color: var(--text-dim); }
@@ -126,7 +122,6 @@
       gap: 0.5rem;
     }
 
-    /* tiny "?" affordance for the nerd-detail tooltip */
     .info {
       position: relative;
       display: inline-flex;
@@ -143,11 +138,6 @@
       user-select: none;
     }
     .info:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
-
-    /* Invisible bridge directly below the `?` so the cursor never lands in
-     * dead space when traveling from the button to the tooltip. Without it,
-     * leaving the `?` even briefly drops :hover and closes the tip before
-     * the cursor reaches the link. */
     .info::after {
       content: "";
       position: absolute;
@@ -156,7 +146,6 @@
       right: -16px;
       height: 14px;
     }
-
     .info .tip {
       position: absolute;
       top: calc(100% + 10px);
@@ -176,21 +165,36 @@
       color: var(--text-secondary);
       font-size: 11px;
       line-height: 1.5;
-      letter-spacing: normal;
-      text-align: left;
     }
     .info .tip code { color: var(--text); }
-    .info .tip a { color: var(--accent-dim); }
-    .info .tip a:hover { color: var(--accent); }
     .info:hover .tip, .info:focus-within .tip { opacity: 1; pointer-events: auto; }
 
-    .status {
+    .windows {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: -0.25rem 0 1rem;
+    }
+    .win-pill {
       font-size: 11px;
+      padding: 3px 9px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-subtle);
+      border-radius: 3px;
+      cursor: pointer;
       color: var(--text-dim);
-      padding: 1rem 0;
+      font-family: monospace;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .win-pill:hover { color: var(--text); border-color: var(--border-focus); }
+    .win-pill.active {
+      background: rgba(14, 165, 233, 0.18);
+      border-color: #0ea5e9;
+      color: #38bdf8;
     }
 
-    /* leaderboard row: rank | body | score */
+    .status { font-size: 11px; color: var(--text-dim); padding: 1rem 0; }
+
     .row {
       display: grid;
       grid-template-columns: 3rem 1fr auto;
@@ -202,8 +206,6 @@
     }
     .row:hover { background: var(--bg-subtle); }
     .row:last-child { border-bottom: none; }
-
-    /* top-3 get a soft accent stripe on the left, brighter rank+heart */
     .row.podium {
       background: var(--podium-bg);
       border-left: 2px solid var(--podium-border);
@@ -224,15 +226,20 @@
     .rank .hash { font-size: 12px; opacity: 0.6; margin-right: 1px; }
 
     .body { min-width: 0; }
-    .title-line {
+    .handle-line {
       color: var(--text-bright);
       font-size: 14px;
       line-height: 1.35;
       word-break: break-word;
     }
-    .title-line a { color: inherit; }
-    .title-line a:hover { color: var(--accent); }
-    .source {
+    .handle-line a { color: inherit; }
+    .handle-line a:hover { color: var(--accent); }
+    .handle-line .at { color: var(--text-dim); }
+    .handle-line .did-fallback {
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+    .meta {
       display: flex;
       align-items: center;
       gap: 0.25rem;
@@ -240,9 +247,12 @@
       color: var(--text-dim);
       margin-top: 0.25rem;
       letter-spacing: 0.01em;
+      flex-wrap: wrap;
     }
+    .meta .dot { opacity: 0.5; }
+    .meta a { color: inherit; }
+    .meta a:hover { color: var(--text-secondary); }
 
-    /* score block: heart icon + count, baseline-aligned */
     .score {
       display: inline-flex;
       align-items: center;
@@ -261,14 +271,6 @@
     }
     .heart svg { width: 100%; height: 100%; display: block; }
 
-    .source .pub-link {
-      color: inherit;
-      text-decoration: none;
-    }
-    .source .pub-link:hover { color: var(--text-secondary); }
-
-    /* row "⋯" overflow button — matches .lf-row-more styling from
-     * components.css but scoped tight to the leaderboard row. */
     .row .lf-row-more {
       background: none;
       border: none;
@@ -284,38 +286,7 @@
     }
     .row .lf-row-more:hover { color: var(--text-secondary); }
 
-    /* window picker (since=day|week|month|year|all) */
-    .windows {
-      display: flex;
-      gap: 0.4rem;
-      flex-wrap: wrap;
-      margin: -0.25rem 0 1rem;
-    }
-    .win-pill {
-      font-size: 11px;
-      padding: 3px 9px;
-      background: var(--bg-subtle);
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      cursor: pointer;
-      color: var(--text-dim);
-      font-family: monospace;
-      transition: color 0.12s, border-color 0.12s, background 0.12s;
-    }
-    .win-pill:hover {
-      color: var(--text);
-      border-color: var(--border-focus);
-    }
-    .win-pill.active {
-      background: rgba(14, 165, 233, 0.18);
-      border-color: #0ea5e9;
-      color: #38bdf8;
-    }
-
-    .load-more {
-      text-align: center;
-      padding: 1.25rem 0;
-    }
+    .load-more { text-align: center; padding: 1.25rem 0; }
     .load-more button {
       background: none;
       border: 1px solid var(--border-focus);
@@ -327,7 +298,6 @@
     }
     .load-more button:hover { background: var(--bg-subtle); color: var(--text-bright); }
 
-    /* tighter mobile layout */
     @media (max-width: 480px) {
       body { padding: 1rem 0.75rem 2rem; }
       .container { padding: 0; }
@@ -340,8 +310,8 @@
       .row.podium { padding-left: 0.3rem; }
       .rank { font-size: 15px; }
       .rank .hash { font-size: 10px; }
-      .title-line { font-size: 13px; }
-      .source { font-size: 10.5px; }
+      .handle-line { font-size: 13px; }
+      .meta { font-size: 10.5px; }
       .score { font-size: 14px; }
       .heart { width: 12px; height: 12px; }
     }
@@ -352,21 +322,21 @@
     <div class="top">
       <h1>
         <a href="/" class="title">pub search</a>
-        <span class="dim">/ recommended</span>
+        <span class="dim">/ curators</span>
       </h1>
       <div class="nav">
         <a href="/dashboard.html">stats</a>
         <a href="/atlas.html">atlas</a>
-        <a href="/curators.html">curators</a>
+        <a href="/recommended.html">recommended</a>
         <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
         <span class="theme-toggle" id="theme-toggle"></span>
       </div>
     </div>
 
     <div class="lead">
-      most-recommended posts
+      top curators
       <span class="info" tabindex="0" aria-label="how counts are computed">?<span class="tip"><span class="tip-inner">
-        counts merge <a href="https://standard.site/docs/lexicons/recommend/" target="_blank" rel="noopener"><code>site.standard.graph.recommend</code></a> and <code>pub.leaflet.interactions.recommend</code> — same idea, different lexicon per platform.
+        ranks people by how many recommends they've given out. counts merge <code>site.standard.graph.recommend</code> and <code>pub.leaflet.interactions.recommend</code>.
       </span></span></span>
     </div>
 
@@ -425,46 +395,56 @@
       return WINDOWS.indexOf(p) >= 0 ? p : 'all';
     })();
 
+    // handle cache lives across pagination batches
+    var handleCache = new Map();
+
     function escapeHtml(s) {
       return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-    function rowHtml(doc, rank) {
+    function shortDid(did) {
+      // "did:plc:xbtmt2zjwlrfegqvch7fboei" → "xbtmt2zj…"
+      var parts = String(did).split(':');
+      var last = parts[parts.length - 1] || did;
+      return last.length > 10 ? last.slice(0, 10) + '…' : last;
+    }
+
+    function relativeTime(iso) {
+      if (!iso) return '';
+      var t = Date.parse(iso);
+      if (isNaN(t)) return '';
+      var s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      if (s < 604800) return Math.floor(s / 86400) + 'd ago';
+      return Math.floor(s / 604800) + 'w ago';
+    }
+
+    function rowHtml(c, rank) {
       var podium = rank <= 3 ? ' podium' : '';
-      var title = escapeHtml(doc.title || 'Untitled');
-      var url = doc.url || '';
-      var source = doc.basePath || doc.publicationName || doc.platform || '';
-      var extUrl = doc.basePath ? ('https://' + doc.basePath) : '';
-      var titleHtml = url
-        ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + title + '</a>'
-        : title;
-      var sourceHtml = '';
-      if (source) {
-        sourceHtml = extUrl
-          ? '<a class="pub-link" href="' + escapeHtml(extUrl) + '" target="_blank" rel="noopener">' + escapeHtml(source) + '</a>'
-          : escapeHtml(source);
-      }
-      // data-* mirrors what wireResultActions on the homepage uses, so the
-      // shared row menu + publication menu in window.LeafletUI work as-is.
+      var did = c.did || '';
+      // start with DID short; will be replaced with handle once resolved.
+      var handleHtml = '<span class="did-fallback">' + escapeHtml(shortDid(did)) + '</span>';
       var dataAttrs = [
-        doc.did ? 'data-did="' + escapeHtml(doc.did) + '"' : '',
-        doc.uri ? 'data-uri="' + escapeHtml(doc.uri) + '"' : '',
-        doc.basePath ? 'data-base-path="' + escapeHtml(doc.basePath) + '"' : '',
-        extUrl ? 'data-ext-url="' + escapeHtml(extUrl) + '"' : '',
+        did ? 'data-did="' + escapeHtml(did) + '"' : '',
       ].filter(Boolean).join(' ');
+      var lastSeen = relativeTime(c.lastRecommendAt);
       return '<div class="row' + podium + '" ' + dataAttrs + '>' +
         '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
         '<div class="body">' +
-          '<div class="title-line">' + titleHtml + '</div>' +
-          (sourceHtml ? '<div class="source">' + sourceHtml + '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>' : '') +
+          '<div class="handle-line">' + handleHtml + '</div>' +
+          '<div class="meta">' +
+            c.uniqueDocs + ' doc' + (c.uniqueDocs === 1 ? '' : 's') + ' recommended' +
+            (lastSeen ? ' <span class="dot">·</span> last ' + lastSeen : '') +
+            '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>' +
+          '</div>' +
         '</div>' +
         '<div class="score">' +
           '<span class="heart">' + HEART_SVG + '</span>' +
-          // total (all-time) — rank already encodes the windowed signal.
-          // server falls back to recommendCount if totalCount isn't sent.
-          (doc.totalCount != null ? doc.totalCount : doc.recommendCount) +
+          (c.totalRecommends != null ? c.totalRecommends : c.recommendCount) +
         '</div>' +
       '</div>';
     }
@@ -477,12 +457,11 @@
         totalRendered = 0;
         list.innerHTML = '';
       }
-      // strip any prior load-more (always re-add below if needed)
       var oldLoadMore = list.querySelector('.load-more');
       if (oldLoadMore) oldLoadMore.remove();
 
       if ((!rows || rows.length === 0) && totalRendered === 0) {
-        status.textContent = 'no recommends indexed yet.';
+        status.textContent = 'no curators in this window.';
         return;
       }
       status.textContent = '';
@@ -494,55 +473,93 @@
       list.insertAdjacentHTML('beforeend', html);
       totalRendered += rows.length;
 
-      // if the batch came back full, there might be more — offer load-more.
-      // (we don't know the total upstream; a full batch is the only signal.)
       if (rows.length === PAGE_SIZE) {
         var moreHtml = '<div class="load-more"><button onclick="loadMore()">load more</button></div>';
         list.insertAdjacentHTML('beforeend', moreHtml);
       }
 
+      resolveHandles(rows);
       wireRowActions(list);
     }
 
-    // Mirrors index.html's wireResultActions but scoped to this page's rows
-    // (which use .row instead of .result). Shares window.LeafletUI menus.
+    // Batch-resolve DID → handle via the bsky AppView (same approach as
+    // /search results). Update each row in-place once we have a handle.
+    function resolveHandles(rows) {
+      var dids = rows.map(function(r) { return r.did; }).filter(function(d) {
+        return d && !handleCache.has(d);
+      });
+      if (dids.length === 0) {
+        applyHandles();
+        return;
+      }
+      // bsky's getProfiles caps at 25 per call.
+      var chunks = [];
+      for (var i = 0; i < dids.length; i += 25) chunks.push(dids.slice(i, i + 25));
+      Promise.all(chunks.map(function(chunk) {
+        var qs = chunk.map(function(d) { return 'actors=' + encodeURIComponent(d); }).join('&');
+        return fetch('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?' + qs)
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .catch(function() { return null; });
+      })).then(function(results) {
+        results.forEach(function(d) {
+          if (!d || !d.profiles) return;
+          d.profiles.forEach(function(p) { handleCache.set(p.did, p.handle); });
+        });
+        applyHandles();
+      });
+    }
+
+    function applyHandles() {
+      document.querySelectorAll('.row[data-did]').forEach(function(row) {
+        if (row.dataset.handleApplied) return;
+        var did = row.dataset.did;
+        var handle = handleCache.get(did);
+        if (!handle) return;
+        var line = row.querySelector('.handle-line');
+        if (!line) return;
+        line.innerHTML = '<a href="/recommended.html?author=' + encodeURIComponent(did) + '" title="show their authored posts on /recommended">' +
+          '<span class="at">@</span>' + escapeHtml(handle) + '</a>';
+        row.dataset.handleApplied = '1';
+
+        // re-bind context menu for the now-resolved handle link
+        var link = line.querySelector('a');
+        if (link && window.LeafletUI) {
+          window.LeafletUI.bindContextMenu(link, function() {
+            return window.LeafletUI.authorMenuItems(handle, did);
+          });
+        }
+      });
+    }
+
     function wireRowActions(scope) {
       if (!window.LeafletUI) return;
       scope.querySelectorAll('.row').forEach(function(row) {
         if (row.dataset.actionsWired) return;
         row.dataset.actionsWired = '1';
 
-        var data = row.dataset;
+        var did = row.dataset.did;
         var moreBtn = row.querySelector('.lf-row-more');
         if (moreBtn) {
           var handler = function(e) {
             e.preventDefault();
             e.stopPropagation();
-            var items = window.LeafletUI.rowMenuItems({
-              uri: data.uri || '',
-              basePath: data.basePath || '',
-              handle: '',
-              authorDid: data.did || '',
-              externalUrl: data.extUrl || '',
-            });
+            var handle = did ? handleCache.get(did) : null;
+            // curatorMenuItems may not exist yet on first deploy; fall back
+            // to authorMenuItems (close enough — both are "person" entities).
+            var items = (window.LeafletUI.curatorMenuItems
+              ? window.LeafletUI.curatorMenuItems(handle || '', did || '')
+              : window.LeafletUI.authorMenuItems(handle || '', did || ''));
             var rect = moreBtn.getBoundingClientRect();
             window.LeafletUI.showMenu(items, rect.right - 8, rect.bottom + 4);
           };
           moreBtn.addEventListener('click', handler);
           window.LeafletUI.longPress(moreBtn, handler);
         }
-
-        var pubLink = row.querySelector('.pub-link');
-        if (pubLink && (data.basePath || data.extUrl)) {
-          window.LeafletUI.bindContextMenu(pubLink, function() {
-            return window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || '');
-          });
-        }
       });
     }
 
     function fetchPage(offset, append) {
-      var url = API_BASE + '/recommended?limit=' + PAGE_SIZE + '&offset=' + offset
+      var url = API_BASE + '/curators?limit=' + PAGE_SIZE + '&offset=' + offset
         + '&since=' + encodeURIComponent(currentWindow);
       fetch(url)
         .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
@@ -571,7 +588,6 @@
       if (currentWindow === w) return;
       currentWindow = w;
       currentOffset = 0;
-      // mirror in URL; "all" is the default, leave it bare for clean links.
       var u = new URL(location.href);
       if (w === 'all') u.searchParams.delete('since');
       else u.searchParams.set('since', w);
@@ -587,7 +603,6 @@
       b.addEventListener('click', function() { setWindow(b.dataset.window); });
     });
     syncWindowPills();
-
     fetchPage(0, false);
 
     document.getElementById('settings-btn').addEventListener('click', function() {

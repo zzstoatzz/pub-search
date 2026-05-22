@@ -167,16 +167,22 @@
     try { navigator.clipboard.writeText(text); } catch (e) {}
   }
 
-  // build the per-author menu — used both on result-row @handle and on
-  // typeahead suggestions. accepts handle (no leading @) and did.
+  // Per-author menu — used on result-row @handle links, typeahead
+  // suggestions, and the resolved handle on /curators rows. Accepts
+  // bare handle (no leading @) and did.
   function authorMenuItems(handle, did) {
     var clients = window.LeafletClients.CLIENTS;
     var items = [
       { label: 'View on atlas', onSelect: function() {
         location.href = '/atlas.html?q=' + encodeURIComponent('@' + handle);
       }},
-      { divider: true },
     ];
+    if (did) {
+      items.push({ label: "View this author's recommended posts", onSelect: function() {
+        location.href = '/recommended.html?author=' + encodeURIComponent(did);
+      }});
+    }
+    items.push({ divider: true });
     clients.forEach(function(c) {
       items.push({
         label: 'Open in ' + c.label,
@@ -186,6 +192,39 @@
     });
     items.push({ divider: true });
     items.push({ label: 'Copy handle', onSelect: function() { copyToClipboard('@' + handle); } });
+    return items;
+  }
+
+  // Per-curator menu — same person-like shape as author but framed around
+  // their curation work. handle may be empty before bsky resolution returns.
+  function curatorMenuItems(handle, did) {
+    var clients = window.LeafletClients.CLIENTS;
+    var items = [];
+    if (did) {
+      items.push({ label: "View this curator's recommended posts", onSelect: function() {
+        location.href = '/recommended.html?author=' + encodeURIComponent(did);
+      }});
+    }
+    if (handle) {
+      items.push({ label: 'View on atlas', onSelect: function() {
+        location.href = '/atlas.html?q=' + encodeURIComponent('@' + handle);
+      }});
+    }
+    items.push({ divider: true });
+    clients.forEach(function(c) {
+      items.push({
+        label: 'Open in ' + c.label,
+        iconUrl: c.iconUrl,
+        onSelect: function() { window.open(c.profileUrl(did || handle), '_blank'); },
+      });
+    });
+    if (handle) {
+      items.push({ divider: true });
+      items.push({ label: 'Copy handle', onSelect: function() { copyToClipboard('@' + handle); } });
+    } else if (did) {
+      items.push({ divider: true });
+      items.push({ label: 'Copy DID', onSelect: function() { copyToClipboard(did); } });
+    }
     return items;
   }
 
@@ -219,6 +258,14 @@
     if (opts.handle) {
       items.push({ label: 'View author on atlas', onSelect: function() {
         location.href = '/atlas.html?q=' + encodeURIComponent('@' + opts.handle);
+      }});
+    }
+    // Cross-page jump: from a doc row, "show me this author's leaderboard"
+    // is the natural shortcut. Needs the DID (handle alone isn't enough for
+    // the backend filter).
+    if (opts.authorDid) {
+      items.push({ label: "View this author's recommended posts", onSelect: function() {
+        location.href = '/recommended.html?author=' + encodeURIComponent(opts.authorDid);
       }});
     }
     if (opts.externalUrl) {
@@ -420,6 +467,7 @@
     authorMenuItems: authorMenuItems,
     publicationMenuItems: publicationMenuItems,
     rowMenuItems: rowMenuItems,
+    curatorMenuItems: curatorMenuItems,
     isMobile: isMobile,
   };
 })();

@@ -86,6 +86,163 @@ async function fetchSearchResults(params) {
   }
 }
 
+async function fetchCurators(since) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
+  const qs = since && since !== "all" ? `?since=${encodeURIComponent(since)}&limit=10` : `?limit=10`;
+  try {
+    const res = await fetch(`${API_URL}/curators${qs}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    return await res.json();
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
+function buildCuratorsImage(rows, since) {
+  const top = (rows || []).slice(0, 6);
+  const totalRecs = (rows || []).reduce((s, r) => s + (r.totalRecommends || 0), 0);
+  const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
+
+  const shortDid = (did) => {
+    const parts = String(did || "").split(":");
+    const last = parts[parts.length - 1] || did || "";
+    return last.length > 14 ? last.slice(0, 14) + "…" : last;
+  };
+
+  const headerBlock = {
+    type: "div",
+    props: {
+      style: { display: "flex", flexDirection: "column", gap: "10px" },
+      children: [
+        {
+          type: "div",
+          props: {
+            style: { display: "flex", alignItems: "center", gap: "10px", color: "#888", fontSize: "24px" },
+            children: [
+              "pub search",
+              { type: "span", props: { style: { color: "#444" }, children: "/" } },
+              { type: "span", props: { style: { color: "#555" }, children: "curators" } },
+            ],
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#fff",
+              fontSize: "44px",
+              letterSpacing: "-0.5px",
+              lineHeight: "1",
+              display: "flex",
+              alignItems: "baseline",
+              gap: "14px",
+              flexWrap: "wrap",
+            },
+            children: [
+              "top curators",
+              { type: "div", props: { style: { color: "#38bdf8", fontSize: "22px" }, children: windowLabel } },
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  const list = top.map((c, i) => ({
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: "20px",
+        padding: "10px 0",
+        borderBottom: "1px solid #1d1d1d",
+      },
+      children: [
+        {
+          type: "div",
+          props: {
+            style: {
+              color: i < 3 ? "#2a9d5c" : "#555",
+              fontSize: "22px",
+              width: "56px",
+              textAlign: "right",
+            },
+            children: `#${i + 1}`,
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: { display: "flex", flexDirection: "column", flex: "1", minWidth: "0", gap: "4px" },
+            children: [
+              {
+                type: "div",
+                props: { style: { color: "#fff", fontSize: "22px" }, children: shortDid(c.did) },
+              },
+              {
+                type: "div",
+                props: {
+                  style: { color: "#555", fontSize: "15px" },
+                  children: `${c.uniqueDocs || 0} docs recommended`,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: {
+              color: i < 3 ? "#2a9d5c" : "#888",
+              fontSize: "24px",
+              fontVariantNumeric: "tabular-nums",
+            },
+            children: String(c.totalRecommends || c.recommendCount || 0),
+          },
+        },
+      ],
+    },
+  }));
+
+  const listBlock = {
+    type: "div",
+    props: { style: { display: "flex", flexDirection: "column" }, children: list },
+  };
+
+  const footerBlock = totalRecs > 0
+    ? {
+        type: "div",
+        props: {
+          style: { color: "#444", fontSize: "16px" },
+          children: `${totalRecs.toLocaleString()} recommends given by the top 10 · pub-search.waow.tech/curators`,
+        },
+      }
+    : null;
+
+  const outerChildren = [headerBlock, listBlock];
+  if (footerBlock) outerChildren.push(footerBlock);
+
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        width: "1200px",
+        height: "630px",
+        background: "#050505",
+        padding: "40px 56px 32px 56px",
+        fontFamily: '"JetBrains Mono", monospace',
+        gap: "16px",
+      },
+      children: outerChildren,
+    },
+  };
+}
+
 async function fetchRecommended(since) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
@@ -650,6 +807,19 @@ export async function onRequest(context) {
       headers: {
         "Cache-Control": "public, max-age=3600",
       },
+    });
+  }
+
+  // curators leaderboard page
+  if (page === "curators") {
+    const since = url.searchParams.get("since");
+    const rows = await fetchCurators(since);
+    const html = buildCuratorsImage(rows, since);
+    return new ImageResponse(html, {
+      width: 1200,
+      height: 630,
+      fonts: [{ name: "JetBrains Mono", data: await loadGoogleFont("JetBrains Mono"), style: "normal" }],
+      headers: { "Cache-Control": "public, max-age=1800" },
     });
   }
 
