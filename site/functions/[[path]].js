@@ -137,16 +137,17 @@ function buildRecommendedDescription(params) {
 
   let head;
   if (isCurators) {
-    head = 'people who recommend the most on atproto';
+    // "recommend" alone is too vague — say what they're recommending and where.
+    head = 'people who have recommended the most posts on atproto publishing platforms';
   } else if (author) {
     const label = author.startsWith('did:')
       ? `@${shortDid(author)}`
       : (author.startsWith('@') ? author : `@${author}`);
     head = sort === 'trending'
-      ? `posts by ${label} ranked by recent velocity`
+      ? `posts by ${label} ranked by recent recommend velocity`
       : `most-recommended posts by ${label}`;
   } else if (sort === 'trending') {
-    head = 'posts ranked by recent recommend velocity on atproto';
+    head = 'posts gaining recommends fastest across atproto publishing platforms';
   } else {
     head = 'most-recommended posts across atproto publishing platforms';
   }
