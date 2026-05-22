@@ -461,7 +461,9 @@
         '</div>' +
         '<div class="score">' +
           '<span class="heart">' + HEART_SVG + '</span>' +
-          doc.recommendCount +
+          // total (all-time) — rank already encodes the windowed signal.
+          // server falls back to recommendCount if totalCount isn't sent.
+          (doc.totalCount != null ? doc.totalCount : doc.recommendCount) +
         '</div>' +
       '</div>';
     }

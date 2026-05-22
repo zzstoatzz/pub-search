@@ -337,7 +337,11 @@ const RecommendedJson = struct {
     path: []const u8,
     publicationName: []const u8,
     url: []const u8,
+    /// distinct recommenders WITHIN the chosen window (drives rank).
     recommendCount: i64,
+    /// distinct recommenders ALL-TIME (always shown on the row, even when
+    /// ranked by a windowed count — gives the at-a-glance "how big overall").
+    totalCount: i64,
 };
 
 // Recommends live only on Turso (not the local SQLite replica), so this
@@ -368,10 +372,11 @@ const RecommendWindow = enum {
         return @tagName(self);
     }
 
-    /// SQLite modifier for `DATE('now', '-N days')`. .all has no filter.
-    fn dateModifier(self: RecommendWindow) ?[]const u8 {
+    /// SQLite modifier for `DATE('now', ...)`. For `.all` we pick a far-past
+    /// sentinel so the same SQL works — every record's date falls inside.
+    fn dateModifier(self: RecommendWindow) []const u8 {
         return switch (self) {
-            .all => null,
+            .all => "-100 years",
             .day => "-1 days",
             .week => "-7 days",
             .month => "-30 days",
@@ -380,44 +385,45 @@ const RecommendWindow = enum {
     }
 };
 
-/// Source-of-truth column for "when did this recommend happen":
-///   created_at when set (the user's PDS record's createdAt)
-///   indexed_at when not (reconciled records from constellation that
-///                       didn't ship a createdAt — small minority).
-const RECOMMEND_TIME_EXPR = "COALESCE(NULLIF(r.created_at, ''), r.indexed_at)";
-
-// All-time variant (no WHERE filter).
-const RECOMMENDED_SQL_ALL =
+// Single SQL handles every window. The CASE WHEN counts only recommends
+// inside the chosen window for `recommend_count` (used for ranking), but
+// `total_count` always reflects all-time distinct recommenders. The two
+// columns differ for non-`all` windows and are equal for `all`.
+//
+// Wrapped in zql.Query so we read rows by column name (RecommendedRow)
+// instead of brittle positional indices.
+const RecommendedQuery = zql.Query(
     \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
     \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
     \\  COALESCE(d.path, '') AS path, d.has_publication,
     \\  COALESCE(p.name, '') AS publication_name,
-    \\  COUNT(DISTINCT r.did) AS recommend_count
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN recommends r ON r.document_uri = d.uri
-    \\GROUP BY d.uri
-    \\ORDER BY recommend_count DESC, d.created_at DESC
-    \\LIMIT 250
-;
-
-// Windowed variant — same shape, plus a DATE-comparison filter. `?` binds
-// to the SQLite modifier string (e.g., "-7 days").
-const RECOMMENDED_SQL_WINDOWED =
-    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
-    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
-    \\  COALESCE(d.path, '') AS path, d.has_publication,
-    \\  COALESCE(p.name, '') AS publication_name,
-    \\  COUNT(DISTINCT r.did) AS recommend_count
-    \\FROM documents d
-    \\LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\JOIN recommends r ON r.document_uri = d.uri
-    \\WHERE DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
     \\GROUP BY d.uri
     \\HAVING recommend_count > 0
     \\ORDER BY recommend_count DESC, d.created_at DESC
     \\LIMIT 250
-;
+);
+
+const RecommendedRow = struct {
+    uri: []const u8,
+    did: []const u8,
+    title: []const u8,
+    created_at: []const u8,
+    rkey: []const u8,
+    base_path: []const u8,
+    platform: []const u8,
+    path: []const u8,
+    has_publication: bool,
+    publication_name: []const u8,
+    recommend_count: i64,
+    total_count: i64,
+};
 
 // /recommended is served from an in-memory cache that a background thread
 // refreshes every ~45s. The underlying query (Turso JOIN + GROUP BY across
@@ -566,44 +572,31 @@ fn getRecommended(alloc: Allocator, window: RecommendWindow) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
-    var res = blk: {
-        if (window.dateModifier()) |mod| {
-            break :blk c.query(RECOMMENDED_SQL_WINDOWED, &.{mod}) catch {
-                try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-                return try output.toOwnedSlice();
-            };
-        } else {
-            break :blk c.query(RECOMMENDED_SQL_ALL, &.{}) catch {
-                try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-                return try output.toOwnedSlice();
-            };
-        }
+    var res = c.query(RecommendedQuery.positional, &.{window.dateModifier()}) catch {
+        try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+        return try output.toOwnedSlice();
     };
     defer res.deinit();
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const did = row.text(1);
-        const rkey = row.text(4);
-        const base_path = row.text(5);
-        const platform = row.text(6);
-        const path = row.text(7);
-        const has_publication = row.int(8) != 0;
-        const doc_type: []const u8 = if (has_publication) "article" else "looseleaf";
+        const r = RecommendedQuery.fromRow(RecommendedRow, row);
+        const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(RecommendedJson{
             .type = doc_type,
-            .uri = row.text(0),
-            .did = did,
-            .title = row.text(2),
-            .createdAt = row.text(3),
-            .rkey = rkey,
-            .basePath = base_path,
-            .platform = platform,
-            .path = path,
-            .publicationName = row.text(9),
-            .url = search.buildDocUrl(alloc, doc_type, platform, base_path, path, rkey, did),
-            .recommendCount = row.int(10),
+            .uri = r.uri,
+            .did = r.did,
+            .title = r.title,
+            .createdAt = r.created_at,
+            .rkey = r.rkey,
+            .basePath = r.base_path,
+            .platform = r.platform,
+            .path = r.path,
+            .publicationName = r.publication_name,
+            .url = search.buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
+            .recommendCount = r.recommend_count,
+            .totalCount = r.total_count,
         });
     }
     try jw.endArray();
