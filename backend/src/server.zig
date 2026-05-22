@@ -12,8 +12,10 @@ const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
 const dashboard = @import("server/dashboard.zig");
 const recommended = @import("server/recommended.zig");
+const curators = @import("server/curators.zig");
 
 pub const initRecommendedCache = recommended.init;
+pub const initCuratorsCache = curators.init;
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -99,6 +101,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
         try handleRecommended(request, target, io);
+    } else if (mem.eql(u8, path, "/curators")) {
+        try handleCurators(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -378,6 +382,37 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
     }
 
     const sliced = try recommended.sliceJson(alloc, body, limit, offset);
+    try sendJson(request, sliced);
+}
+
+/// /curators — leaderboard of recommenders (DIDs), windowed by `since=`.
+/// Same cache + slice + cold-fallback shape as /recommended, minus the
+/// sort + author dimensions (curators has one natural metric).
+fn handleCurators(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const span = logfire.span("http.curators", .{});
+    defer span.end();
+
+    const limit_str = parseQueryParam(alloc, target, "limit") catch null;
+    const offset_str = parseQueryParam(alloc, target, "offset") catch null;
+    const since_str = parseQueryParam(alloc, target, "since") catch null;
+    const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
+    const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
+    const window = recommended.Window.fromString(since_str);
+    span.setAttribute("window", window.slug());
+
+    var snapshot = try curators.Cache.snapshot(window, alloc);
+    if (snapshot != null) {
+        span.setAttribute("cache", "hit");
+    } else {
+        span.setAttribute("cache", "cold");
+        snapshot = try alloc.dupe(u8, try curators.fetch(alloc, window));
+    }
+
+    const sliced = try curators.sliceJson(alloc, snapshot.?, limit, offset);
     try sendJson(request, sliced);
 }
 

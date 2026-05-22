@@ -111,9 +111,10 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // keep turso connection warm (avoids ~1s TLS handshake on first query after idle)
     db.startKeepalive();
 
-    // seed + start the background refresh for /recommended so the leaderboard
-    // never blocks user requests on a remote Turso query.
+    // seed + start the background refresh for /recommended and /curators
+    // so leaderboard pages never block user requests on a remote Turso query.
     server.initRecommendedCache(io);
+    server.initCuratorsCache(io);
 
     // start reconciler (verifies documents still exist at source PDS)
     ingest.reconciler.start(allocator, io);

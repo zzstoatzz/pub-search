@@ -44,7 +44,7 @@ pub const Window = enum {
 
     /// SQLite modifier for `DATE('now', ...)`. `.all` uses a far-past sentinel
     /// so the same parameterized SQL works for every window.
-    fn dateModifier(self: Window) []const u8 {
+    pub fn dateModifier(self: Window) []const u8 {
         return switch (self) {
             .all => "-100 years",
             .day => "-1 days",
