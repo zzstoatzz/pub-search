@@ -1,5 +1,20 @@
 // dynamic OG tags for link previews
+//
+// Two pages get dynamic rewriting: `/` (search results) and `/recommended`
+// (leaderboard variants). Other paths pass through to the static meta tags
+// already in the HTML.
+//
+// The rewriting only kicks in when there are interesting URL params — sharing
+// the bare `/` or bare `/recommended` keeps the static (cached) OG image so
+// scrapers don't all stampede our backend for the same defaults.
+
 const DATE_PRESET_LABELS = { week: 'last week', month: 'last month', year: 'last year' };
+const WINDOW_LABELS = {
+  day: 'today',
+  week: 'this week',
+  month: 'this month',
+  year: 'this year',
+};
 
 function presetFromSince(since) {
   if (!since) return null;
@@ -16,12 +31,26 @@ function stripQuotes(s) {
   return s.replace(/^"+|"+$/g, '');
 }
 
-function buildTitle(params) {
-  const parts = [];
+function escapeAttr(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
+function shortDid(did) {
+  const parts = String(did).split(':');
+  const last = parts[parts.length - 1] || did;
+  return last.length > 10 ? last.slice(0, 10) + '…' : last;
+}
+
+// ---------- homepage (search results) ----------
+
+function buildHomeTitle(params) {
+  const parts = [];
   if (params.q) parts.push(`"${stripQuotes(params.q)}"`);
   if (params.tag) parts.push(`#${params.tag}`);
-
   let suffix = '';
   const modifiers = [];
   if (params.author) modifiers.push(`by ${params.author}`);
@@ -32,22 +61,16 @@ function buildTitle(params) {
     modifiers.push(label);
   }
   if (modifiers.length > 0) suffix = ` ${modifiers.join(', ')}`;
-
-  if (parts.length === 0 && suffix) {
-    return `search${suffix} - pub search`;
-  }
-  if (parts.length === 0) return null; // no params, skip rewrite
-
+  if (parts.length === 0 && suffix) return `search${suffix} - pub search`;
+  if (parts.length === 0) return null;
   return `${parts.join(' in ')}${suffix} - pub search`;
 }
 
-function buildDescription(params) {
+function buildHomeDescription(params) {
   const parts = [];
-
   if (params.q) parts.push(`search results for "${stripQuotes(params.q)}"`);
   else if (params.tag) parts.push(`documents tagged #${params.tag}`);
   else parts.push('search results');
-
   if (params.author) parts.push(`by ${params.author}`);
   if (params.platform) parts.push(`on ${params.platform}`);
   if (params.since) {
@@ -55,20 +78,10 @@ function buildDescription(params) {
     const label = preset ? DATE_PRESET_LABELS[preset] : params.since;
     parts.push(label);
   }
-
   return parts.join(', ');
 }
 
-function escapeAttr(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-export async function onRequest(context) {
-  const url = new URL(context.request.url);
+async function handleHome(context, url) {
   const q = url.searchParams.get('q');
   const tag = url.searchParams.get('tag');
   const platform = url.searchParams.get('platform');
@@ -76,15 +89,11 @@ export async function onRequest(context) {
   const author = url.searchParams.get('author');
   const mode = url.searchParams.get('mode');
 
-  // if no search params, pass through (static tags in index.html are fine)
-  if (!q && !tag && !platform && !since && !author) {
-    return context.next();
-  }
+  if (!q && !tag && !platform && !since && !author) return context.next();
 
-  const title = buildTitle({ q, tag, platform, since, author });
-  const description = buildDescription({ q, tag, platform, since, author });
+  const title = buildHomeTitle({ q, tag, platform, since, author });
+  const description = buildHomeDescription({ q, tag, platform, since, author });
 
-  // build og:image URL with same search params
   const ogImageUrl = new URL('/og-image', url.origin);
   if (q) ogImageUrl.searchParams.set('q', q);
   if (tag) ogImageUrl.searchParams.set('tag', tag);
@@ -93,27 +102,100 @@ export async function onRequest(context) {
   if (author) ogImageUrl.searchParams.set('author', author);
   if (mode) ogImageUrl.searchParams.set('mode', mode);
 
-  const ogUrl = url.toString();
+  const response = await context.next();
+  return rewriteMeta(response, { title, description, ogUrl: url.toString(), ogImageUrl: ogImageUrl.toString() });
+}
+
+// ---------- /recommended (leaderboard) ----------
+
+// Title for the meta tag. The og-image worker also derives its own header
+// from the same params; we keep them aligned so the card preview and the
+// scrape-time title tell the same story.
+function buildRecommendedTitle(params) {
+  const { since, sort, view, author } = params;
+  const isCurators = view === 'curators';
+
+  let head;
+  if (isCurators) {
+    head = 'top curators';
+  } else if (author) {
+    const label = author.startsWith('did:')
+      ? `@${shortDid(author)}`
+      : (author.startsWith('@') ? author : `@${author}`);
+    head = `${label}'s ${sort === 'trending' ? 'trending posts' : 'most-recommended posts'}`;
+  } else {
+    head = sort === 'trending' ? 'trending posts' : 'most-recommended posts';
+  }
+
+  const win = since && since !== 'all' ? WINDOW_LABELS[since] || since : null;
+  return `${head}${win ? ' ' + win : ''} · pub search`;
+}
+
+function buildRecommendedDescription(params) {
+  const { since, sort, view, author } = params;
+  const isCurators = view === 'curators';
+
+  let head;
+  if (isCurators) {
+    head = 'people who recommend the most on atproto';
+  } else if (author) {
+    const label = author.startsWith('did:')
+      ? `@${shortDid(author)}`
+      : (author.startsWith('@') ? author : `@${author}`);
+    head = sort === 'trending'
+      ? `posts by ${label} ranked by recent velocity`
+      : `most-recommended posts by ${label}`;
+  } else if (sort === 'trending') {
+    head = 'posts ranked by recent recommend velocity on atproto';
+  } else {
+    head = 'most-recommended posts across atproto publishing platforms';
+  }
+
+  const win = since && since !== 'all' ? WINDOW_LABELS[since] || since : null;
+  return `${head}${win ? ' (' + win + ')' : ''}`;
+}
+
+async function handleRecommended(context, url) {
+  const since = url.searchParams.get('since');
+  const sort = url.searchParams.get('sort');
+  const view = url.searchParams.get('view');
+  const author = url.searchParams.get('author');
+
+  // bare /recommended → static OG is fine (and likely already cached upstream).
+  if (!since && !sort && !view && !author) return context.next();
+
+  const title = buildRecommendedTitle({ since, sort, view, author });
+  const description = buildRecommendedDescription({ since, sort, view, author });
+
+  // og-image accepts page=curators OR page=recommended; the other params
+  // (sort, since, author) are honored by the worker for tailored cards.
+  const isCurators = view === 'curators';
+  const ogImageUrl = new URL('/og-image', url.origin);
+  ogImageUrl.searchParams.set('page', isCurators ? 'curators' : 'recommended');
+  if (since && since !== 'all') ogImageUrl.searchParams.set('since', since);
+  if (!isCurators) {
+    if (sort && sort !== 'top') ogImageUrl.searchParams.set('sort', sort);
+    if (author) ogImageUrl.searchParams.set('author', author);
+  }
 
   const response = await context.next();
+  return rewriteMeta(response, { title, description, ogUrl: url.toString(), ogImageUrl: ogImageUrl.toString() });
+}
 
+// ---------- shared rewrite ----------
+
+function rewriteMeta(response, { title, description, ogUrl, ogImageUrl }) {
   return new HTMLRewriter()
-    // remove existing OG/twitter meta tags
     .on('meta[property^="og:"]', { element(el) { el.remove(); } })
     .on('meta[name^="twitter:"]', { element(el) { el.remove(); } })
-    // update <title>
     .on('title', {
       element(el) {
         if (title) el.setInnerContent(escapeAttr(title), { html: true });
-      }
+      },
     })
-    // update description meta
     .on('meta[name="description"]', {
-      element(el) {
-        el.setAttribute('content', description);
-      }
+      element(el) { el.setAttribute('content', description); },
     })
-    // inject new OG tags before </head>
     .on('head', {
       element(el) {
         el.append(`
@@ -122,15 +204,30 @@ export async function onRequest(context) {
     <meta property="og:url" content="${escapeAttr(ogUrl)}" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="pub search" />
-    <meta property="og:image" content="${escapeAttr(ogImageUrl.toString())}" />
+    <meta property="og:image" content="${escapeAttr(ogImageUrl)}" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${escapeAttr(title || 'pub search')}" />
     <meta name="twitter:description" content="${escapeAttr(description)}" />
-    <meta name="twitter:image" content="${escapeAttr(ogImageUrl.toString())}" />
+    <meta name="twitter:image" content="${escapeAttr(ogImageUrl)}" />
 `, { html: true });
-      }
+      },
     })
     .transform(response);
+}
+
+// ---------- entry ----------
+
+export async function onRequest(context) {
+  const url = new URL(context.request.url);
+  const path = url.pathname;
+
+  if (path === '/' || path === '/index.html') {
+    return handleHome(context, url);
+  }
+  if (path === '/recommended' || path === '/recommended.html' || path === '/recommended/') {
+    return handleRecommended(context, url);
+  }
+  return context.next();
 }

@@ -243,12 +243,15 @@ function buildCuratorsImage(rows, since) {
   };
 }
 
-async function fetchRecommended(since) {
+async function fetchRecommended(since, sort, author) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
-  const qs = since && since !== "all" ? `?since=${encodeURIComponent(since)}&limit=20` : `?limit=20`;
+  const params = new URLSearchParams({ limit: "20" });
+  if (since && since !== "all") params.set("since", since);
+  if (sort && sort !== "top") params.set("sort", sort);
+  if (author) params.set("author", author);
   try {
-    const res = await fetch(`${API_URL}/recommended${qs}`, {
+    const res = await fetch(`${API_URL}/recommended?${params.toString()}`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -259,6 +262,34 @@ async function fetchRecommended(since) {
   }
 }
 
+// resolve a DID via bsky's public AppView; returns handle or null on failure.
+// Used so the OG card can show "@nate.leaflet.pub" instead of "did:plc:xyz".
+async function resolveHandle(didOrHandle) {
+  if (!didOrHandle) return null;
+  if (!didOrHandle.startsWith("did:")) return didOrHandle.replace(/^@/, "");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+  try {
+    const res = await fetch(
+      `https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(didOrHandle)}`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d && d.handle ? d.handle : null;
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
+function shortDidImg(did) {
+  const parts = String(did || "").split(":");
+  const last = parts[parts.length - 1] || did || "";
+  return last.length > 14 ? last.slice(0, 14) + "…" : last;
+}
+
 const WINDOW_LABELS = {
   day: "in the last day",
   week: "this week",
@@ -266,10 +297,29 @@ const WINDOW_LABELS = {
   year: "this year",
 };
 
-function buildRecommendedImage(rows, since) {
+function buildRecommendedImage(rows, params) {
+  const { since, sort, author, handle } = params || {};
   const top = (rows || []).slice(0, 6);
   const totalRecs = (rows || []).reduce((s, r) => s + (r.recommendCount || 0), 0);
   const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
+
+  // Title varies with sort and author:
+  //   author     → "@handle's most-recommended posts" / "@handle's trending posts"
+  //   trending   → "trending posts"
+  //   default    → "most-recommended posts"
+  const authorLabel = author
+    ? (handle ? "@" + handle : "@" + shortDidImg(author))
+    : null;
+  let title;
+  if (authorLabel) {
+    title = sort === "trending"
+      ? `${authorLabel}'s trending posts`
+      : `${authorLabel}'s most-recommended posts`;
+  } else if (sort === "trending") {
+    title = "trending posts";
+  } else {
+    title = "most-recommended posts";
+  }
 
   // header block: "pub search / recommended" tag, then the page title.
   // Putting these inside a flex column with explicit gap is more reliable
@@ -314,7 +364,7 @@ function buildRecommendedImage(rows, since) {
               flexWrap: "wrap",
             },
             children: [
-              "most-recommended posts",
+              title,
               {
                 type: "div",
                 props: {
@@ -826,8 +876,15 @@ export async function onRequest(context) {
   // recommended leaderboard page
   if (page === "recommended") {
     const since = url.searchParams.get("since");
-    const rows = await fetchRecommended(since);
-    const html = buildRecommendedImage(rows, since);
+    const sort = url.searchParams.get("sort");
+    const author = url.searchParams.get("author");
+    // resolve handle in parallel with the leaderboard fetch — both have
+    // their own short timeout so a slow upstream doesn't tank the card.
+    const [rows, handle] = await Promise.all([
+      fetchRecommended(since, sort, author),
+      author ? resolveHandle(author) : Promise.resolve(null),
+    ]);
+    const html = buildRecommendedImage(rows, { since, sort, author, handle });
     return new ImageResponse(html, {
       width: 1200,
       height: 630,
