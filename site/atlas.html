@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- pinch-zoom on a 2D map is an obvious gesture; don't block the browser
+       from honoring it. atlas.js handles its own canvas pan/zoom, but
+       letting the page itself zoom too is fine UX (and required by WCAG
+       for users who need to enlarge text). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pub search / atlas</title>
   <meta name="description" content="2d semantic map of atproto publishing platforms">
   <meta property="og:title" content="pub search / atlas">
