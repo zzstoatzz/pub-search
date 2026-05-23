@@ -757,15 +757,17 @@
     }
 
     if (titleAlpha > 0.01) {
-      // grow font + raise label cap at very high zoom: at zoom 25+ there
-      // are fewer dots on screen, density isn't the constraint, so let the
-      // titles take over as the visual focus.
+      // Title cap stays at 20 mobile / 50 desktop regardless of zoom.
+      // A previous attempt to lift these caps at high zoom flooded the
+      // small viewport — the *screen size* dictates how many titles fit,
+      // not how many dots are theoretically on screen. Font growth is
+      // desktop-only and capped tight.
       var baseFont = small ? 9 : 11;
-      var fontSize = baseFont + Math.min(4, Math.max(0, Math.floor((zoom - 25) / 8)));
+      var fontSize = baseFont + (small ? 0 : Math.min(2, Math.max(0, Math.floor((zoom - 25) / 10))));
       ctx.font = fontSize + 'px monospace';
       ctx.globalAlpha = 0.7 * titleAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
-      var maxLabels = (zoom > 15) ? (small ? 60 : 200) : (small ? 20 : 50);
+      var maxLabels = small ? 20 : 50;
       var truncLen = small ? 25 : 45;
       var iconSize = small ? 12 : 14;
       var iconGap = 4;
