@@ -703,7 +703,7 @@
         if (!handle) return;
         var line = row.querySelector('.handle-line');
         if (!line) return;
-        var profileUrl = clients ? clients.profileUrl(did) : '#';
+        var profileUrl = clients ? clients.profileUrlFor(did) : '#';
         line.innerHTML = '<a href="' + escapeHtml(profileUrl) +
           '" target="_blank" rel="noopener" title="open profile">' +
           '<span class="at">@</span>' + escapeHtml(handle) + '</a>';
