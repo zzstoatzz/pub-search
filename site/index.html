@@ -752,13 +752,25 @@
       color: #34d399;
     }
 
+    /* button-based theme toggle — reset native chrome, keep the inline-glyph look */
     .theme-toggle {
       cursor: pointer;
       color: var(--text-dim);
       font-size: 16px;
       user-select: none;
+      background: none;
+      border: none;
+      padding: 6px 8px;
+      font-family: inherit;
+      line-height: 1;
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
     .theme-toggle:hover { color: var(--text); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
     .cover-thumb {
       position: absolute;
@@ -917,7 +929,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="components.css?v=1779491569">
+  <link rel="stylesheet" href="components.css?v=1779507677">
   <script src="clients.js"></script>
   <script src="identity.js"></script>
   <script src="ui.js"></script>
@@ -929,7 +941,7 @@
     <div class="search-box">
       <div class="lf-typeahead-wrap">
         <div class="lf-filter-chips" id="filter-chips"></div>
-        <input type="text" id="query" placeholder="search content..." autofocus>
+        <input type="text" id="query" placeholder="search content..." aria-label="search atproto publishing platforms" autofocus>
       </div>
       <button id="search-btn">search</button>
     </div>
@@ -958,7 +970,7 @@
     </div>
 
     <div id="stats" class="stats"></div>
-    <div class="stats" style="margin-top:0.5rem"><span class="theme-toggle" id="theme-toggle"></span></div>
+    <div class="stats" style="margin-top:0.5rem"><button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></div>
   </div>
 
   <script>
@@ -1047,6 +1059,21 @@
       return null;
     }
 
+    // Keep <title> in sync with the current query/filters so the browser tab
+    // tells you what's open. Resets to the static default for the empty page.
+    function updateDocTitle(query, tag, platform) {
+      const parts = [];
+      const q = (query || '').trim();
+      if (q) parts.push(`"${q}"`);
+      if (tag) parts.push(`#${tag}`);
+      if (platform) parts.push(`on ${platform}`);
+      if (currentAuthor) {
+        const a = (typeof authorCache !== 'undefined' && authorCache.get) ? authorCache.get(currentAuthor) : null;
+        parts.push(a ? `by @${a}` : `by ${currentAuthor.slice(0, 14)}…`);
+      }
+      document.title = parts.length ? `${parts.join(' ')} · pub search` : 'pub search';
+    }
+
     async function search(query, tag = null, platform = null, append = false) {
       if (!query.trim() && !tag && !platform && !currentAuthor) return;
 
@@ -1054,6 +1081,7 @@
         searchBtn.disabled = true;
         resultsDiv.innerHTML = `<div class="status">searching...</div>`;
         currentOffset = 0;
+        updateDocTitle(query, tag, platform);
       }
 
       let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}&format=v2&limit=${PAGE_SIZE}&offset=${currentOffset}`;

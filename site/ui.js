@@ -86,7 +86,19 @@
   }
 
   function menuKey(e) {
-    if (e.key === 'Escape') { e.preventDefault(); closeMenu(); }
+    if (e.key === 'Escape') { e.preventDefault(); closeMenu(); return; }
+    if (!openMenu || !openMenu.sheet) return;
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    var items = Array.prototype.slice.call(openMenu.sheet.querySelectorAll('.lf-menu-item'));
+    if (items.length === 0) return;
+    var current = items.indexOf(document.activeElement);
+    var next;
+    if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = items.length - 1;
+    else if (e.key === 'ArrowDown') next = (current + 1 + items.length) % items.length;
+    else /* ArrowUp */ next = (current - 1 + items.length) % items.length;
+    items[next].focus();
   }
 
   function showMenu(items, x, y) {
@@ -147,11 +159,18 @@
     document.addEventListener('keydown', menuKey, true);
 
     openMenu = {
+      sheet: sheet,
       remove: function() {
         sheet.remove();
         if (sheet._backdrop) sheet._backdrop.remove();
       },
     };
+
+    // Focus the first menu item so keyboard users can immediately use arrows
+    // / Enter to act. Without this, the menu opens but focus stays on the
+    // trigger and Escape is the only keyboard interaction.
+    var first = sheet.querySelector('.lf-menu-item');
+    if (first) requestAnimationFrame(function() { first.focus(); });
   }
 
   function bindContextMenu(el, getItems) {
@@ -163,8 +182,47 @@
 
   // ---------- canonical menu builders ----------
 
+  // Brief visual confirmation for clipboard actions. Without it, the right-
+  // click "Copy link" / "Copy handle" silently succeeds (or silently fails)
+  // and the user has no idea if anything happened.
+  var toastEl = null;
+  var toastTimer = null;
+  function showToast(message) {
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.className = 'lf-toast';
+      toastEl.setAttribute('role', 'status');
+      toastEl.setAttribute('aria-live', 'polite');
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = message;
+    toastEl.classList.add('open');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() {
+      toastEl.classList.remove('open');
+    }, 1500);
+  }
+
   function copyToClipboard(text) {
-    try { navigator.clipboard.writeText(text); } catch (e) {}
+    var done = false;
+    try {
+      navigator.clipboard.writeText(text);
+      done = true;
+    } catch (e) {
+      // legacy fallback: hidden input + execCommand. Last resort, may also fail.
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        document.body.appendChild(ta);
+        ta.select();
+        done = document.execCommand && document.execCommand('copy');
+        ta.remove();
+      } catch (e2) {}
+    }
+    showToast(done ? 'copied' : 'copy failed');
   }
 
   // Single "Open in <preferred client>" entry — honors the choice the

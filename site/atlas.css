@@ -111,10 +111,19 @@ canvas:active {
   display: flex;
   align-items: center;
   justify-content: center;
+  background: none;
+  border: none;
+  font: inherit;
+  padding: 0;
 }
 
 .theme-toggle:hover {
   color: var(--text-secondary);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--tooltip-border);
+  outline-offset: 2px;
 }
 
 /* tooltip */

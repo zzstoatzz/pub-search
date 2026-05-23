@@ -23,7 +23,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="components.css?v=1779491569">
+  <link rel="stylesheet" href="components.css?v=1779507677">
   <style>
     :root, [data-theme="dark"] {
       --bg: #050505;
@@ -102,8 +102,14 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      background: none;
+      border: none;
+      font: inherit;
+      min-width: 44px;
+      min-height: 44px;
     }
     .theme-toggle:hover { color: var(--text-secondary); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
     .lead {
       font-size: 18px;
@@ -117,6 +123,8 @@
     }
 
     /* tiny "?" affordance for the nerd-detail tooltip */
+    /* Real <button> so it's keyboard-reachable + screen-reader-friendly.
+     * Reset native chrome so the existing visual (small circle) stays. */
     .info {
       position: relative;
       display: inline-flex;
@@ -126,13 +134,17 @@
       height: 16px;
       border-radius: 50%;
       border: 1px solid var(--text-muted);
+      background: none;
       color: var(--text-muted);
       font-size: 10px;
       font-family: monospace;
       cursor: help;
       user-select: none;
+      padding: 0;
+      line-height: 1;
     }
     .info:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
+    .info:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
     /* Invisible bridge directly below the `?` so the cursor never lands in
      * dead space when traveling from the button to the tooltip. Without it,
@@ -319,12 +331,18 @@
       font-family: monospace;
       transition: color 0.12s, background 0.12s;
       border-right: 1px solid var(--border-subtle);
+      /* bigger tap target on touch devices (pointer is coarse) */
+      min-height: 36px;
     }
     .view-pill:last-child { border-right: none; }
     .view-pill:hover { color: var(--text); background: var(--bg-subtle); }
+    .view-pill:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; position: relative; z-index: 1; }
     .view-pill.active {
       background: var(--bg-subtle);
       color: var(--text-bright);
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .view-pill { min-height: 44px; padding: 8px 16px; }
     }
 
     /* active-author chip: shown when ?author= is in the URL */
@@ -366,15 +384,20 @@
       color: var(--text-dim);
       font-family: monospace;
       transition: color 0.12s, border-color 0.12s, background 0.12s;
+      min-height: 30px;
     }
     .win-pill:hover {
       color: var(--text);
       border-color: var(--border-focus);
     }
+    .win-pill:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
     .win-pill.active {
       background: rgba(14, 165, 233, 0.18);
       border-color: #0ea5e9;
       color: #38bdf8;
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .win-pill { min-height: 44px; padding: 6px 14px; font-size: 12px; }
     }
 
     .load-more {
@@ -414,7 +437,7 @@
 </head>
 <body>
   <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="dim">/ recommended</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <span class="theme-toggle" id="theme-toggle"></span></h1>
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ recommended</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
 
     <div id="author-chip-host"></div>
 
@@ -425,9 +448,9 @@
 
     <div class="lead">
       <span id="lead-title">most-recommended posts</span>
-      <span class="info" tabindex="0" aria-label="how counts are computed">?<span class="tip"><span class="tip-inner" id="lead-tip">
+      <button type="button" class="info" aria-label="how counts are computed">?<span class="tip"><span class="tip-inner" id="lead-tip">
         counts merge <a href="https://standard.site/docs/lexicons/recommend/" target="_blank" rel="noopener"><code>site.standard.graph.recommend</code></a> and <code>pub.leaflet.interactions.recommend</code> — same idea, different lexicon per platform.
-      </span></span></span>
+      </span></span></button>
     </div>
 
     <div class="windows" id="windows" role="tablist" aria-label="time window">
@@ -793,7 +816,10 @@
 
     function syncWindowPills() {
       document.querySelectorAll('.win-pill').forEach(function(b) {
-        b.classList.toggle('active', b.dataset.window === currentWindow);
+        var active = b.dataset.window === currentWindow;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+        b.tabIndex = active ? 0 : -1; // roving tabindex per WAI-ARIA tabs pattern
       });
     }
 
@@ -825,9 +851,14 @@
 
       // Kick off a handle lookup so the chip's @handle replaces the short-DID
       // once identity resolution returns. Reuses LeafletIdentity (typeahead).
+      // Also re-runs the title update so the tab gets the @handle too.
       if (actor.indexOf('did:') === 0 && !handleCache.has(actor)) {
         window.LeafletIdentity.resolveProfile(actor).then(function(p) {
-          if (p && p.handle) { handleCache.set(actor, p.handle); renderAuthorChip(); }
+          if (p && p.handle) {
+            handleCache.set(actor, p.handle);
+            renderAuthorChip();
+            updateDocTitle();
+          }
         });
       }
     }
@@ -845,7 +876,10 @@
 
     function syncViewPills() {
       document.querySelectorAll('.view-pill').forEach(function(b) {
-        b.classList.toggle('active', b.dataset.view === currentView);
+        var active = b.dataset.view === currentView;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+        b.tabIndex = active ? 0 : -1;
       });
       // page title + tooltip change with the view
       var lead = document.getElementById('lead-title');
@@ -859,11 +893,33 @@
       }
     }
 
+    // Keep <title> in sync with the current state so the browser tab tells
+    // you which view you're on (helps when you have a few tabs open).
+    function updateDocTitle() {
+      var entity;
+      if (currentView === 'curators') {
+        entity = 'top curators';
+      } else if (currentCurator) {
+        var c = handleCache.get(currentCurator);
+        var clabel = c ? '@' + c : (currentCurator.indexOf('did:') === 0 ? shortDid(currentCurator) : currentCurator);
+        entity = 'posts recommended by ' + clabel;
+      } else if (currentAuthor) {
+        var a = handleCache.get(currentAuthor);
+        var alabel = a ? '@' + a : (currentAuthor.indexOf('did:') === 0 ? shortDid(currentAuthor) : currentAuthor);
+        entity = alabel + "'s most-recommended posts";
+      } else {
+        entity = 'most-recommended posts';
+      }
+      var win = currentWindow !== 'all' ? ' (' + (WINDOW_PHRASE[currentWindow] || currentWindow) + ')' : '';
+      document.title = entity + win + ' · pub search';
+    }
+
     function resetAndFetch() {
       currentOffset = 0;
       totalRendered = 0;
       document.getElementById('status').textContent = 'loading…';
       document.getElementById('list').innerHTML = '';
+      updateDocTitle();
       fetchPage(0, false);
     }
 
@@ -907,6 +963,7 @@
     syncWindowPills();
     syncViewPills();
     renderAuthorChip();
+    updateDocTitle();
 
     fetchPage(0, false);
 

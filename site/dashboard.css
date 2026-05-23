@@ -288,8 +288,19 @@ a.pub-name:hover { color: #2a9d5c; }
   color: var(--text-dim);
   font-size: 16px;
   user-select: none;
+  background: none;
+  border: none;
+  font-family: inherit;
+  padding: 4px 6px;
+  line-height: 1;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .theme-toggle:hover { color: var(--text); }
+.theme-toggle:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
 footer {
   margin-top: 2rem;

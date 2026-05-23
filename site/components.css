@@ -151,7 +151,7 @@
   font-size: 13px;
   padding: 10px 14px;
   cursor: pointer;
-  min-height: 40px;
+  min-height: 44px; /* WCAG 2.5.5 tap target */
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -165,6 +165,11 @@
 .lf-menu-item:focus {
   background: var(--result-hover, var(--bg-hover, var(--bg-subtle)));
   outline: none;
+}
+/* Replace removed outline with a visible focus indicator for keyboard users */
+.lf-menu-item:focus-visible {
+  outline: 2px solid var(--border-focus, #333);
+  outline-offset: -2px;
 }
 
 .lf-menu-icon {
@@ -327,6 +332,10 @@
 }
 
 .lf-settings-btn:hover { color: var(--text-bright, var(--text)); }
+.lf-settings-btn:focus-visible {
+  outline: 2px solid var(--border-focus, #333);
+  outline-offset: 2px;
+}
 
 /* in the homepage h1 (flex row), push the gear to the right edge of the
  * content area so it never sits mid-line with awkward whitespace. */
@@ -371,3 +380,36 @@ h1 .lf-settings-btn {
 }
 
 .lf-row-more:hover { color: var(--text-secondary, var(--text-dim)); }
+.lf-row-more:focus-visible {
+  outline: 2px solid var(--border-focus, #333);
+  outline-offset: 2px;
+}
+
+/* ---------- toast (clipboard feedback etc.) ---------- */
+
+.lf-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 12px);
+  background: var(--bg-subtle, #111);
+  border: 1px solid var(--border-focus, #333);
+  color: var(--text, #ccc);
+  font-family: monospace;
+  font-size: 12px;
+  padding: 8px 14px;
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
+  z-index: 1000;
+  /* respect iPhone home indicator */
+  margin-bottom: env(safe-area-inset-bottom, 0);
+}
+.lf-toast.open {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lf-toast { transition: opacity 0.05s; transform: translate(-50%, 0); }
+}
