@@ -179,9 +179,9 @@
     };
   }
 
-  // Per-author menu — used on result-row @handle links, typeahead
-  // suggestions, and the resolved handle on /curators rows. Accepts
-  // bare handle (no leading @) and did.
+  // Per-author menu — for the writer of a post (on result-row @handles and
+  // typeahead suggestions). "Most-recommended posts BY this author" goes
+  // to /recommended?author=did (filters on document author).
   function authorMenuItems(handle, did) {
     var items = [
       { label: 'View on atlas', onSelect: function() {
@@ -189,8 +189,11 @@
       }},
     ];
     if (did) {
-      items.push({ label: "View this author's recommended posts", onSelect: function() {
+      items.push({ label: "Most-recommended posts they've written", onSelect: function() {
         location.href = '/recommended.html?author=' + encodeURIComponent(did);
+      }});
+      items.push({ label: "Posts they've recommended", onSelect: function() {
+        location.href = '/recommended.html?curator=' + encodeURIComponent(did);
       }});
     }
     items.push({ divider: true });
@@ -200,12 +203,17 @@
     return items;
   }
 
-  // Per-curator menu — same person-like shape as author but framed around
-  // their curation work. handle may be empty before bsky resolution returns.
+  // Per-curator menu — for the recommender on /recommended curators rows.
+  // Primary action is "posts they've recommended" (?curator=did), NOT
+  // "posts they've written" (?author=did) which is often empty for
+  // curators. Handle may be empty before identity resolution returns.
   function curatorMenuItems(handle, did) {
     var items = [];
     if (did) {
-      items.push({ label: "View this curator's recommended posts", onSelect: function() {
+      items.push({ label: "Posts they've recommended", onSelect: function() {
+        location.href = '/recommended.html?curator=' + encodeURIComponent(did);
+      }});
+      items.push({ label: "Most-recommended posts they've written", onSelect: function() {
         location.href = '/recommended.html?author=' + encodeURIComponent(did);
       }});
     }
@@ -258,12 +266,14 @@
         location.href = '/atlas.html?q=' + encodeURIComponent('@' + opts.handle);
       }});
     }
-    // Cross-page jump: from a doc row, "show me this author's leaderboard"
-    // is the natural shortcut. Needs the DID (handle alone isn't enough for
-    // the backend filter).
+    // Cross-page jump from a doc row to leaderboard views of this author.
+    // Needs the DID (handle alone isn't enough for the backend filter).
     if (opts.authorDid) {
-      items.push({ label: "View this author's recommended posts", onSelect: function() {
+      items.push({ label: "Most-recommended posts they've written", onSelect: function() {
         location.href = '/recommended.html?author=' + encodeURIComponent(opts.authorDid);
+      }});
+      items.push({ label: "Posts they've recommended", onSelect: function() {
+        location.href = '/recommended.html?curator=' + encodeURIComponent(opts.authorDid);
       }});
     }
     if (opts.externalUrl) {

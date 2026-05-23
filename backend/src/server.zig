@@ -348,6 +348,7 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
     const since_str = parseQueryParam(alloc, target, "since") catch null;
     const sort_str = parseQueryParam(alloc, target, "sort") catch null;
     const author_param = parseQueryParam(alloc, target, "author") catch null;
+    const curator_param = parseQueryParam(alloc, target, "curator") catch null;
     const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
     const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
     const window = recommended.Window.fromString(since_str);
@@ -355,20 +356,33 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
     span.setAttribute("window", window.slug());
     span.setAttribute("sort", sort.slug());
 
-    // resolve author → DID (accept either form, matches search.zig's pattern)
-    const author_did: ?[]const u8 = if (author_param) |ap| blk: {
-        if (mem.startsWith(u8, ap, "did:")) break :blk ap;
-        break :blk resolveHandle(alloc, ap, io) catch null;
-    } else null;
+    // resolve author / curator → DID (accept either form, matches search.zig's pattern)
+    const resolveActor = struct {
+        fn run(alloc_: std.mem.Allocator, ap_: []const u8, io_: Io) ?[]const u8 {
+            if (mem.startsWith(u8, ap_, "did:")) return ap_;
+            return resolveHandle(alloc_, ap_, io_) catch null;
+        }
+    }.run;
+    const author_did: ?[]const u8 = if (author_param) |ap| resolveActor(alloc, ap, io) else null;
+    const curator_did: ?[]const u8 = if (curator_param) |cp| resolveActor(alloc, cp, io) else null;
     if (author_did) |d| span.setAttribute("author", d);
+    if (curator_did) |d| span.setAttribute("curator", d);
+
+    // curator + author both set: curator wins (more specific intent — "what
+    // has X recommended" is narrower than "what has Y written"). Avoids
+    // surprising empty results from intersecting two filters.
+    const filter: recommended.Filter = .{
+        .author_did = if (curator_did != null) null else author_did,
+        .curator_did = curator_did,
+    };
 
     var body: []u8 = undefined;
-    if (author_did) |did| {
-        // author-filtered queries bypass the cache — narrow scope means
-        // sub-100ms Turso turnaround, and per-(author, window, sort) cache
-        // slots would explode the working set.
+    if (filter.author_did != null or filter.curator_did != null) {
+        // filtered queries bypass the cache — narrow scope means sub-100ms
+        // Turso turnaround, and per-(filter, window, sort) cache slots
+        // would explode the working set.
         span.setAttribute("cache", "bypass");
-        body = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort, did));
+        body = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort, filter));
     } else {
         var snapshot = try recommended.snapshot(sort, window, alloc);
         if (snapshot != null) {
@@ -376,7 +390,7 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
         } else {
             // cold fallback — refresh thread hasn't populated this slot yet.
             span.setAttribute("cache", "cold");
-            snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort, null));
+            snapshot = try alloc.dupe(u8, try recommended.fetch(alloc, window, sort, .{}));
         }
         body = snapshot.?;
     }

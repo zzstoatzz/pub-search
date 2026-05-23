@@ -247,13 +247,15 @@ function buildCuratorsImage(rows, since, handleMap) {
   };
 }
 
-async function fetchRecommended(since, sort, author) {
+async function fetchRecommended(since, sort, author, curator) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
   const params = new URLSearchParams({ limit: "20" });
   if (since && since !== "all") params.set("since", since);
   if (sort && sort !== "top") params.set("sort", sort);
-  if (author) params.set("author", author);
+  // curator beats author (matches backend precedence)
+  if (curator) params.set("curator", curator);
+  else if (author) params.set("author", author);
   try {
     const res = await fetch(`${API_URL}/recommended?${params.toString()}`, {
       signal: controller.signal,
@@ -321,23 +323,27 @@ const WINDOW_LABELS = {
 };
 
 function buildRecommendedImage(rows, params) {
-  const { since, sort, author, handle } = params || {};
+  const { since, sort, author, curator, handle } = params || {};
   const top = (rows || []).slice(0, 6);
   const totalRecs = (rows || []).reduce((s, r) => s + (r.recommendCount || 0), 0);
   const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
 
-  // Title varies with sort and author:
+  // Title varies with sort, author, curator:
+  //   curator    → "posts recommended by @handle"
   //   author     → "@handle's most-recommended posts" / "@handle's trending posts"
   //   trending   → "trending posts"
   //   default    → "most-recommended posts"
-  const authorLabel = author
-    ? (handle ? "@" + handle : "@" + shortDidImg(author))
+  const actor = curator || author;
+  const actorLabel = actor
+    ? (handle ? "@" + handle : "@" + shortDidImg(actor))
     : null;
   let title;
-  if (authorLabel) {
+  if (curator && actorLabel) {
+    title = `posts recommended by ${actorLabel}`;
+  } else if (author && actorLabel) {
     title = sort === "trending"
-      ? `${authorLabel}'s trending posts`
-      : `${authorLabel}'s most-recommended posts`;
+      ? `${actorLabel}'s trending posts`
+      : `${actorLabel}'s most-recommended posts`;
   } else if (sort === "trending") {
     title = "trending posts";
   } else {
@@ -905,13 +911,15 @@ export async function onRequest(context) {
     const since = url.searchParams.get("since");
     const sort = url.searchParams.get("sort");
     const author = url.searchParams.get("author");
-    // resolve handle in parallel with the leaderboard fetch — both have
-    // their own short timeout so a slow upstream doesn't tank the card.
+    const curator = url.searchParams.get("curator");
+    // resolve handle for the actor in the header (curator wins over author,
+    // matching backend precedence) in parallel with the leaderboard fetch.
+    const actor = curator || author;
     const [rows, handle] = await Promise.all([
-      fetchRecommended(since, sort, author),
-      author ? resolveHandle(author) : Promise.resolve(null),
+      fetchRecommended(since, sort, author, curator),
+      actor ? resolveHandle(actor) : Promise.resolve(null),
     ]);
-    const html = buildRecommendedImage(rows, { since, sort, author, handle });
+    const html = buildRecommendedImage(rows, { since, sort, author, curator, handle });
     return new ImageResponse(html, {
       width: 1200,
       height: 630,

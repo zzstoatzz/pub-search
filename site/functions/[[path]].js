@@ -108,21 +108,25 @@ async function handleHome(context, url) {
 
 // ---------- /recommended (leaderboard) ----------
 
+function actorLabel(actor) {
+  if (actor.startsWith('did:')) return '@' + shortDid(actor);
+  return actor.startsWith('@') ? actor : '@' + actor;
+}
+
 // Title for the meta tag. The og-image worker also derives its own header
 // from the same params; we keep them aligned so the card preview and the
 // scrape-time title tell the same story.
 function buildRecommendedTitle(params) {
-  const { since, sort, view, author } = params;
+  const { since, sort, view, author, curator } = params;
   const isCurators = view === 'curators';
 
   let head;
   if (isCurators) {
     head = 'top curators';
+  } else if (curator) {
+    head = `posts recommended by ${actorLabel(curator)}`;
   } else if (author) {
-    const label = author.startsWith('did:')
-      ? `@${shortDid(author)}`
-      : (author.startsWith('@') ? author : `@${author}`);
-    head = `${label}'s ${sort === 'trending' ? 'trending posts' : 'most-recommended posts'}`;
+    head = `${actorLabel(author)}'s ${sort === 'trending' ? 'trending posts' : 'most-recommended posts'}`;
   } else {
     head = sort === 'trending' ? 'trending posts' : 'most-recommended posts';
   }
@@ -132,20 +136,18 @@ function buildRecommendedTitle(params) {
 }
 
 function buildRecommendedDescription(params) {
-  const { since, sort, view, author } = params;
+  const { since, sort, view, author, curator } = params;
   const isCurators = view === 'curators';
 
   let head;
   if (isCurators) {
-    // "recommend" alone is too vague — say what they're recommending and where.
     head = 'people who have recommended the most posts on atproto publishing platforms';
+  } else if (curator) {
+    head = `posts recommended by ${actorLabel(curator)} on atproto publishing platforms`;
   } else if (author) {
-    const label = author.startsWith('did:')
-      ? `@${shortDid(author)}`
-      : (author.startsWith('@') ? author : `@${author}`);
     head = sort === 'trending'
-      ? `posts by ${label} ranked by recent recommend velocity`
-      : `most-recommended posts by ${label}`;
+      ? `posts by ${actorLabel(author)} ranked by recent recommend velocity`
+      : `most-recommended posts by ${actorLabel(author)}`;
   } else if (sort === 'trending') {
     head = 'posts gaining recommends fastest across atproto publishing platforms';
   } else {
@@ -161,22 +163,25 @@ async function handleRecommended(context, url) {
   const sort = url.searchParams.get('sort');
   const view = url.searchParams.get('view');
   const author = url.searchParams.get('author');
+  const curator = url.searchParams.get('curator');
 
   // bare /recommended → static OG is fine (and likely already cached upstream).
-  if (!since && !sort && !view && !author) return context.next();
+  if (!since && !sort && !view && !author && !curator) return context.next();
 
-  const title = buildRecommendedTitle({ since, sort, view, author });
-  const description = buildRecommendedDescription({ since, sort, view, author });
+  const title = buildRecommendedTitle({ since, sort, view, author, curator });
+  const description = buildRecommendedDescription({ since, sort, view, author, curator });
 
   // og-image accepts page=curators OR page=recommended; the other params
-  // (sort, since, author) are honored by the worker for tailored cards.
+  // (sort, since, author, curator) are honored by the worker for tailored cards.
   const isCurators = view === 'curators';
   const ogImageUrl = new URL('/og-image', url.origin);
   ogImageUrl.searchParams.set('page', isCurators ? 'curators' : 'recommended');
   if (since && since !== 'all') ogImageUrl.searchParams.set('since', since);
   if (!isCurators) {
     if (sort && sort !== 'top') ogImageUrl.searchParams.set('sort', sort);
-    if (author) ogImageUrl.searchParams.set('author', author);
+    // curator wins over author (matches backend precedence)
+    if (curator) ogImageUrl.searchParams.set('curator', curator);
+    else if (author) ogImageUrl.searchParams.set('author', author);
   }
 
   const response = await context.next();

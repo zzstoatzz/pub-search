@@ -161,10 +161,60 @@ const TrendingByAuthorQuery = zql.Query(
     \\LIMIT 250
 );
 
-// Comptime safety: all four queries must select the same columns in the
+// Curator-filtered variants: docs that a specific recommender DID has
+// recommended. Different intent from author: "show me what they read &
+// liked" (curator) vs "show me what they wrote that got recommended"
+// (author). Uses an EXISTS subquery so the outer aggregation still counts
+// ALL recommenders for each doc (the displayed total reflects popularity,
+// not just this curator's contribution).
+const TopByCuratorQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\WHERE EXISTS (SELECT 1 FROM recommends r2 WHERE r2.document_uri = d.uri AND r2.did = ?)
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY recommend_count DESC, d.created_at DESC
+    \\LIMIT 250
+);
+
+const TrendingByCuratorQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\WHERE EXISTS (SELECT 1 FROM recommends r2 WHERE r2.document_uri = d.uri AND r2.did = ?)
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY CAST(recommend_count AS REAL)
+    \\  / MAX(1, julianday('now') - julianday(COALESCE(NULLIF(d.created_at, ''), '1970-01-01'))) DESC,
+    \\  d.created_at DESC
+    \\LIMIT 250
+);
+
+// Comptime safety: all six queries must select the same columns in the
 // same order so Row's column lookup via TopQuery works for all of them.
 comptime {
-    const all_queries = .{ TopQuery, TrendingQuery, TopByAuthorQuery, TrendingByAuthorQuery };
+    const all_queries = .{
+        TopQuery,           TrendingQuery,
+        TopByAuthorQuery,   TrendingByAuthorQuery,
+        TopByCuratorQuery,  TrendingByCuratorQuery,
+    };
     for (all_queries) |Q| {
         if (Q.columns.len != TopQuery.columns.len) @compileError("recommended query column count drift");
         for (Q.columns, TopQuery.columns) |a, b| {
@@ -206,40 +256,50 @@ const JsonRow = struct {
     totalCount: i64,
 };
 
-/// Fetch top-250 for (window, sort), optionally narrowed to one author.
-/// Used by the cache refresh thread (author=null) and the cold fallback
-/// path / live author-filter path in the handler.
-pub fn fetch(alloc: Allocator, window: Window, sort: Sort, author_did: ?[]const u8) ![]const u8 {
+/// Optional per-request filters. At most one of `author_did` / `curator_did`
+/// should be set — author narrows to docs authored by that DID, curator
+/// narrows to docs that DID has recommended.
+pub const Filter = struct {
+    author_did: ?[]const u8 = null,
+    curator_did: ?[]const u8 = null,
+};
+
+/// Fetch top-250 for (window, sort), optionally narrowed by author OR
+/// curator. Used by the cache refresh thread (filter empty) and the
+/// cold fallback / live filter paths in the handler.
+pub fn fetch(alloc: Allocator, window: Window, sort: Sort, filter: Filter) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
-    // `c.query` takes a comptime SQL string, so we have to branch here
-    // rather than pre-select a runtime `sql` value.
+    // `c.query` takes a comptime SQL string, so we branch on the (filter,
+    // sort) combo and call the right comptime query in each arm. The arms
+    // share a common error-envelope path via the inner orelse-block.
     const date_mod = window.dateModifier();
+    const failEnvelope = struct {
+        fn fail(out: *std.Io.Writer.Allocating) anyerror![]const u8 {
+            try out.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
+            return try out.toOwnedSlice();
+        }
+    }.fail;
+
     var res = blk: {
-        if (author_did) |did| {
+        if (filter.curator_did) |did| {
             break :blk switch (sort) {
-                .top => c.query(TopByAuthorQuery.positional, &.{ date_mod, did }) catch {
-                    try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-                    return try output.toOwnedSlice();
-                },
-                .trending => c.query(TrendingByAuthorQuery.positional, &.{ date_mod, did }) catch {
-                    try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-                    return try output.toOwnedSlice();
-                },
+                .top => c.query(TopByCuratorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
+                .trending => c.query(TrendingByCuratorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
+            };
+        }
+        if (filter.author_did) |did| {
+            break :blk switch (sort) {
+                .top => c.query(TopByAuthorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
+                .trending => c.query(TrendingByAuthorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
             };
         }
         break :blk switch (sort) {
-            .top => c.query(TopQuery.positional, &.{date_mod}) catch {
-                try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-                return try output.toOwnedSlice();
-            },
-            .trending => c.query(TrendingQuery.positional, &.{date_mod}) catch {
-                try output.writer.writeAll("{\"error\":\"failed to fetch recommended\"}");
-                return try output.toOwnedSlice();
-            },
+            .top => c.query(TopQuery.positional, &.{date_mod}) catch return failEnvelope(&output),
+            .trending => c.query(TrendingQuery.positional, &.{date_mod}) catch return failEnvelope(&output),
         };
     };
     defer res.deinit();
@@ -272,11 +332,11 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort, author_did: ?[]const 
 }
 
 fn refreshTop(slot: Window, alloc: Allocator) anyerror![]const u8 {
-    return fetch(alloc, slot, .top, null);
+    return fetch(alloc, slot, .top, .{});
 }
 
 fn refreshTrending(slot: Window, alloc: Allocator) anyerror![]const u8 {
-    return fetch(alloc, slot, .trending, null);
+    return fetch(alloc, slot, .trending, .{});
 }
 
 /// Two parallel caches keyed by Sort, each storing 5 window slots. Two

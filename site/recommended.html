@@ -500,15 +500,20 @@
       var p = new URLSearchParams(location.search).get('view');
       return VIEWS.indexOf(p) >= 0 ? p : 'posts';
     })();
-    // ?author=did:... or @handle filters the posts view to one writer.
-    // Curators view + author doesn't make sense (you don't filter curators
-    // by who they wrote) — when an author is set we force the posts view.
+    // Two distinct filter axes — author = posts WRITTEN by, curator = posts
+    // RECOMMENDED by. Different intent. Curator beats author if both set
+    // (the curator filter is the narrower / more specific one).
     var currentAuthor = (function() {
       var p = new URLSearchParams(location.search).get('author');
       return p || '';
     })();
-    if (currentAuthor) currentView = 'posts';
-    // DID → handle cache for curator rows (and post rows' author menu)
+    var currentCurator = (function() {
+      var p = new URLSearchParams(location.search).get('curator');
+      return p || '';
+    })();
+    // Filters only apply to the posts view; switch out of curators if set.
+    if (currentAuthor || currentCurator) currentView = 'posts';
+    // DID → handle cache for curator rows + the active-filter chip
     var handleCache = new Map();
 
     function escapeHtml(s) {
@@ -686,6 +691,11 @@
     }
 
     function applyHandles() {
+      // single-click on a curator's @handle → open their profile in the
+      // preferred client (matches the homepage @handle behavior). The
+      // action menu (right-click / long-press) is where you'd choose
+      // "view posts they've recommended" / atlas / copy handle / etc.
+      var clients = window.LeafletClients;
       document.querySelectorAll('.row[data-kind="curator"][data-did]').forEach(function(row) {
         if (row.dataset.handleApplied) return;
         var did = row.dataset.did;
@@ -693,14 +703,15 @@
         if (!handle) return;
         var line = row.querySelector('.handle-line');
         if (!line) return;
-        line.innerHTML = '<a href="/recommended.html?author=' + encodeURIComponent(did) +
-          '" title="show their authored posts">' +
+        var profileUrl = clients ? clients.profileUrl(did) : '#';
+        line.innerHTML = '<a href="' + escapeHtml(profileUrl) +
+          '" target="_blank" rel="noopener" title="open profile">' +
           '<span class="at">@</span>' + escapeHtml(handle) + '</a>';
         row.dataset.handleApplied = '1';
         var link = line.querySelector('a');
         if (link && window.LeafletUI) {
           window.LeafletUI.bindContextMenu(link, function() {
-            return window.LeafletUI.authorMenuItems(handle, did);
+            return window.LeafletUI.curatorMenuItems(handle, did);
           });
         }
       });
@@ -754,9 +765,14 @@
       var endpoint = (currentView === 'curators') ? '/curators' : '/recommended';
       var url = API_BASE + endpoint + '?limit=' + PAGE_SIZE + '&offset=' + offset
         + '&since=' + encodeURIComponent(currentWindow);
-      // author filter only applies to posts view; backend ignores it on /curators
-      if (currentAuthor && currentView === 'posts') {
-        url += '&author=' + encodeURIComponent(currentAuthor);
+      // filters only apply to posts view; backend ignores them on /curators
+      if (currentView === 'posts') {
+        if (currentCurator) {
+          // curator wins if both set — backend enforces the same precedence
+          url += '&curator=' + encodeURIComponent(currentCurator);
+        } else if (currentAuthor) {
+          url += '&author=' + encodeURIComponent(currentAuthor);
+        }
       }
       fetch(url)
         .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
@@ -781,39 +797,47 @@
       });
     }
 
-    // Render the active-author chip (if any) and resolve DID → handle for
-    // a nicer label. Clicking × clears the filter and re-fetches.
+    function labelForActor(actor) {
+      if (actor.indexOf('did:') === 0) {
+        var cached = handleCache.get(actor);
+        return cached ? '@' + escapeHtml(cached) : escapeHtml(shortDid(actor));
+      }
+      return escapeHtml(actor.charAt(0) === '@' ? actor : '@' + actor);
+    }
+
+    // Render the active filter chip. Two distinct chip types:
+    //   curator filter → "posts recommended by @handle"
+    //   author filter  → "posts by @handle"
+    // Curator wins if both are set (matches fetchPage precedence).
     function renderAuthorChip() {
       var host = document.getElementById('author-chip-host');
       if (!host) return;
-      if (!currentAuthor) { host.innerHTML = ''; return; }
-      var labelHandle = '';
-      if (currentAuthor.indexOf('did:') === 0) {
-        var cached = handleCache.get(currentAuthor);
-        labelHandle = cached ? '@' + escapeHtml(cached) : escapeHtml(shortDid(currentAuthor));
-      } else {
-        labelHandle = escapeHtml(currentAuthor.charAt(0) === '@' ? currentAuthor : '@' + currentAuthor);
-      }
+      var actor = currentCurator || currentAuthor;
+      if (!actor) { host.innerHTML = ''; return; }
+      var verb = currentCurator ? 'posts recommended by ' : 'posts by ';
+      var ariaLabel = currentCurator ? 'clear curator filter' : 'clear author filter';
       host.innerHTML = '<div class="filter-chip">' +
-        'posts by <span class="label-handle">' + labelHandle + '</span>' +
-        '<span class="x" role="button" aria-label="clear author filter">×</span>' +
+        verb + '<span class="label-handle">' + labelForActor(actor) + '</span>' +
+        '<span class="x" role="button" aria-label="' + ariaLabel + '">×</span>' +
         '</div>';
       var x = host.querySelector('.x');
-      if (x) x.addEventListener('click', clearAuthor);
+      if (x) x.addEventListener('click', clearFilter);
 
-      // If we only have a DID, kick off a handle lookup so the chip updates
+      // Kick off a handle lookup so the chip's @handle replaces the short-DID
       // once identity resolution returns. Reuses LeafletIdentity (typeahead).
-      if (currentAuthor.indexOf('did:') === 0 && !handleCache.has(currentAuthor)) {
-        window.LeafletIdentity.resolveProfile(currentAuthor).then(function(p) {
-          if (p && p.handle) { handleCache.set(currentAuthor, p.handle); renderAuthorChip(); }
+      if (actor.indexOf('did:') === 0 && !handleCache.has(actor)) {
+        window.LeafletIdentity.resolveProfile(actor).then(function(p) {
+          if (p && p.handle) { handleCache.set(actor, p.handle); renderAuthorChip(); }
         });
       }
     }
 
-    function clearAuthor() {
+    function clearFilter() {
       currentAuthor = '';
+      currentCurator = '';
       var u = new URL(location.href);
       u.searchParams.delete('author');
+      u.searchParams.delete('curator');
       history.replaceState(null, '', u);
       renderAuthorChip();
       resetAndFetch();
@@ -860,11 +884,13 @@
       var u = new URL(location.href);
       if (v === 'posts') u.searchParams.delete('view');
       else u.searchParams.set('view', v);
-      // curators view doesn't accept an author filter — drop it so the
-      // user isn't left with an inert chip and a URL that lies about state.
-      if (v === 'curators' && currentAuthor) {
+      // curators view doesn't accept author/curator filters — drop them so
+      // the user isn't left with an inert chip and a URL that lies about state.
+      if (v === 'curators' && (currentAuthor || currentCurator)) {
         currentAuthor = '';
+        currentCurator = '';
         u.searchParams.delete('author');
+        u.searchParams.delete('curator');
         renderAuthorChip();
       }
       history.replaceState(null, '', u);
