@@ -15,11 +15,19 @@ const Io = std.Io;
 const logfire = @import("logfire");
 
 /// Cache configuration. `refresh` is called once per slot per tick.
+///
+/// Default interval is 5 minutes (300s). The refresh query for the
+/// leaderboard caches is a multi-table JOIN+GROUP BY across the documents
+/// and recommends tables on Turso — each invocation reads thousands of
+/// rows. With 15 cache slots across recommended/curators × window × sort,
+/// a 45s interval was burning ~1,200 of these per hour and dominating
+/// our Turso row-read bill. 5 minutes is still well within "fresh enough"
+/// for leaderboard data while cutting query volume ~7x.
 pub fn Config(comptime Slot: type) type {
     return struct {
         name: []const u8,
         refresh: *const fn (slot: Slot, alloc: std.mem.Allocator) anyerror![]const u8,
-        interval_ms: u64 = 45_000,
+        interval_ms: u64 = 300_000,
     };
 }
 
