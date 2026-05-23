@@ -1,6 +1,7 @@
 const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
+const zql = @import("zql");
 const db = @import("../db.zig");
 const logfire = @import("logfire");
 const timing = @import("../metrics.zig").timing;
@@ -159,6 +160,33 @@ const TOP_PUBS_SQL =
     \\LIMIT 8
 ;
 
+// zql.Query wrappers + Row structs so dashboard row reads use comptime-checked
+// column-name lookups instead of brittle positional indices. Adding/renaming
+// a column becomes a compile error rather than a silent runtime miscount.
+//
+// Timeline queries are runtime-dispatched (per TimelineRange.sql()), but all
+// variants share the same column projection — wrapping any one of them gives
+// us the canonical column index for date/count/bridgyfed.
+const StatsQuery = zql.Query(STATS_SQL);
+const PlatformsQuery = zql.Query(PLATFORMS_SQL);
+const TagsQuery = zql.Query(TAGS_SQL);
+const TopPubsQuery = zql.Query(TOP_PUBS_SQL);
+const TimelineQueryRef = zql.Query((TimelineRange.d30).sql());
+
+const StatsRow = struct {
+    docs: i64,
+    pubs: i64,
+    searches: i64,
+    errors: i64,
+    started_at: i64,
+    embeddings: i64,
+    bridgyfed: i64,
+};
+const PlatformsRow = struct { platform: []const u8, count: i64 };
+const TagsRow = struct { tag: []const u8, count: i64 };
+const TopPubsRow = struct { name: []const u8, base_path: []const u8, doc_count: i64 };
+const TimelineRow = struct { date: []const u8, count: i64, bridgyfed: i64 };
+
 pub fn fetch(alloc: Allocator) !Data {
     // try local SQLite first (fast)
     if (db.getLocalDb()) |local| {
@@ -182,17 +210,21 @@ pub fn fetch(alloc: Allocator) !Data {
     }) catch return error.QueryFailed;
     defer batch.deinit();
 
-    // extract stats (query 0)
+    // extract stats (query 0) — column-name lookup via StatsQuery
     const stats_row = batch.getFirst(0);
     if (stats_row == null) {
         logfire.warn("dashboard: turso batch returned no stats row", .{});
     }
-    const started_at = if (stats_row) |r| r.int(4) else 0;
-    const searches = if (stats_row) |r| r.int(2) else 0;
-    const publications = if (stats_row) |r| r.int(1) else 0;
-    const documents = if (stats_row) |r| r.int(0) else 0;
-    const embeddings = if (stats_row) |r| r.int(5) else 0;
-    const bridgyfed_documents = if (stats_row) |r| r.int(6) else 0;
+    const s: StatsRow = if (stats_row) |r| StatsQuery.fromRow(StatsRow, r) else .{
+        .docs = 0, .pubs = 0, .searches = 0, .errors = 0,
+        .started_at = 0, .embeddings = 0, .bridgyfed = 0,
+    };
+    const started_at = s.started_at;
+    const searches = s.searches;
+    const publications = s.pubs;
+    const documents = s.docs;
+    const embeddings = s.embeddings;
+    const bridgyfed_documents = s.bridgyfed;
 
     return .{
         .started_at = started_at,
@@ -227,19 +259,27 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const started_at = if (cached) |c| c.started_at else 0;
 
     // get document/publication/embedding counts from local (fast)
-    var counts_rows = try local.query(
+    // Local counts query is a strict subset of STATS_SQL (no searches/errors/
+    // started_at, which live in the stats table and are sourced from
+    // stats_buffer above). Wrapping it in its own zql.Query so the indices
+    // are name-resolved at comptime.
+    const LocalCountsQuery = zql.Query(
         \\SELECT
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
         \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
         \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed
-    , .{});
+    );
+    const LocalCountsRow = struct { docs: i64, pubs: i64, embeddings: i64, bridgyfed: i64 };
+
+    var counts_rows = try local.query(LocalCountsQuery.positional, .{});
     defer counts_rows.deinit();
     const counts_row = counts_rows.next() orelse return error.NoStats;
-    const documents = counts_row.int(0);
-    const publications = counts_row.int(1);
-    const embeddings = counts_row.int(2);
-    const bridgyfed_documents = counts_row.int(3);
+    const counts = LocalCountsQuery.fromRow(LocalCountsRow, counts_row);
+    const documents = counts.docs;
+    const publications = counts.pubs;
+    const embeddings = counts.embeddings;
+    const bridgyfed_documents = counts.bridgyfed;
 
     // platforms query
     var platforms_rows = try local.query(PLATFORMS_SQL, .{});
@@ -284,7 +324,8 @@ fn formatTagsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+        const r = TagsQuery.fromRow(TagsRow, row);
+        try jw.write(TagJson{ .tag = r.tag, .count = r.count });
     }
     try jw.endArray();
     return try output.toOwnedSlice();
@@ -296,7 +337,8 @@ fn formatTimelineJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
+        const r = TimelineQueryRef.fromRow(TimelineRow, row);
+        try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
     }
     try jw.endArray();
     return try output.toOwnedSlice();
@@ -308,7 +350,8 @@ fn formatPubsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        try jw.write(PubJson{ .name = row.text(0), .basePath = row.text(1), .count = row.int(2) });
+        const r = TopPubsQuery.fromRow(TopPubsRow, row);
+        try jw.write(PubJson{ .name = r.name, .basePath = r.base_path, .count = r.doc_count });
     }
     try jw.endArray();
     return try output.toOwnedSlice();
@@ -320,7 +363,8 @@ fn formatPlatformsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        try jw.write(PlatformJson{ .platform = row.text(0), .count = row.int(1) });
+        const r = PlatformsQuery.fromRow(PlatformsRow, row);
+        try jw.write(PlatformJson{ .platform = r.platform, .count = r.count });
     }
     try jw.endArray();
     return try output.toOwnedSlice();
@@ -331,7 +375,10 @@ fn formatTagsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     errdefer output.deinit();
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    for (rows) |row| {
+        const r = TagsQuery.fromRow(TagsRow, row);
+        try jw.write(TagJson{ .tag = r.tag, .count = r.count });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -341,7 +388,10 @@ fn formatTimelineJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     errdefer output.deinit();
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (rows) |row| try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
+    for (rows) |row| {
+        const r = TimelineQueryRef.fromRow(TimelineRow, row);
+        try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -351,7 +401,10 @@ fn formatPubsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     errdefer output.deinit();
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (rows) |row| try jw.write(PubJson{ .name = row.text(0), .basePath = row.text(1), .count = row.int(2) });
+    for (rows) |row| {
+        const r = TopPubsQuery.fromRow(TopPubsRow, row);
+        try jw.write(PubJson{ .name = r.name, .basePath = r.base_path, .count = r.doc_count });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -361,7 +414,10 @@ fn formatPlatformsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     errdefer output.deinit();
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (rows) |row| try jw.write(PlatformJson{ .platform = row.text(0), .count = row.int(1) });
+    for (rows) |row| {
+        const r = PlatformsQuery.fromRow(PlatformsRow, row);
+        try jw.write(PlatformJson{ .platform = r.platform, .count = r.count });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -491,7 +547,8 @@ fn writeTimelinePoints(jw: *json.Stringify, comptime sql_query: []const u8) !voi
             defer rows.deinit();
             try jw.beginArray();
             while (rows.next()) |row| {
-                try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
+                const r = TimelineQueryRef.fromRow(TimelineRow, row);
+                try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
             }
             try jw.endArray();
             return;
@@ -507,7 +564,8 @@ fn writeTimelinePoints(jw: *json.Stringify, comptime sql_query: []const u8) !voi
 
     try jw.beginArray();
     for (res.rows) |row| {
-        try jw.write(TimelineJson{ .date = row.text(0), .count = row.int(1), .bridgyfed = row.int(2) });
+        const r = TimelineQueryRef.fromRow(TimelineRow, row);
+                try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
     }
     try jw.endArray();
 }

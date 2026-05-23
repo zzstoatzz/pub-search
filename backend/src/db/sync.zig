@@ -75,7 +75,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             \\ORDER BY uri
             \\LIMIT 500 OFFSET ?
         , &.{offset_str}) catch |err| {
-            std.debug.print("sync: turso query failed: {}\n", .{err});
+            logfire.warn("sync: turso query failed: {}", .{err});
             break;
         };
         defer result.deinit();
@@ -89,7 +89,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             conn.exec("BEGIN", .{}) catch {};
             for (result.rows) |row| {
                 insertDocumentLocal(conn, row) catch |err| {
-                    std.debug.print("sync: insert doc failed: {}\n", .{err});
+                    logfire.warn("sync: insert doc failed: {}", .{err});
                 };
                 conn.exec("INSERT OR IGNORE INTO _synced_uris (uri) VALUES (?)", .{row.text(0)}) catch {};
                 doc_count += 1;
@@ -110,7 +110,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             "SELECT uri, did, rkey, name, description, base_path, platform, indexed_at FROM publications",
             &.{},
         ) catch |err| {
-            std.debug.print("sync: turso publications query failed: {}\n", .{err});
+            logfire.warn("sync: turso publications query failed: {}", .{err});
             return;
         };
         defer pub_result.deinit();
@@ -120,7 +120,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         conn.exec("BEGIN", .{}) catch {};
         for (pub_result.rows) |row| {
             insertPublicationLocal(conn, row) catch |err| {
-                std.debug.print("sync: insert pub failed: {}\n", .{err});
+                logfire.warn("sync: insert pub failed: {}", .{err});
             };
             pub_count += 1;
         }
@@ -134,7 +134,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             "SELECT document_uri, tag FROM document_tags",
             &.{},
         ) catch |err| {
-            std.debug.print("sync: turso tags query failed: {}\n", .{err});
+            logfire.warn("sync: turso tags query failed: {}", .{err});
             return;
         };
         defer tags_result.deinit();
@@ -159,7 +159,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
             "SELECT query, count FROM popular_searches",
             &.{},
         ) catch |err| {
-            std.debug.print("sync: turso popular_searches query failed: {}\n", .{err});
+            logfire.warn("sync: turso popular_searches query failed: {}", .{err});
             return;
         };
         defer popular_result.deinit();
@@ -206,7 +206,7 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         local.lock();
         defer local.unlock();
         conn.exec("PRAGMA wal_checkpoint(PASSIVE)", .{}) catch |err| {
-            std.debug.print("sync: wal checkpoint failed: {}\n", .{err});
+            logfire.warn("sync: wal checkpoint failed: {}", .{err});
         };
     }
 
@@ -272,7 +272,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
         day_secs.getMinutesIntoHour(),
         day_secs.getSecondsIntoMinute(),
     }) catch {
-        std.debug.print("sync: failed to format since date\n", .{});
+        logfire.warn("sync: failed to format since date", .{});
         return;
     };
 
@@ -292,7 +292,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             \\WHERE indexed_at >= ?
             \\ORDER BY indexed_at
         , &.{since_str}) catch |err| {
-            std.debug.print("sync: incremental query failed: {}\n", .{err});
+            logfire.warn("sync: incremental query failed: {}", .{err});
             sync_span.recordError(err);
             return;
         };
@@ -328,7 +328,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             \\WHERE indexed_at >= ?
             \\ORDER BY indexed_at
         , &.{since_str}) catch |err| {
-            std.debug.print("sync: incremental publications query failed: {}\n", .{err});
+            logfire.warn("sync: incremental publications query failed: {}", .{err});
             sync_span.recordError(err);
             // fall through to tombstones — don't abort entire sync
             break :pubs;
@@ -354,7 +354,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             "SELECT uri, record_type FROM tombstones WHERE deleted_at >= ?",
             &.{since_ts_str},
         ) catch |err| {
-            std.debug.print("sync: tombstone query failed: {}\n", .{err});
+            logfire.warn("sync: tombstone query failed: {}", .{err});
             sync_span.recordError(err);
             break :tombstone;
         };

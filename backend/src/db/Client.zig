@@ -229,6 +229,11 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
     };
 
     if (res.status != .ok) {
+        // `catch ""` is intentional: response_body is only consumed here for
+        // the diagnostic log/span attribute. If OOM strikes during
+        // toOwnedSlice we still want to surface the TursoError with whatever
+        // context we have (empty preview is better than swallowing the
+        // status code).
         const resp_text = response_body.toOwnedSlice() catch "";
         defer if (resp_text.len > 0) self.allocator.free(resp_text);
         const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;

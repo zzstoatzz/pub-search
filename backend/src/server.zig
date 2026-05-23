@@ -234,7 +234,11 @@ fn handlePopular(request: *http.Server.Request, target: []const u8, io: Io) !voi
 const TagJson = struct { tag: []const u8, count: i64 };
 const PopularJson = struct { query: []const u8, count: i64 };
 
+// Tag row matches both the Turso and local-SQLite query shape (SELECT tag, count …).
+// Using a named struct + zql.Query.fromRow means adding/removing a column
+// becomes a compile error rather than a runtime miscount.
 const TagsQuery = zql.Query(dashboard.TAGS_SQL);
+const TagsRow = struct { tag: []const u8, count: i64 };
 
 fn getTags(alloc: Allocator) ![]const u8 {
     // try local SQLite first (faster)
@@ -258,7 +262,10 @@ fn getTags(alloc: Allocator) ![]const u8 {
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (res.rows) |row| try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+    for (res.rows) |row| {
+        const r = TagsQuery.fromRow(TagsRow, row);
+        try jw.write(TagJson{ .tag = r.tag, .count = r.count });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }
@@ -273,7 +280,8 @@ fn getTagsLocal(alloc: Allocator, local: *db.LocalDb) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        try jw.write(TagJson{ .tag = row.text(0), .count = row.int(1) });
+        const r = TagsQuery.fromRow(TagsRow, row);
+        try jw.write(TagJson{ .tag = r.tag, .count = r.count });
     }
     try jw.endArray();
     return try output.toOwnedSlice();
@@ -286,6 +294,19 @@ fn getTagsLocal(alloc: Allocator, local: *db.LocalDb) ![]const u8 {
 // strategy).
 const POPULAR_WINDOW_SECS: i64 = 7 * 24 * 60 * 60;
 
+// Aggregate distinct events in the window. Fast: idx_search_events_at
+// makes the date filter range-scan, and the post-filter set is small
+// (at the current ~50 searches/day rate, 7d ≈ 350 events to group).
+const PopularQuery = zql.Query(
+    \\SELECT query, COUNT(*) AS n
+    \\FROM search_events
+    \\WHERE at >= strftime('%s', 'now') - ?
+    \\GROUP BY query
+    \\ORDER BY n DESC, query
+    \\LIMIT ?
+);
+const PopularRow = struct { query: []const u8, n: i64 };
+
 fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
@@ -297,19 +318,7 @@ fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     var win_buf: [16]u8 = undefined;
     const window_str = std.fmt.bufPrint(&win_buf, "{d}", .{POPULAR_WINDOW_SECS}) catch "604800";
 
-    // Aggregate distinct events in the window. Fast: idx_search_events_at
-    // makes the date filter range-scan, and the post-filter set is small
-    // (at the current ~50 searches/day rate, 7d ≈ 350 events to group).
-    var res = c.query(
-        \\SELECT query, COUNT(*) AS n
-        \\FROM search_events
-        \\WHERE at >= strftime('%s', 'now') - ?
-        \\GROUP BY query
-        \\ORDER BY n DESC, query
-        \\LIMIT ?
-    ,
-        &.{ window_str, limit_str },
-    ) catch {
+    var res = c.query(PopularQuery.positional, &.{ window_str, limit_str }) catch {
         try output.writer.writeAll("[]");
         return try output.toOwnedSlice();
     };
@@ -317,7 +326,10 @@ fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (res.rows) |row| try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
+    for (res.rows) |row| {
+        const r = PopularQuery.fromRow(PopularRow, row);
+        try jw.write(PopularJson{ .query = r.query, .count = r.n });
+    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }

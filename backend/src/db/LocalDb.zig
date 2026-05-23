@@ -251,13 +251,42 @@ fn createSchema(self: *LocalDb) !void {
         \\)
     , .{}) catch {};
 
-    // migrations for existing local DBs
-    c.exec("ALTER TABLE documents ADD COLUMN indexed_at TEXT", .{}) catch {};
-    c.exec("ALTER TABLE documents ADD COLUMN embedded_at TEXT", .{}) catch {};
-    c.exec("ALTER TABLE documents ADD COLUMN cover_image TEXT DEFAULT ''", .{}) catch {};
-    c.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", .{}) catch {};
-    c.exec("ALTER TABLE documents ADD COLUMN url_dead INTEGER DEFAULT 0", .{}) catch {};
-    c.exec("ALTER TABLE publications ADD COLUMN indexed_at TEXT", .{}) catch {};
+    // Idempotent column-add for existing local DBs. SQLite returns an error
+    // when the column already exists ("duplicate column name"), which is
+    // the common case — we'd flood logs if every boot warned on that. So
+    // detect the column first via PRAGMA table_info and skip if present,
+    // and on the rare ACTUAL failure log loudly.
+    addColumnIfMissing(c, "documents", "indexed_at", "TEXT");
+    addColumnIfMissing(c, "documents", "embedded_at", "TEXT");
+    addColumnIfMissing(c, "documents", "cover_image", "TEXT DEFAULT ''");
+    addColumnIfMissing(c, "documents", "is_bridgyfed", "INTEGER DEFAULT 0");
+    addColumnIfMissing(c, "documents", "url_dead", "INTEGER DEFAULT 0");
+    addColumnIfMissing(c, "publications", "indexed_at", "TEXT");
+}
+
+fn hasColumn(c: zqlite.Conn, table: []const u8, column: []const u8) bool {
+    var buf: [128]u8 = undefined;
+    const sql = std.fmt.bufPrint(&buf, "PRAGMA table_info({s})", .{table}) catch return false;
+    var rows = c.rows(sql, .{}) catch return false;
+    defer rows.deinit();
+    while (rows.next()) |row| {
+        if (std.mem.eql(u8, row.text(1), column)) return true;
+    }
+    return false;
+}
+
+fn addColumnIfMissing(c: zqlite.Conn, table: []const u8, column: []const u8, decl: []const u8) void {
+    if (hasColumn(c, table, column)) return;
+    var buf: [256]u8 = undefined;
+    const sql = std.fmt.bufPrint(&buf, "ALTER TABLE {s} ADD COLUMN {s} {s}", .{ table, column, decl }) catch {
+        std.debug.print("local db: ALTER format failed for {s}.{s}\n", .{ table, column });
+        return;
+    };
+    c.exec(sql, .{}) catch |err| {
+        // Hit only on actual failures (lock contention, disk full) since
+        // we pre-checked for duplicate-column. Worth knowing about.
+        std.debug.print("local db: ALTER TABLE {s} ADD COLUMN {s} failed: {}\n", .{ table, column, err });
+    };
 }
 
 /// Row adapter matching result.Row interface (column-indexed access)

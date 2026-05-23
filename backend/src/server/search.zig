@@ -70,19 +70,23 @@ const Doc = struct {
     }
 
     fn fromLocalRow(row: db.LocalDb.Row) Doc {
+        // local-side SQL strings (in searchLocal) share the same column
+        // projection as the Turso doc queries — they have to, since Doc has
+        // exactly one shape. Reusing docCol gives us the comptime-checked
+        // index lookups for the local path too.
         return .{
-            .uri = row.text(0),
-            .did = row.text(1),
-            .title = row.text(2),
-            .snippet = row.text(3),
-            .createdAt = row.text(4),
-            .rkey = row.text(5),
-            .basePath = row.text(6),
-            .hasPublication = row.int(7) != 0,
-            .platform = row.text(8),
-            .path = row.text(9),
-            .coverImage = row.text(10),
-            .publicationName = row.text(11),
+            .uri = row.text(docCol("uri")),
+            .did = row.text(docCol("did")),
+            .title = row.text(docCol("title")),
+            .snippet = row.text(docCol("snippet")),
+            .createdAt = row.text(docCol("created_at")),
+            .rkey = row.text(docCol("rkey")),
+            .basePath = row.text(docCol("base_path")),
+            .hasPublication = row.int(docCol("has_publication")) != 0,
+            .platform = row.text(docCol("platform")),
+            .path = row.text(docCol("path")),
+            .coverImage = row.text(docCol("cover_image")),
+            .publicationName = row.text(docCol("publication_name")),
         };
     }
 
@@ -378,6 +382,13 @@ inline fn docCol(comptime name: []const u8) comptime_int {
     return canonical;
 }
 
+// Publication-side equivalent. Only one Pub query (PubSearch) today, so the
+// helper just defers to its columnIndex; if we add more Pub query variants
+// later, mirror the docCol drift-check pattern.
+inline fn pubCol(comptime name: []const u8) comptime_int {
+    return PubSearch.columnIndex(name);
+}
+
 /// Publication search result (internal)
 const Pub = struct {
     uri: []const u8,
@@ -390,25 +401,26 @@ const Pub = struct {
 
     fn fromRow(row: db.Row) Pub {
         return .{
-            .uri = row.text(0),
-            .did = row.text(1),
-            .name = row.text(2),
-            .snippet = row.text(3),
-            .rkey = row.text(4),
-            .basePath = row.text(5),
-            .platform = row.text(6),
+            .uri = row.text(pubCol("uri")),
+            .did = row.text(pubCol("did")),
+            .name = row.text(pubCol("name")),
+            .snippet = row.text(pubCol("snippet")),
+            .rkey = row.text(pubCol("rkey")),
+            .basePath = row.text(pubCol("base_path")),
+            .platform = row.text(pubCol("platform")),
         };
     }
 
     fn fromLocalRow(row: db.LocalDb.Row) Pub {
+        // local-side pub SQL (in searchLocal) mirrors PubSearch's projection.
         return .{
-            .uri = row.text(0),
-            .did = row.text(1),
-            .name = row.text(2),
-            .snippet = row.text(3),
-            .rkey = row.text(4),
-            .basePath = row.text(5),
-            .platform = row.text(6),
+            .uri = row.text(pubCol("uri")),
+            .did = row.text(pubCol("did")),
+            .name = row.text(pubCol("name")),
+            .snippet = row.text(pubCol("snippet")),
+            .rkey = row.text(pubCol("rkey")),
+            .basePath = row.text(pubCol("base_path")),
+            .platform = row.text(pubCol("platform")),
         };
     }
 
