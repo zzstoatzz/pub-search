@@ -256,6 +256,7 @@ fn createSchema(self: *LocalDb) !void {
     c.exec("ALTER TABLE documents ADD COLUMN embedded_at TEXT", .{}) catch {};
     c.exec("ALTER TABLE documents ADD COLUMN cover_image TEXT DEFAULT ''", .{}) catch {};
     c.exec("ALTER TABLE documents ADD COLUMN is_bridgyfed INTEGER DEFAULT 0", .{}) catch {};
+    c.exec("ALTER TABLE documents ADD COLUMN url_dead INTEGER DEFAULT 0", .{}) catch {};
     c.exec("ALTER TABLE publications ADD COLUMN indexed_at TEXT", .{}) catch {};
 }
 

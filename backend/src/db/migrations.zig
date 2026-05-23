@@ -266,6 +266,20 @@ pub const migrations = [_]zug.Migration{
         \\  AND length(trim(ps.query)) >= 2;
         ,
     },
+    .{
+        .id = "014_add_documents_url_dead",
+        .name = "soft-hide docs whose destination URL HEADs 404",
+        // The PDS-record-exists check (reconciler.checkRecord) is insufficient
+        // for cases where the publisher updates their website without touching
+        // the standard.site record — the record persists, the URL 404s, we
+        // surface a dead link in search. Reconciler will populate this column
+        // via a HEAD on the destination URL.
+        //
+        // Soft hide (vs delete) because tap.insertDocument doesn't consult
+        // tombstones, so a delete-on-URL-404 strategy would flap every
+        // resync. The row stays; search.zig WHERE clauses add `url_dead = 0`.
+        .sql = "ALTER TABLE documents ADD COLUMN url_dead INTEGER DEFAULT 0",
+    },
 };
 
 // --- tests ---

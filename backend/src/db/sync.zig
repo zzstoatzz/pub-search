@@ -69,7 +69,8 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
             \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at,
-            \\  COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed
+            \\  COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed,
+            \\  COALESCE(url_dead, 0) as url_dead
             \\FROM documents
             \\ORDER BY uri
             \\LIMIT 500 OFFSET ?
@@ -285,7 +286,8 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
         var result = turso.query(
             \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
             \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at,
-            \\  COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed
+            \\  COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed,
+            \\  COALESCE(url_dead, 0) as url_dead
             \\FROM documents
             \\WHERE indexed_at >= ?
             \\ORDER BY indexed_at
@@ -396,8 +398,8 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
     conn.exec(
         \\INSERT OR REPLACE INTO documents
         \\(uri, did, rkey, title, content, created_at, publication_uri,
-        \\ platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at, cover_image, is_bridgyfed)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\ platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at, cover_image, is_bridgyfed, url_dead)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     , .{
         row.text(0), // uri
         row.text(1), // did
@@ -415,6 +417,7 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
         row.text(13), // embedded_at
         row.text(14), // cover_image
         row.int(15), // is_bridgyfed
+        row.int(16), // url_dead
     }) catch |err| {
         return err;
     };

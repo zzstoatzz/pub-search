@@ -1,12 +1,15 @@
 //! Background worker for reconciling stale documents.
 //!
-//! Periodically verifies documents still exist at their source PDS.
-//! Documents that return 400/404 from com.atproto.repo.getRecord are
-//! deleted from turso and turbopuffer.
+//! Two checks per doc per cycle:
+//!  1. Does the PDS record still exist? If 400/404 → delete from turso + tpuf.
+//!  2. Does the destination URL we'd link to still resolve? If 404 →
+//!     soft-hide (set documents.url_dead=1) so search excludes it without
+//!     deleting the row. We can't delete on URL-dead because tap re-adds
+//!     the doc on the next resync (insertDocument doesn't consult
+//!     tombstones), which would flap.
 //!
-//! This catches deletions that tap resync cannot — resync only re-sends
-//! records that still exist, so documents deleted at the PDS between
-//! resyncs become ghosts. The reconciler verifies them directly.
+//! Per-host throttle: max 1 HEAD/sec to any single destination host so we
+//! don't burst when a batch happens to be from one publisher.
 
 const std = @import("std");
 const http = std.http;
@@ -18,6 +21,7 @@ const logfire = @import("logfire");
 const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
 const indexer = @import("indexer.zig");
+const search = @import("../server/search.zig");
 
 // config (env vars with defaults)
 fn getenv(key: [*:0]const u8) ?[]const u8 {
@@ -101,10 +105,22 @@ fn worker(allocator: Allocator, io: Io) void {
         pds_cache.deinit();
     }
 
+    // Per-host throttle for destination URL HEADs: tracks the last
+    // monotonic timestamp (ns) we hit each host. Used to enforce
+    // HEAD_HOST_MIN_GAP_MS regardless of batch composition — keeps us from
+    // bursting a single publisher when their docs cluster at the front of
+    // the queue.
+    var last_head_ns = std.StringHashMap(i128).init(allocator);
+    defer {
+        var it2 = last_head_ns.iterator();
+        while (it2.next()) |entry| allocator.free(entry.key_ptr.*);
+        last_head_ns.deinit();
+    }
+
     var consecutive_errors: u32 = 0;
 
     while (true) {
-        const result = runCycle(allocator, &pds_cache);
+        const result = runCycle(allocator, &pds_cache, &last_head_ns);
         if (result) |counts| {
             consecutive_errors = 0;
             if (counts.verified > 0 or counts.deleted > 0) {
@@ -129,7 +145,7 @@ const CycleCounts = struct {
     deleted: usize,
 };
 
-fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !CycleCounts {
+fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), last_head_ns: *std.StringHashMap(i128)) !CycleCounts {
     const span = logfire.span("reconcile.cycle", .{});
     defer span.end();
 
@@ -148,8 +164,12 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
     const cutoff_ts = formatTimestamp(now_s - @as(i64, @intCast(reverify_days * 86400)));
     const cutoff = cutoff_ts.slice();
 
+    // Also pull URL-construction columns so we can HEAD the destination URL
+    // in the same cycle without a second round-trip per doc.
     var result = try client.query(
-        \\SELECT uri, did FROM documents
+        \\SELECT uri, did, COALESCE(base_path, '') AS base_path,
+        \\  COALESCE(path, '') AS path, platform, rkey, has_publication
+        \\FROM documents
         \\WHERE verified_at IS NULL
         \\   OR verified_at < ?
         \\ORDER BY verified_at ASC NULLS FIRST
@@ -161,28 +181,51 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
 
     if (result.rows.len == 0) return .{ .verified = 0, .deleted = 0 };
 
-    // collect URIs and DIDs from the result (copy since result owns the memory)
-    const DocInfo = struct { uri: []const u8, did: []const u8 };
+    // collect URIs + URL-construction fields (copy since result owns the memory)
+    const DocInfo = struct {
+        uri: []const u8,
+        did: []const u8,
+        base_path: []const u8,
+        path: []const u8,
+        platform: []const u8,
+        rkey: []const u8,
+        has_publication: bool,
+    };
     var docs: std.ArrayList(DocInfo) = .empty;
     defer {
         for (docs.items) |doc| {
             allocator.free(doc.uri);
             allocator.free(doc.did);
+            allocator.free(doc.base_path);
+            allocator.free(doc.path);
+            allocator.free(doc.platform);
+            allocator.free(doc.rkey);
         }
         docs.deinit(allocator);
     }
 
     for (result.rows) |row| {
         const uri = allocator.dupe(u8, row.text(0)) catch continue;
-        const did = allocator.dupe(u8, row.text(1)) catch {
-            allocator.free(uri);
-            continue;
-        };
-        docs.append(allocator, .{ .uri = uri, .did = did }) catch {
-            allocator.free(uri);
-            allocator.free(did);
-            continue;
-        };
+        errdefer allocator.free(uri);
+        const did = allocator.dupe(u8, row.text(1)) catch continue;
+        errdefer allocator.free(did);
+        const base_path = allocator.dupe(u8, row.text(2)) catch continue;
+        errdefer allocator.free(base_path);
+        const path = allocator.dupe(u8, row.text(3)) catch continue;
+        errdefer allocator.free(path);
+        const platform = allocator.dupe(u8, row.text(4)) catch continue;
+        errdefer allocator.free(platform);
+        const rkey = allocator.dupe(u8, row.text(5)) catch continue;
+        errdefer allocator.free(rkey);
+        docs.append(allocator, .{
+            .uri = uri,
+            .did = did,
+            .base_path = base_path,
+            .path = path,
+            .platform = platform,
+            .rkey = rkey,
+            .has_publication = row.int(6) != 0,
+        }) catch continue;
     }
 
     var verified: usize = 0;
@@ -211,7 +254,22 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8)) !Cy
 
         switch (status) {
             .exists => {
-                // update verified_at
+                // PDS record is good — also check the destination URL we'd
+                // link to. Per-host throttled inside checkDocUrl. 404 →
+                // soft-hide; 2xx → reset url_dead (in case it came back).
+                const doc_type: []const u8 = if (doc.has_publication) "article" else "looseleaf";
+                const url = search.buildDocUrl(allocator, doc_type, doc.platform, doc.base_path, doc.path, doc.rkey, doc.did);
+                defer allocator.free(url);
+                if (url.len > 0) {
+                    switch (checkDocUrl(allocator, url, last_head_ns)) {
+                        .url_dead => {
+                            updateUrlDead(client, doc.uri, true);
+                            logfire.info("reconcile: marked url_dead: {s} → {s}", .{ doc.uri, url });
+                        },
+                        .url_ok => updateUrlDead(client, doc.uri, false),
+                        .url_skip => {}, // transient / 405 / timeout — leave alone
+                    }
+                }
                 updateVerifiedAt(client, doc.uri);
                 verified += 1;
             },
@@ -262,6 +320,92 @@ fn updateVerifiedAt(client: *db.Client, uri: []const u8) void {
     ) catch |err| {
         logfire.warn("reconcile: failed to update verified_at for {s}: {}", .{ uri, err });
     };
+}
+
+fn updateUrlDead(client: *db.Client, uri: []const u8, dead: bool) void {
+    const val: []const u8 = if (dead) "1" else "0";
+    client.exec(
+        "UPDATE documents SET url_dead = ? WHERE uri = ?",
+        &.{ val, uri },
+    ) catch |err| {
+        logfire.warn("reconcile: failed to update url_dead for {s}: {}", .{ uri, err });
+    };
+}
+
+const UrlStatus = enum { url_ok, url_dead, url_skip };
+
+// Min gap between HEAD requests to the same destination host. Keeps a
+// reconcile batch from bursting one publisher when their docs cluster at
+// the front of the verify queue. Effective ceiling: 1 req/sec per host.
+const HEAD_HOST_MIN_GAP_NS: i128 = 1_000_000_000;
+
+/// HEAD the destination URL; classify the outcome:
+///   404            → .url_dead (definitive — record points at a gone URL)
+///   2xx / 3xx      → .url_ok   (working — reset url_dead in case it flipped)
+///   405 / 5xx /
+///   timeout / err  → .url_skip (don't change url_dead)
+/// Per-host throttled: sleeps if we've hit this host within
+/// HEAD_HOST_MIN_GAP_NS, then updates the last-hit timestamp.
+fn checkDocUrl(allocator: Allocator, url: []const u8, last_head_ns: *std.StringHashMap(i128)) UrlStatus {
+    const io = global_io.?;
+    const host = extractHost(url) orelse return .url_skip;
+
+    // throttle: if we hit this host recently, sleep until the gap is satisfied.
+    const now_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
+    if (last_head_ns.get(host)) |prev| {
+        const elapsed = now_ns - prev;
+        if (elapsed < HEAD_HOST_MIN_GAP_NS) {
+            const wait_ns: u64 = @intCast(HEAD_HOST_MIN_GAP_NS - elapsed);
+            io.sleep(Io.Duration.fromNanoseconds(@intCast(wait_ns)), .awake) catch {};
+        }
+    }
+    // record the post-sleep timestamp. Use getOrPut so we don't leak the
+    // duped key on second-and-subsequent hits to the same host.
+    const stamp_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
+    if (last_head_ns.getOrPut(host)) |gop| {
+        if (!gop.found_existing) {
+            // first sighting — replace the borrowed (temporary) key slot with an
+            // allocator-owned dupe so it survives past the current cycle.
+            if (allocator.dupe(u8, host)) |owned| {
+                gop.key_ptr.* = owned;
+            } else |_| {
+                _ = last_head_ns.remove(host);
+            }
+        }
+        gop.value_ptr.* = stamp_ns;
+    } else |_| {}
+
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
+    defer http_client.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(allocator);
+    defer sink.deinit();
+
+    const res = http_client.fetch(.{
+        .location = .{ .url = url },
+        .method = .HEAD,
+        .response_writer = &sink.writer,
+    }) catch return .url_skip;
+
+    const code: u10 = @intFromEnum(res.status);
+    if (code == 404) return .url_dead;
+    if (code >= 200 and code < 400) return .url_ok;
+    // 405 (HEAD not allowed), 403, 429, 5xx, anything else — don't penalize
+    return .url_skip;
+}
+
+/// Parse the host portion out of a URL: "https://example.com/foo" → "example.com".
+/// Returns null for malformed input. Strips userinfo / port to normalize the
+/// throttle key (so "example.com:443" and "example.com" share a bucket).
+fn extractHost(url: []const u8) ?[]const u8 {
+    const scheme_end = mem.indexOf(u8, url, "://") orelse return null;
+    const after_scheme = url[scheme_end + 3 ..];
+    const path_start = mem.indexOfAny(u8, after_scheme, "/?#") orelse after_scheme.len;
+    var host = after_scheme[0..path_start];
+    if (mem.indexOfScalar(u8, host, '@')) |at_idx| host = host[at_idx + 1 ..];
+    if (mem.indexOfScalar(u8, host, ':')) |colon_idx| host = host[0..colon_idx];
+    if (host.len == 0) return null;
+    return host;
 }
 
 /// Format a unix timestamp as ISO 8601 string (same approach as embedder.zig).
