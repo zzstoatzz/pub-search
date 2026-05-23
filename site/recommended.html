@@ -256,6 +256,8 @@
       text-decoration: none;
     }
     .source .pub-link:hover { color: var(--text-secondary); }
+    .source .dot { opacity: 0.5; }
+    .source .windowed { color: var(--text-dim); }
 
     /* curator-row variants — same .row grid, different body content */
     .handle-line {
@@ -471,9 +473,19 @@
       ? 'http://localhost:3000'
       : 'https://leaflet-search-backend.fly.dev';
 
+    // clean filled heart, no extra stroke (the prior version was filled +
+    // stroked which thickened the outline asymmetrically — "mangled" look)
     var HEART_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
-      + '<path d="M12 21s-7-4.5-9.5-9C.83 8.5 2.5 5 6 5c2 0 3.5 1 4 2.5C10.5 6 12 5 14 5c3.5 0 5.17 3.5 3.5 7-2.5 4.5-9.5 9-9.5 9z" '
-      + 'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+      + '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
+
+    // Phrase the windowed activity in plain English ("today", "this week", …).
+    // Used on the curator row meta line.
+    var WINDOW_PHRASE = {
+      day: 'today',
+      week: 'this week',
+      month: 'this month',
+      year: 'this year',
+    };
 
     var PAGE_SIZE = 20;
     var WINDOWS = ['day', 'week', 'month', 'year', 'all'];
@@ -525,19 +537,35 @@
 
     // Curator row — same .row grid as posts, different body content.
     // Handle is rendered as a fallback short-DID first; resolveHandles
-    // upgrades to @handle once bsky's getProfiles returns.
+    // upgrades to @handle once typeahead returns.
     function curatorRowHtml(c, rank) {
       var podium = rank <= 3 ? ' podium' : '';
       var did = c.did || '';
       var handleHtml = '<span class="did-fallback">' + escapeHtml(shortDid(did)) + '</span>';
       var lastSeen = relativeTime(c.lastRecommendAt);
       var dataAttrs = did ? 'data-did="' + escapeHtml(did) + '" data-kind="curator"' : 'data-kind="curator"';
+
+      // Left meta: windowed activity (the metric that drives rank), so the
+      // user sees both perspectives — recent activity on the left, all-time
+      // size on the right (next to the heart). For window=all both numbers
+      // would be identical; switch to a uniqueDocs framing instead so the
+      // two halves of the row aren't literally the same number twice.
+      var metaText;
+      if (currentWindow === 'all') {
+        var u = c.uniqueDocs || 0;
+        metaText = u + ' post' + (u === 1 ? '' : 's') + ' recommended';
+      } else {
+        var n = c.recommendCount || 0;
+        var phrase = WINDOW_PHRASE[currentWindow] || ('in the last ' + currentWindow);
+        metaText = n + ' ' + phrase;
+      }
+
       return '<div class="row' + podium + '" ' + dataAttrs + '>' +
         '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
         '<div class="body">' +
           '<div class="handle-line">' + handleHtml + '</div>' +
           '<div class="curator-meta">' +
-            (c.uniqueDocs || 0) + ' doc' + (c.uniqueDocs === 1 ? '' : 's') + ' recommended' +
+            escapeHtml(metaText) +
             (lastSeen ? ' <span class="dot">·</span> last ' + lastSeen : '') +
             '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>' +
           '</div>' +
@@ -572,11 +600,27 @@
         doc.basePath ? 'data-base-path="' + escapeHtml(doc.basePath) + '"' : '',
         extUrl ? 'data-ext-url="' + escapeHtml(extUrl) + '"' : '',
       ].filter(Boolean).join(' ');
+      // Windowed activity hint after the source ("source · 5 this week").
+      // Skipped when window=all (would equal the right-side total — noise).
+      var windowedHint = '';
+      if (currentWindow !== 'all' && doc.recommendCount != null) {
+        var phrase = WINDOW_PHRASE[currentWindow] || ('in the last ' + currentWindow);
+        windowedHint = ' <span class="dot">·</span> <span class="windowed">' +
+          doc.recommendCount + ' ' + escapeHtml(phrase) + '</span>';
+      }
+      var sourceLine = sourceHtml
+        ? '<div class="source">' + sourceHtml + windowedHint +
+          '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>'
+        : (windowedHint
+            ? '<div class="source">' + windowedHint +
+              '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>'
+            : '');
+
       return '<div class="row' + podium + '" ' + dataAttrs + '>' +
         '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
         '<div class="body">' +
           '<div class="title-line">' + titleHtml + '</div>' +
-          (sourceHtml ? '<div class="source">' + sourceHtml + '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>' : '') +
+          sourceLine +
         '</div>' +
         '<div class="score">' +
           '<span class="heart">' + HEART_SVG + '</span>' +
