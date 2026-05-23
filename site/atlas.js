@@ -60,7 +60,11 @@
   }
 
   // --- view state ---
-  var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 30, dirty: true };
+  // maxZoom 60 (was 30): you don't get new data past the existing cluster /
+  // title resolution, but the experience of zooming in further is rewarding —
+  // dots breathe, titles upsize, identity is more prominent. dot sprite
+  // radius is capped (see pointR formula) so the sprite atlas stays bounded.
+  var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 60, dirty: true };
 
   // --- demand-driven frame scheduling ---
   var frameRequested = false;
@@ -89,6 +93,30 @@
   // --- publication state ---
   var pubData = null; // array from atlas.json
   var pubByBasePath = null; // Map<basePath, pub> for ?pub=<basePath> deep-links
+
+  // platform logos — drawn next to per-doc titles at high zoom for identity.
+  // We snagged the best-available icon per platform (apple-touch-icon /
+  // favicon.svg / favicon.ico → png). See site/platforms/.
+  var platformLogos = {};
+  var PLATFORM_LOGO_EXT = {
+    leaflet: 'png',
+    whitewind: 'svg',
+    pckt: 'png',
+    offprint: 'svg',
+    greengale: 'png',
+    other: 'png',
+  };
+  function loadPlatformLogos() {
+    Object.keys(PLATFORM_LOGO_EXT).forEach(function(p) {
+      if (platformLogos[p]) return;
+      var img = new Image();
+      img.onload = function() { markDirty(); };
+      img.onerror = function() { platformLogos[p] = null; };
+      img.src = '/platforms/' + p + '.' + PLATFORM_LOGO_EXT[p];
+      platformLogos[p] = img;
+    });
+  }
+
   var pubImages = {}; // basePath → HTMLImageElement (loaded)
   var pubFailed = {}; // basePath → true (failed to load)
   var pubLoading = {}; // basePath → true (currently loading)
@@ -389,8 +417,13 @@
     var yMin = tl[1] - pad, yMax = br[1] + pad;
 
     // --- cluster nebula halos (colored by dominant platform) ---
-    // continuous alpha curve: full at zoom<2, fades gradually, floor at 25% of base
-    var haloAlphaFactor = zoom < 2 ? 1.0 : Math.max(0.25, 1 - (zoom - 2) / 8);
+    // continuous alpha curve: full at zoom<2, fades gradually past zoom 2.
+    // mobile (W<600): floor drops 25%→10% AND sprite scaled to 60% so the
+    // glow doesn't drown the rest of the map on a small screen.
+    var smallViewport = W < 600;
+    var haloFloor = smallViewport ? 0.10 : 0.25;
+    var haloShrink = smallViewport ? 0.6 : 1.0;
+    var haloAlphaFactor = zoom < 2 ? 1.0 : Math.max(haloFloor, 1 - (zoom - 2) / 8);
     if (haloAlphaFactor > 0.01) {
       var clusters = zoom < 2 ? data.clusters.coarse : data.clusters.fine;
       var baseAlpha = dark ? (zoom < 2 ? 0.06 : 0.04) : (zoom < 2 ? 0.05 : 0.03);
@@ -404,7 +437,7 @@
         var platform = cl.dominantPlatform || 'other';
         var halo = getHaloSprite(platform, r);
         var spriteScale = r / halo.bucket;
-        var drawSize = halo.sprite.width * spriteScale;
+        var drawSize = halo.sprite.width * spriteScale * haloShrink;
         ctx.globalAlpha = baseAlpha * 2; // match original: gradient center was baseAlpha*2
         ctx.drawImage(halo.sprite, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
       }
@@ -561,7 +594,10 @@
     ctx.globalAlpha = 1;
     var useGlow = zoom >= 2;
     if (useGlow) {
-      var pointR = zoom < 5 ? 1.5 + zoom * 0.3 : 2 + zoom * 0.2;
+      // dot radius grows with zoom but caps at 7px so the sprite atlas
+      // doesn't balloon when zoom passes ~25. Past the cap, dots stay
+      // legible without becoming the focus — titles / icons take over.
+      var pointR = zoom < 5 ? 1.5 + zoom * 0.3 : Math.min(7, 2 + zoom * 0.2);
       buildSprites(pointR);
     } else {
       buildDotSprites();
@@ -721,12 +757,20 @@
     }
 
     if (titleAlpha > 0.01) {
-      ctx.font = (small ? '9px' : '11px') + ' monospace';
+      // grow font + raise label cap at very high zoom: at zoom 25+ there
+      // are fewer dots on screen, density isn't the constraint, so let the
+      // titles take over as the visual focus.
+      var baseFont = small ? 9 : 11;
+      var fontSize = baseFont + Math.min(4, Math.max(0, Math.floor((zoom - 25) / 8)));
+      ctx.font = fontSize + 'px monospace';
       ctx.globalAlpha = 0.7 * titleAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
-      var fontSize = small ? 9 : 11;
-      var shown = 0, maxLabels = small ? 20 : 50;
+      var maxLabels = (zoom > 15) ? (small ? 60 : 200) : (small ? 20 : 50);
       var truncLen = small ? 25 : 45;
+      var iconSize = small ? 12 : 14;
+      var iconGap = 4;
+      var shown = 0;
+
       for (var i = 0; i < n && shown < maxLabels; i++) {
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
@@ -736,10 +780,30 @@
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         if (title.length > truncLen) title = title.substring(0, truncLen - 2) + '\u2026';
         var tw = ctx.measureText(title).width;
-        var halfW = tw / 2;
+
+        // include the platform icon in the bounding box. If the logo isn't
+        // ready yet, fall back to text-only positioning so the layout
+        // doesn't jitter when icons load in.
+        var platform = PLATFORMS[platformIdx[i]];
+        var logo = platformLogos[platform];
+        var hasLogo = logo && logo.complete && logo.naturalWidth > 0;
+        var iconW = hasLogo ? (iconSize + iconGap) : 0;
+        var contentW = iconW + tw;
+        var halfW = contentW / 2;
+
         if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
         if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
-        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(title, sx, sy, dark); shown++; }
+        if (canPlace(sx, sy, contentW, fontSize)) {
+          if (hasLogo) {
+            // draw the icon at the left, then shift the text center right so
+            // the (icon + text) combo is centered on sx.
+            ctx.drawImage(logo, sx - halfW, sy - iconSize / 2, iconSize, iconSize);
+            drawLabel(title, sx - halfW + iconW + tw / 2, sy, dark);
+          } else {
+            drawLabel(title, sx, sy, dark);
+          }
+          shown++;
+        }
       }
     }
 
@@ -1115,6 +1179,9 @@
   }
 
   function loadData() {
+    // start logo prefetch in parallel — they're small (<60KB total) and we
+    // want them ready by the time the user zooms in far enough for titles.
+    loadPlatformLogos();
     fetch('atlas.json')
       .then(function(r) {
         if (!r.ok) throw new Error('failed to load atlas.json: ' + r.status);
