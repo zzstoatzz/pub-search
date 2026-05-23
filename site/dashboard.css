@@ -8,7 +8,7 @@
   --text: #ccc;
   --text-bright: #fff;
   --text-secondary: #888;
-  --text-dim: #555;
+  --text-dim: #777;
   --text-muted: #444;
   --row-border: #1a1a1a;
   --tooltip-bg: rgba(17, 17, 17, 0.9);
@@ -24,7 +24,7 @@
   --text: #333;
   --text-bright: #111;
   --text-secondary: #555;
-  --text-dim: #888;
+  --text-dim: #666;
   --text-muted: #999;
   --row-border: #e0e0e0;
   --tooltip-bg: rgba(238, 238, 238, 0.9);
