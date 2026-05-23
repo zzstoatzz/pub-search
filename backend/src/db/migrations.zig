@@ -233,6 +233,39 @@ pub const migrations = [_]zug.Migration{
         \\CREATE INDEX IF NOT EXISTS idx_recommends_did ON recommends(did);
         ,
     },
+    .{
+        .id = "013_create_search_events",
+        .name = "event log for time-windowed popular searches with discounted seed",
+        // Per-event row replaces the monotonic popular_searches counter so
+        // /popular can window by recency. Old test/seed traffic naturally
+        // ages out; recent organic searches win immediately.
+        //
+        // Seed: each existing popular_searches row contributes MIN(count, 5)
+        // events with random timestamps in the last 14 days. The heavy
+        // discount turns a 689-hit "test" into 5 events spread over 2 weeks
+        // (~2.5 events in a 7-day window) — a query searched 3 times today
+        // already beats it. Within 14 days all seed data ages out fully.
+        //
+        // Length and trim filters mirror the runtime queue rules so the seed
+        // stays consistent with what new events look like.
+        .sql =
+        \\CREATE TABLE IF NOT EXISTS search_events (
+        \\  query TEXT NOT NULL,
+        \\  at INTEGER NOT NULL
+        \\);
+        \\CREATE INDEX IF NOT EXISTS idx_search_events_at ON search_events(at);
+        \\CREATE INDEX IF NOT EXISTS idx_search_events_query_at ON search_events(query, at);
+        \\WITH RECURSIVE seq(n) AS (
+        \\  SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 5
+        \\)
+        \\INSERT INTO search_events (query, at)
+        \\SELECT lower(trim(ps.query)),
+        \\       strftime('%s', 'now') - abs(random() % (14 * 86400))
+        \\FROM popular_searches ps, seq
+        \\WHERE seq.n <= ps.count
+        \\  AND length(trim(ps.query)) >= 2;
+        ,
+    },
 };
 
 // --- tests ---

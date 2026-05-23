@@ -116,6 +116,13 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     server.initRecommendedCache(io);
     server.initCuratorsCache(io);
 
+    // prune search_events older than 90 days on each boot. Bounded
+    // growth + natural privacy hygiene; the popular-searches window is
+    // only 7 days so anything older has no read consumer.
+    if (db.getClient()) |c| {
+        c.exec("DELETE FROM search_events WHERE at < strftime('%s', 'now') - 90 * 86400", &.{}) catch {};
+    }
+
     // start reconciler (verifies documents still exist at source PDS)
     ingest.reconciler.start(allocator, io);
 

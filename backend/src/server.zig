@@ -279,26 +279,36 @@ fn getTagsLocal(alloc: Allocator, local: *db.LocalDb) ![]const u8 {
     return try output.toOwnedSlice();
 }
 
-fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
-    // try local SQLite first (faster)
-    if (db.getLocalDb()) |local| {
-        if (getPopularLocal(alloc, local, limit)) |result| {
-            return result;
-        } else |_| {}
-    }
+// Window for the popular-searches aggregation. 7 days strikes a balance:
+// long enough for low-traffic queries to show up, short enough that test/
+// seed traffic from weeks ago doesn't dominate. Seeded historical events
+// fully age out 14 days after migration (see migration 013 for the seed
+// strategy).
+const POPULAR_WINDOW_SECS: i64 = 7 * 24 * 60 * 60;
 
-    // fall back to Turso
+fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
 
-    var buf: [8]u8 = undefined;
-    const limit_str = std.fmt.bufPrint(&buf, "{d}", .{limit}) catch "3";
+    var lim_buf: [8]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&lim_buf, "{d}", .{limit}) catch "5";
+    var win_buf: [16]u8 = undefined;
+    const window_str = std.fmt.bufPrint(&win_buf, "{d}", .{POPULAR_WINDOW_SECS}) catch "604800";
 
+    // Aggregate distinct events in the window. Fast: idx_search_events_at
+    // makes the date filter range-scan, and the post-filter set is small
+    // (at the current ~50 searches/day rate, 7d ≈ 350 events to group).
     var res = c.query(
-        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT ?",
-        &.{limit_str},
+        \\SELECT query, COUNT(*) AS n
+        \\FROM search_events
+        \\WHERE at >= strftime('%s', 'now') - ?
+        \\GROUP BY query
+        \\ORDER BY n DESC, query
+        \\LIMIT ?
+    ,
+        &.{ window_str, limit_str },
     ) catch {
         try output.writer.writeAll("[]");
         return try output.toOwnedSlice();
@@ -308,26 +318,6 @@ fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
-    try jw.endArray();
-    return try output.toOwnedSlice();
-}
-
-fn getPopularLocal(alloc: Allocator, local: *db.LocalDb, limit: usize) ![]const u8 {
-    var output: std.Io.Writer.Allocating = .init(alloc);
-    errdefer output.deinit();
-
-    _ = limit; // zqlite doesn't support runtime LIMIT, use fixed 10
-    var rows = try local.query(
-        "SELECT query, count FROM popular_searches ORDER BY count DESC LIMIT 10",
-        .{},
-    );
-    defer rows.deinit();
-
-    var jw: json.Stringify = .{ .writer = &output.writer };
-    try jw.beginArray();
-    while (rows.next()) |row| {
-        try jw.write(PopularJson{ .query = row.text(0), .count = row.int(1) });
-    }
     try jw.endArray();
     return try output.toOwnedSlice();
 }

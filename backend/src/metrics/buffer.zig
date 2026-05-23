@@ -69,10 +69,23 @@ pub fn recordCacheMiss() void {
     _ = delta_cache_misses.fetchAdd(1, .monotonic);
 }
 
+// Normalize a query for the popular log: trim whitespace, lowercase.
+// Merges "Python" / "python" / " python " into one row so the popularity
+// distribution isn't fragmented by trivial input variation. Returns an
+// owned slice (caller frees) or null if the normalized result is too short
+// to be meaningful.
+fn normalizeQuery(alloc: std.mem.Allocator, query: []const u8) ?[]u8 {
+    const trimmed = std.mem.trim(u8, query, &std.ascii.whitespace);
+    if (trimmed.len < 2) return null;
+    const lower = alloc.alloc(u8, trimmed.len) catch return null;
+    for (trimmed, 0..) |c, i| lower[i] = std.ascii.toLower(c);
+    return lower;
+}
+
 // queue popular search (best effort, drops if full)
 pub fn queuePopularSearch(query: []const u8) void {
-    if (query.len < 2) return;
     const io = global_io.?;
+    const normalized = normalizeQuery(search_allocator, query) orelse return;
 
     search_mutex.lockUncancelable(io);
     defer search_mutex.unlock(io);
@@ -88,9 +101,7 @@ pub fn queuePopularSearch(query: []const u8) void {
         search_read_idx = (search_read_idx + 1) % MAX_PENDING_SEARCHES;
     }
 
-    // allocate copy
-    const copy = search_allocator.dupe(u8, query) catch return;
-    pending_searches[search_write_idx] = copy;
+    pending_searches[search_write_idx] = normalized;
     search_write_idx = next_write;
 }
 
@@ -226,9 +237,13 @@ fn syncPopularSearches(c: *db.Client) void {
     var synced: usize = 0;
     while (search_read_idx != search_write_idx) {
         if (pending_searches[search_read_idx]) |query| {
-            // sync to Turso
+            // Append an event row instead of bumping a monotonic counter — lets
+            // /popular window by recency and lets old test/seed traffic age out.
+            // Timestamps are stamped at sync time (not queue time), so events
+            // in the same batch share a second-level timestamp. Acceptable
+            // because the sync interval is small (~5s).
             c.exec(
-                "INSERT INTO popular_searches (query, count) VALUES (?, 1) ON CONFLICT(query) DO UPDATE SET count = count + 1",
+                "INSERT INTO search_events (query, at) VALUES (?, strftime('%s', 'now'))",
                 &.{query},
             ) catch {};
 
@@ -241,6 +256,6 @@ fn syncPopularSearches(c: *db.Client) void {
     }
 
     if (synced > 0) {
-        logfire.debug("stats_buffer: synced {d} popular searches", .{synced});
+        logfire.debug("stats_buffer: synced {d} search events", .{synced});
     }
 }
