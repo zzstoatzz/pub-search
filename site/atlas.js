@@ -719,6 +719,14 @@
     var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 4.5, 1.0);
     var titleAlpha = fadeIn(zoom, 4.5, 1.0);
 
+    // CULLING RULE: labels stay anchored above their dot/cluster. If the
+    // label would extend past the viewport edge, we CULL it rather than
+    // shifting it inward — shifting created a label-at-edge / dot-elsewhere
+    // disconnect where you couldn't tell which dot a label described.
+    function fitsHoriz(lx, halfW) {
+      return lx - halfW >= LABEL_MARGIN && lx + halfW <= W - LABEL_MARGIN;
+    }
+
     if (coarseAlpha > 0.01) {
       ctx.font = (small ? '9px' : '12px') + ' monospace';
       ctx.globalAlpha = 0.85 * coarseAlpha;
@@ -730,9 +738,7 @@
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - Math.sqrt(cl.count) * 1.5;
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
-        var halfW = tw / 2;
-        if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
-        if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
+        if (!fitsHoriz(sx, tw / 2)) continue;
         if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
     }
@@ -749,9 +755,7 @@
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - 14;
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
-        var halfW = tw / 2;
-        if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
-        if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
+        if (!fitsHoriz(sx, tw / 2)) continue;
         if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
       }
     }
@@ -767,8 +771,11 @@
       ctx.font = fontSize + 'px monospace';
       ctx.globalAlpha = 0.7 * titleAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
-      var maxLabels = small ? 20 : 50;
-      var truncLen = small ? 25 : 45;
+      // Mobile screen is ~390px wide. With monospace text, 20 labels
+      // overlap themselves to the point of being unreadable \u2014 drop the
+      // mobile cap further. Desktop stays at 50.
+      var maxLabels = small ? 10 : 50;
+      var truncLen = small ? 22 : 45;
       var iconSize = small ? 12 : 14;
       var iconGap = 4;
       var shown = 0;
@@ -793,8 +800,10 @@
         var contentW = iconW + tw;
         var halfW = contentW / 2;
 
-        if (sx - halfW < LABEL_MARGIN) sx = LABEL_MARGIN + halfW;
-        if (sx + halfW > W - LABEL_MARGIN) sx = W - LABEL_MARGIN - halfW;
+        // CULL if the (icon + title) would extend past the viewport edge.
+        // Shifting the label inward disconnects it from its dot and makes
+        // it unclear which dot the label describes.
+        if (!fitsHoriz(sx, halfW)) continue;
         if (canPlace(sx, sy, contentW, fontSize)) {
           if (hasLogo) {
             // draw the icon at the left, then shift the text center right so
