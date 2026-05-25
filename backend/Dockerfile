@@ -15,7 +15,15 @@ RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_V
 
 WORKDIR /app
 COPY build.zig build.zig.zon ./
+COPY scripts ./scripts
 COPY src ./src
+
+# pre-fetch deps with github fallback for tangled.* outages. tangled is
+# the source of truth but goes down occasionally; the github mirrors of
+# our own libs (logfire-zig, zug, poolio) provide an escape hatch. zon
+# hashes validate either source, so a mirror drift fails the build
+# loudly rather than silently.
+RUN ./scripts/fetch-deps.sh
 
 # pin to x86_64_v3 (AVX2) — fly EPYC machines support up to that. without
 # -Dtarget+-Dcpu, zig auto-detects from the depot builder's CPU, which may
