@@ -280,6 +280,26 @@ pub const migrations = [_]zug.Migration{
         // resync. The row stays; search.zig WHERE clauses add `url_dead = 0`.
         .sql = "ALTER TABLE documents ADD COLUMN url_dead INTEGER DEFAULT 0",
     },
+    .{
+        .id = "015_index_documents_verified_at_embedded_at",
+        .name = "scan-bound indexes for reconciler + embedder hot queries",
+        // The reconciler picks docs via
+        //   WHERE verified_at IS NULL OR verified_at < ? ORDER BY verified_at ASC LIMIT ?
+        // and the embedder picks docs via
+        //   WHERE embedded_at IS NULL LIMIT ?
+        // Without an index on these columns, SQLite scans every row (~17.5k)
+        // every cycle. `turso db inspect leaf --queries` showed these two
+        // patterns accounted for ~44% of period-to-date rows-read (51.7M for
+        // reconciler, 7.2M for embedder).
+        //
+        // With these indexes the planner can range-scan the NULL/early
+        // entries directly and stop at LIMIT. Per-cycle reads drop from
+        // ~17.5k to ~LIMIT (50 for reconciler, 50 for embedder).
+        .sql =
+        \\CREATE INDEX IF NOT EXISTS idx_documents_verified_at ON documents(verified_at);
+        \\CREATE INDEX IF NOT EXISTS idx_documents_embedded_at ON documents(embedded_at);
+        ,
+    },
 };
 
 // --- tests ---
