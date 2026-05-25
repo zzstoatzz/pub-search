@@ -79,21 +79,39 @@ pub const Sort = enum {
 // TopQuery: rank by raw count.
 // TrendingQuery: rank by recommends-per-day-since-publish. The `+1` and
 // COALESCE-to-epoch defensively handle malformed/missing created_at.
+//
+// Both pre-aggregate the small `recommends` table in a subquery before
+// joining `documents`. The naive shape (`FROM documents d JOIN recommends
+// r ...`) causes SQLite to plan a full scan of `documents` (~18k rows)
+// even though only ~880 have any recommends. The subquery drives the
+// scan from recommends (~2.6k rows), then looks up each matched doc by
+// PK. ~6x fewer rows read per refresh. Written as subquery-in-FROM
+// rather than CTE because zql's comptime parser walks forward to find
+// the first SELECT/FROM pair — a `WITH … AS (SELECT … FROM …)` prefix
+// would trip it into parsing the inner SELECT as the column list.
+// Author/curator-filtered variants below keep the naive shape — their
+// WHERE clause already narrows the document side to a handful of rows,
+// so the rewrite would buy nothing.
 const TopQuery = zql.Query(
     \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
     \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
     \\  COALESCE(d.path, '') AS path, d.has_publication,
     \\  COALESCE(p.name, '') AS publication_name,
-    \\  COUNT(DISTINCT CASE
-    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
-    \\    THEN r.did END) AS recommend_count,
-    \\  COUNT(DISTINCT r.did) AS total_count
-    \\FROM documents d
+    \\  agg.recommend_count AS recommend_count,
+    \\  agg.total_count AS total_count
+    \\FROM (
+    \\  SELECT document_uri,
+    \\    COUNT(DISTINCT CASE
+    \\      WHEN DATE(COALESCE(NULLIF(created_at, ''), indexed_at)) >= DATE('now', ?)
+    \\      THEN did END) AS recommend_count,
+    \\    COUNT(DISTINCT did) AS total_count
+    \\  FROM recommends
+    \\  GROUP BY document_uri
+    \\  HAVING recommend_count > 0
+    \\) agg
+    \\JOIN documents d ON d.uri = agg.document_uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\JOIN recommends r ON r.document_uri = d.uri
-    \\GROUP BY d.uri
-    \\HAVING recommend_count > 0
-    \\ORDER BY recommend_count DESC, d.created_at DESC
+    \\ORDER BY agg.recommend_count DESC, d.created_at DESC
     \\LIMIT 250
 );
 
@@ -102,16 +120,21 @@ const TrendingQuery = zql.Query(
     \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
     \\  COALESCE(d.path, '') AS path, d.has_publication,
     \\  COALESCE(p.name, '') AS publication_name,
-    \\  COUNT(DISTINCT CASE
-    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
-    \\    THEN r.did END) AS recommend_count,
-    \\  COUNT(DISTINCT r.did) AS total_count
-    \\FROM documents d
+    \\  agg.recommend_count AS recommend_count,
+    \\  agg.total_count AS total_count
+    \\FROM (
+    \\  SELECT document_uri,
+    \\    COUNT(DISTINCT CASE
+    \\      WHEN DATE(COALESCE(NULLIF(created_at, ''), indexed_at)) >= DATE('now', ?)
+    \\      THEN did END) AS recommend_count,
+    \\    COUNT(DISTINCT did) AS total_count
+    \\  FROM recommends
+    \\  GROUP BY document_uri
+    \\  HAVING recommend_count > 0
+    \\) agg
+    \\JOIN documents d ON d.uri = agg.document_uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\JOIN recommends r ON r.document_uri = d.uri
-    \\GROUP BY d.uri
-    \\HAVING recommend_count > 0
-    \\ORDER BY CAST(recommend_count AS REAL)
+    \\ORDER BY CAST(agg.recommend_count AS REAL)
     \\  / MAX(1, julianday('now') - julianday(COALESCE(NULLIF(d.created_at, ''), '1970-01-01'))) DESC,
     \\  d.created_at DESC
     \\LIMIT 250
@@ -211,9 +234,9 @@ const TrendingByCuratorQuery = zql.Query(
 // same order so Row's column lookup via TopQuery works for all of them.
 comptime {
     const all_queries = .{
-        TopQuery,           TrendingQuery,
-        TopByAuthorQuery,   TrendingByAuthorQuery,
-        TopByCuratorQuery,  TrendingByCuratorQuery,
+        TopQuery,          TrendingQuery,
+        TopByAuthorQuery,  TrendingByAuthorQuery,
+        TopByCuratorQuery, TrendingByCuratorQuery,
     };
     for (all_queries) |Q| {
         if (Q.columns.len != TopQuery.columns.len) @compileError("recommended query column count drift");
