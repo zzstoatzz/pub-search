@@ -48,6 +48,18 @@ fn isEnabled() bool {
     return !mem.eql(u8, val, "false") and !mem.eql(u8, val, "0");
 }
 
+/// Kill switch for the per-doc destination URL HEAD check (the url_dead
+/// feature). zig 0.16 std.http.Client.fetch panics with "attempt to use
+/// null value" on certain redirect chains (observed: blog.karashiiro.moe's
+/// auth-callback bounce, 3 hops cross-domain → relative). The panic
+/// bypasses our `catch return .url_skip`, crash-loops the reconciler, and
+/// blocks PDS verification — which is the reconciler's primary job.
+/// Default off until the stdlib bug is worked around.
+fn isUrlCheckEnabled() bool {
+    const val = getenv("RECONCILE_URL_CHECK_ENABLED") orelse "false";
+    return mem.eql(u8, val, "true") or mem.eql(u8, val, "1");
+}
+
 var global_io: ?Io = null;
 
 /// AT-URI components parsed from "at://{did}/{collection}/{rkey}"
@@ -257,17 +269,21 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
                 // PDS record is good — also check the destination URL we'd
                 // link to. Per-host throttled inside checkDocUrl. 404 →
                 // soft-hide; 2xx → reset url_dead (in case it came back).
-                const doc_type: []const u8 = if (doc.has_publication) "article" else "looseleaf";
-                const url = search.buildDocUrl(allocator, doc_type, doc.platform, doc.base_path, doc.path, doc.rkey, doc.did);
-                defer allocator.free(url);
-                if (url.len > 0) {
-                    switch (checkDocUrl(allocator, url, last_head_ns)) {
-                        .url_dead => {
-                            updateUrlDead(client, doc.uri, true);
-                            logfire.info("reconcile: marked url_dead: {s} → {s}", .{ doc.uri, url });
-                        },
-                        .url_ok => updateUrlDead(client, doc.uri, false),
-                        .url_skip => {}, // transient / 405 / timeout — leave alone
+                // Guarded by RECONCILE_URL_CHECK_ENABLED — std.http.Client
+                // currently panics on some redirect chains, see isUrlCheckEnabled.
+                if (isUrlCheckEnabled()) {
+                    const doc_type: []const u8 = if (doc.has_publication) "article" else "looseleaf";
+                    const url = search.buildDocUrl(allocator, doc_type, doc.platform, doc.base_path, doc.path, doc.rkey, doc.did);
+                    defer allocator.free(url);
+                    if (url.len > 0) {
+                        switch (checkDocUrl(allocator, url, last_head_ns)) {
+                            .url_dead => {
+                                updateUrlDead(client, doc.uri, true);
+                                logfire.info("reconcile: marked url_dead: {s} → {s}", .{ doc.uri, url });
+                            },
+                            .url_ok => updateUrlDead(client, doc.uri, false),
+                            .url_skip => {}, // transient / 405 / timeout — leave alone
+                        }
                     }
                 }
                 updateVerifiedAt(client, doc.uri);
