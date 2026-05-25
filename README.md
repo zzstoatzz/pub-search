@@ -59,7 +59,7 @@ the backend is fully configurable via environment variables:
 | `TURSO_TOKEN` | - | Turso auth token (required) |
 | `VOYAGE_API_KEY` | - | Voyage AI API key (for embeddings) |
 
-the backend indexes multiple ATProto platforms - currently `pub.leaflet.*` and `site.standard.*` collections. platform is stored per-document and returned in search results.
+the backend indexes multiple ATProto platforms — currently `pub.leaflet.*`, `site.standard.*`, and `com.whtwnd.blog.entry` collections (the last for whitewind). platform is stored per-document and returned in search results.
 
 ## atlas
 

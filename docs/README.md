@@ -80,3 +80,4 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [turso-hrana.md](turso-hrana.md) — Turso's HTTP protocol for database queries
 - [migrations.md](migrations.md) — schema migration system (zug + adapter + bootstrap)
 - [performance-saga.md](performance-saga.md) — a debugging story about latency spikes
+- [access-pattern-audit.md](access-pattern-audit.md) — a debugging story about turso row-read cost (the cost-side companion to the latency saga)

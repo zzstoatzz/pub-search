@@ -24,11 +24,14 @@ resolve DID → PDS endpoint via plc.directory (cached across cycles)
 GET {pds}/xrpc/com.atproto.repo.getRecord?repo={did}&collection={collection}&rkey={rkey}
      ↓
 200 → update verified_at          (record still exists)
+       + optional: HEAD the destination URL → mark url_dead on 404
 400/404 → delete from turso + tpuf (record is gone)
 5xx/timeout → skip                 (PDS might be temporarily down)
 ```
 
-at ~12k documents, 50 per cycle every 30 minutes, the full index is verified in ~5 days. documents older than 7 days are re-verified.
+at ~18k documents, 50 per cycle every 30 minutes, the full index is verified in ~7-8 days. documents older than 7 days are re-verified.
+
+backed by `idx_documents_verified_at` (migration 015) so the batch fetch is an index range scan, not a full-table scan — see [access-pattern-audit.md](access-pattern-audit.md).
 
 ## what it fixes
 
@@ -55,6 +58,7 @@ all env vars with sensible defaults — no configuration required for normal ope
 | `RECONCILE_INTERVAL_SECS` | `1800` | seconds between cycles (30 min) |
 | `RECONCILE_BATCH_SIZE` | `50` | documents checked per cycle |
 | `RECONCILE_REVERIFY_DAYS` | `7` | re-verify documents older than N days |
+| `RECONCILE_URL_CHECK_ENABLED` | `false` | gate the destination-URL HEAD check (the `url_dead` feature). off by default while a `std.http.Client` redirect panic is worked around — see "url_dead and the http.Client panic" below. PDS verification + soft delete run unconditionally regardless. |
 
 ## failure modes
 
@@ -104,3 +108,17 @@ fly logs -a leaflet-search-backend --no-tail | grep reconcile
 **why 200ms rate limiting?** PDSs are shared infrastructure. we check 50 documents per cycle at most — aggressive polling would be antisocial. 200ms between requests is conservative.
 
 **why compute timestamps in zig?** turso's handling of `strftime` with parameterized modifiers is untested in this codebase. computing timestamps in zig (same approach as the embedder) eliminates that risk.
+
+## url_dead and the http.Client panic
+
+a secondary feature on top of PDS verification: HEAD the destination URL we'd link to. on a 404, set `documents.url_dead = 1` so search excludes the doc without deleting it (delete-on-404 would flap — tap re-inserts on the next resync, since `insertDocument` doesn't consult tombstones).
+
+**status: opt-in via `RECONCILE_URL_CHECK_ENABLED=true`.** the implementation calls `std.http.Client.fetch` with `.method = .HEAD`, and zig 0.16's stdlib mishandles certain redirect chains — `attempt to use null value` at `std/http/Client.zig:1826`. reproduced locally against `blog.karashiiro.moe`'s auth-callback bounce (cross-domain → back-to-origin → relative, exactly 3 hops at the default `redirect_behavior=3` limit). the panic bypasses our `catch return .url_skip` and kills the worker thread; in production this crash-looped the reconciler for 5+ hours before we noticed, blocking PDS verification entirely.
+
+**workaround.** the kill switch keeps the secondary feature off by default until the stdlib bug is worked around. options for a real fix:
+
+- subprocess `curl -I` (simple, slow, leaves a fork-per-doc footprint)
+- raw socket HEAD without redirect-following (skip the codepath that panics; treat redirects as `.url_skip`)
+- upgrade zig + retry (only viable when 0.17+ ships and `std.http.Client` is reworked)
+
+**how to re-enable when fixed.** flip `RECONCILE_URL_CHECK_ENABLED=true` via `fly secrets`. the cycle log will then include `reconcile: marked url_dead: {uri} → {url}` entries when a destination 404s.

@@ -8,7 +8,7 @@ keyword search uses SQLite's FTS5 on a local read replica, synced from Turso (th
 
 ### why FTS5 works for now
 
-- **scale**: ~11k documents. FTS5 handles this trivially.
+- **scale**: ~18k documents. FTS5 handles this trivially.
 - **latency**: keyword p50 ~9ms (local SQLite replica), semantic p50 ~345ms (voyage + turbopuffer), hybrid p50 ~360ms.
 - **cost**: $0. included with Turso free tier.
 - **ops**: zero. no separate service to run.
@@ -108,7 +108,7 @@ estimated effort: 1-2 days to swap search backend.
 
 ### vector search scaling
 
-similarity search currently uses voyage-4-lite embeddings (1024 dims) with turbopuffer ANN index. this handles ~11k docs well. at larger scale:
+similarity search currently uses voyage-4-lite embeddings (1024 dims) with turbopuffer ANN index. this handles ~18k docs well. at larger scale:
 
 - **Elasticsearch**: has vector search (dense_vector + kNN)
 - **dedicated vector DB**: Qdrant, Pinecone, Weaviate
