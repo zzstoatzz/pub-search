@@ -42,8 +42,8 @@
 
 ## MCP server
 - hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
-- local dev: `cd pub-search-mcp && uv run pytest` for tests
-- directory is `pub-search-mcp/` (NOT `mcp/`) — renamed to avoid collision with the PyPI `mcp` SDK in fastmcp.app's build template
+- local dev: `cd pub-search-mcp/server && uv run pytest` for tests
+- the installable project lives in `pub-search-mcp/server/` — nested intentionally to work around a horizon (fastmcp.app's builder) bug where single-segment pyproject paths render as bare-name PyPI lookups instead of path installs (see prefecthq/horizon#3814). Remove the `server/` nesting once that PR lands.
 - deployed on fastmcp.app
 
 ## common tasks
