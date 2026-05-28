@@ -12,7 +12,8 @@ class SearchResult(BaseModel):
     uri: str
     did: str
     title: str
-    snippet: str
+    # snippet is populated by /search and /similar (v2); /recommended doesn't return one.
+    snippet: str = ""
     createdAt: str = ""
     rkey: str
     basePath: str = ""
@@ -22,6 +23,27 @@ class SearchResult(BaseModel):
     score: float = 0.0
     publicationName: str = ""
     url: str = ""
+    # populated by /recommended (windowed count and all-time count); 0 elsewhere.
+    recommendCount: int = 0
+    totalCount: int = 0
+
+
+class ClusterContext(BaseModel):
+    """A focal document's neighborhood across the long-form ATProto network.
+
+    Pre-computes the cross-platform / cross-author / shared-terms observations
+    that pub-search uniquely sees from indexing every long-form platform as one
+    corpus. Designed to give a curator (e.g. an agent) the network-position
+    context for a synthesis without N extra calls.
+    """
+
+    focal_uri: str
+    neighbors: list["SearchResult"]
+    platforms: list[str]
+    distinct_authors: int
+    cross_platform: bool
+    cross_author: bool
+    shared_terms: list[str]
 
 
 class Tag(BaseModel):

@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Literal
 
 from fastmcp import FastMCP
 
-from pub_search._types import Document, PopularSearch, SearchResult, Stats, Tag
+from pub_search._types import (
+    ClusterContext,
+    Document,
+    PopularSearch,
+    SearchResult,
+    Stats,
+    Tag,
+)
 from pub_search.client import get_http_client
 
 mcp = FastMCP("pub-search")
@@ -29,16 +37,27 @@ search long-form writing on ATProto: leaflet, pckt, offprint, greengale, whitewi
 
 - `search(query, mode, tag, platform, since, author)` - search with mode: keyword, semantic, or hybrid
 - `get_document(uri)` - fetch full content by AT-URI
-- `find_similar(uri)` - find related documents
+- `find_similar(uri)` - find related documents (raw)
+- `discover_focal_post(window, sort)` - what's notable right now (top/trending in a window)
+- `describe_cluster(uri)` - a focal post's neighborhood + cross-platform / author / shared-terms observations
 - `get_tags()` - available tags
 - `get_stats()` - index statistics
 - `get_popular()` - popular queries
 
-## workflow
+## workflows
 
+**research a topic.**
 1. `search("topic")` for keyword search, `search("topic", mode="hybrid")` for best results
 2. `get_document(uri)` for full text
 3. `find_similar(uri)` for related content
+
+**curate / write about the network.** pub-search is the only place that sees
+every long-form ATProto platform as one corpus, so the network-position of a
+post (who else is writing about this, on which platforms) is information you
+can't get from any single platform's UI.
+1. `discover_focal_post(window="week", sort="trending")` to find what's hot
+2. `describe_cluster(focal.uri)` to see the neighborhood + cross-platform observations
+3. `get_document(focal.uri)` if you want the actual claim from inside the post
 
 ## search modes
 
@@ -245,6 +264,109 @@ async def find_similar(uri: str, limit: int = 5) -> list[SearchResult]:
 
     results = _extract_results(data)
     return [SearchResult(**r) for r in results[:limit]]
+
+
+Window = Literal["day", "week", "month", "year", "all"]
+SortRecommended = Literal["top", "trending"]
+
+
+@mcp.tool
+async def discover_focal_post(
+    window: Window = "week",
+    sort: SortRecommended = "trending",
+    limit: int = 3,
+) -> list[SearchResult]:
+    """surface what's notable right now — the focal posts a curator would write about.
+
+    use `sort="trending"` for current momentum (recommends-per-day-since-publish,
+    so newer posts with steady velocity surface over older posts with cumulative
+    counts). use `sort="top"` for "what mattered most" by raw count in the window.
+
+    pair with `describe_cluster(focal.uri)` to get the network-position context
+    around a focal item — the conversation it sits inside, not just the post itself.
+
+    args:
+        window: day | week | month | year | all (default week)
+        sort: top | trending (default trending)
+        limit: max items (default 3 — keep small; this is for focal items, not browse)
+
+    returns:
+        list of SearchResult with recommendCount (windowed) and totalCount (all-time) populated
+    """
+    async with get_http_client() as client:
+        response = await client.get(
+            "/recommended",
+            params={"since": window, "sort": sort},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    results = _extract_results(data)
+    return [SearchResult(**r) for r in results[:limit]]
+
+
+# common short / structural words to strip from cluster title overlap.
+# kept tight — the goal is "what terms recur in this neighborhood", so most
+# nouns/verbs should pass through.
+_TITLE_STOPWORDS = frozenset(
+    "the a an and or but is are was were be been being to of in on at for from "
+    "with by as this that these those it its it's has have had do does did how "
+    "what when where why who whom which not no yes you your we our they their"
+    .split()
+)
+
+
+def _title_terms(title: str) -> set[str]:
+    out: set[str] = set()
+    for raw in title.split():
+        w = raw.strip(":,.!?\"'()[]{}—–-").lower()
+        if len(w) >= 4 and w not in _TITLE_STOPWORDS and not w.isdigit():
+            out.add(w)
+    return out
+
+
+@mcp.tool
+async def describe_cluster(uri: str, k: int = 5) -> ClusterContext:
+    """get a focal document's semantic neighborhood, with cross-platform / author observations.
+
+    pre-computes what pub-search uniquely sees from indexing the whole long-form
+    network as one corpus: which platforms the neighborhood spans, how many
+    distinct authors are involved, what terms recur across the cluster's titles.
+
+    a curator can use this to write about a focal post *as a focal post* — i.e.
+    placing it inside the conversation it sits in — without making N extra calls
+    to assemble the same picture from `find_similar` results.
+
+    args:
+        uri: AT-URI of the focal document (typically from `discover_focal_post()`)
+        k: number of semantic neighbors to include (default 5)
+
+    returns:
+        ClusterContext with neighbors + structured observations. shared_terms is
+        derived from neighbor titles only; combine with the focal's title for the
+        full cluster theme picture.
+    """
+    async with get_http_client() as client:
+        response = await client.get("/similar", params={"uri": uri, "format": "v2"})
+        response.raise_for_status()
+        data = response.json()
+
+    neighbors = [SearchResult(**r) for r in _extract_results(data)[:k]]
+    platforms = sorted({n.platform for n in neighbors})
+    authors = {n.did for n in neighbors}
+    term_counts: Counter[str] = Counter()
+    for n in neighbors:
+        term_counts.update(_title_terms(n.title))
+    shared_terms = [t for t, c in term_counts.most_common(10) if c >= 2]
+    return ClusterContext(
+        focal_uri=uri,
+        neighbors=neighbors,
+        platforms=platforms,
+        distinct_authors=len(authors),
+        cross_platform=len(platforms) > 1,
+        cross_author=len(authors) > 1,
+        shared_terms=shared_terms,
+    )
 
 
 @mcp.tool
