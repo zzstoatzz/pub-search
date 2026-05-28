@@ -1,0 +1,178 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "httpx",
+#     "websockets",
+#     "atproto",
+#     "pydantic-settings",
+# ]
+# ///
+"""
+Watchdog: ping @zzstoatzz.io on bsky when pub-search ingestion falls behind.
+
+Compares the tap's firehose cursor to the relay head. If the tap is far behind
+(wedged, or can't keep pace) or its stats endpoint is unreachable, posts a
+mention from the pub-search account so a stall doesn't go unnoticed.
+
+Background: 2026-05-27 a relay rebuild wedged the tap and ingestion was dead for
+~14.5h before anyone noticed. See docs/tap.md.
+
+Creds: ATPROTO_HANDLE / ATPROTO_PASSWORD (from .env, or env / ENV_FILE).
+
+Usage:
+    ./scripts/ingestion-watchdog                 # check; post only if stalled
+    ./scripts/ingestion-watchdog --test          # post a wiring-test mention, then delete it
+    ./scripts/ingestion-watchdog --threshold 150000
+"""
+
+import argparse
+import asyncio
+import datetime
+import os
+import struct
+import sys
+
+import httpx
+import websockets
+from atproto import Client, client_utils
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+TAP_CURSORS = "https://leaflet-search-tap.fly.dev/stats/cursors"
+RELAY_WSS = "wss://relay.waow.tech/xrpc/com.atproto.sync.subscribeRepos"
+ALERT_HANDLE = "zzstoatzz.io"
+# substring used to recognize our own prior alerts (dedup) — keep in the message
+ALERT_MARKER = "pub-search ingestion looks stalled"
+# normal lag is ~0 (tap sits at head); a sustained gap this large means wedged
+# or falling behind. at typical relay rates this is several minutes behind.
+DEFAULT_THRESHOLD = 150_000
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    atproto_handle: str = ""
+    atproto_password: str = ""
+
+
+def _find_seq(buf: bytes) -> int | None:
+    """Pull the `seq` uint out of a subscribeRepos DAG-CBOR frame header."""
+    i = buf.find(b"cseq")  # CBOR text key "seq" (0x63 'c' = 3-char string marker)
+    if i < 0:
+        return None
+    b = buf[i + 4]
+    if b < 0x18:
+        return b
+    if b == 0x18:
+        return buf[i + 5]
+    if b == 0x19:
+        return struct.unpack(">H", buf[i + 5 : i + 7])[0]
+    if b == 0x1A:
+        return struct.unpack(">I", buf[i + 5 : i + 9])[0]
+    if b == 0x1B:
+        return struct.unpack(">Q", buf[i + 5 : i + 13])[0]
+    return None
+
+
+async def _relay_head_seq() -> int | None:
+    async with websockets.connect(RELAY_WSS, max_size=None, open_timeout=10) as ws:
+        for _ in range(4):
+            msg = await asyncio.wait_for(ws.recv(), timeout=8)
+            seq = _find_seq(msg)
+            if seq:
+                return seq
+    return None
+
+
+def _tap_seq() -> int | None:
+    r = httpx.get(TAP_CURSORS, timeout=15)
+    r.raise_for_status()
+    return r.json().get("firehose")
+
+
+def check(threshold: int) -> tuple[bool, str]:
+    try:
+        tap = _tap_seq()
+    except Exception as e:
+        return True, f"tap /stats/cursors unreachable: {e!r}"
+    try:
+        head = asyncio.run(_relay_head_seq())
+    except Exception as e:
+        return True, f"relay head probe failed: {e!r}"
+    if tap is None or head is None:
+        return True, f"missing firehose seq (tap={tap} head={head})"
+    lag = head - tap
+    if lag > threshold:
+        return True, f"firehose {lag:,} seq behind relay head (threshold {threshold:,})"
+    return False, f"healthy: firehose {lag:,} seq behind head"
+
+
+def _post(client: Client, target_did: str, message: str):
+    tb = client_utils.TextBuilder().mention(f"@{ALERT_HANDLE}", target_did).text(f" {message}")
+    return client.send_post(tb)
+
+
+def _alerted_within(client: Client, hours: int) -> bool:
+    """True if this account already posted a stall alert in the last `hours`.
+
+    Keeps a 15-min cron from spamming on a multi-hour stall. Errs toward posting
+    (returns False) if anything is uncertain — better a dupe than a missed alert.
+    """
+    try:
+        feed = client.get_author_feed(client.me.did, limit=15).feed
+    except Exception:
+        return False
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
+    for item in feed:
+        rec = getattr(item.post, "record", None)
+        text = getattr(rec, "text", "") or ""
+        if ALERT_MARKER not in text:
+            continue
+        created = getattr(rec, "created_at", None)
+        if not created:
+            return True
+        try:
+            if datetime.datetime.fromisoformat(created.replace("Z", "+00:00")) > cutoff:
+                return True
+        except ValueError:
+            return True
+    return False
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="pub-search ingestion watchdog")
+    ap.add_argument("--test", action="store_true", help="post a wiring-test mention, then delete it")
+    ap.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD)
+    ap.add_argument("--dedup-hours", type=int, default=3, help="suppress repeat alerts within this window")
+    args = ap.parse_args()
+
+    settings = Settings()
+    if not (settings.atproto_handle and settings.atproto_password):
+        print("ATPROTO_HANDLE/ATPROTO_PASSWORD not set — skipping (configure to enable)")
+        return
+
+    client = Client()
+    client.login(settings.atproto_handle, settings.atproto_password)
+    target_did = client.resolve_handle(ALERT_HANDLE).did
+
+    if args.test:
+        resp = _post(client, target_did, "pub-search ingestion watchdog wiring test — ignore (auto-deleting).")
+        print(f"posted test: {resp.uri}")
+        client.delete_post(resp.uri)
+        print("deleted test post — auth + posting confirmed")
+        return
+
+    stalled, detail = check(args.threshold)
+    print(detail)
+    if stalled:
+        if _alerted_within(client, args.dedup_hours):
+            print(f"stalled, but already alerted within {args.dedup_hours}h — not reposting")
+        else:
+            resp = _post(client, target_did, f"⚠️ {ALERT_MARKER} — {detail}. check leaflet-search-tap.fly.dev")
+            print(f"ALERT posted: {resp.uri}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,27 @@
+name: Ingestion Watchdog
+
+# Pings @zzstoatzz.io on bsky if the tap falls behind the relay (wedged or
+# can't keep pace). Detection-only backstop so a stall can't sit unnoticed —
+# see docs/tap.md (2026-05-27 incident, ~14.5h silent stall).
+#
+# Requires repo secrets: ATPROTO_HANDLE, ATPROTO_PASSWORD (pub-search bsky app password).
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # every 15 min
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Check ingestion (posts to bsky + fails the run if stalled)
+        env:
+          ATPROTO_HANDLE: ${{ secrets.ATPROTO_HANDLE }}
+          ATPROTO_PASSWORD: ${{ secrets.ATPROTO_PASSWORD }}
+        run: ./scripts/ingestion-watchdog
