@@ -1136,15 +1136,17 @@
     if (platform === 'whitewind' || collection.startsWith('com.whtwnd.')) return 'https://whtwnd.com/' + did + '/' + rkey;
     // skip non-document-serving hosts (blento is a card portal, not a document platform)
     var usableBase = basePath && !basePath.startsWith('blento.app');
-    // leaflet uses rkey directly
-    if (platform === 'leaflet' && usableBase) return 'https://' + basePath + '/' + rkey;
-    // leaflet without basePath
-    if (platform === 'leaflet') return 'https://leaflet.pub/p/' + did + '/' + rkey;
-    // other platforms (pckt, offprint, etc.) use path slug when available
+    // explicit path wins — the rkey form below is a leaflet.pub convention and must
+    // not override an author-set path (site.standard.document records embedding
+    // pub.leaflet.content get tagged platform=leaflet but are served by their path)
     if (usableBase && path) {
       var sep = path.charAt(0) === '/' ? '' : '/';
       return 'https://' + basePath + sep + path;
     }
+    // leaflet uses rkey directly
+    if (platform === 'leaflet' && usableBase) return 'https://' + basePath + '/' + rkey;
+    // leaflet without basePath
+    if (platform === 'leaflet') return 'https://leaflet.pub/p/' + did + '/' + rkey;
     if (usableBase) return 'https://' + basePath + '/' + rkey;
     // universal fallback — AT Protocol record viewer
     return 'https://pdsls.dev/at/' + did + '/' + collection + '/' + rkey;

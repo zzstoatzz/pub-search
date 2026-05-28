@@ -119,14 +119,18 @@ pub fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8,
     }
     // skip non-document-serving hosts (blento is a card portal, not a document platform)
     const usable_base = base_path.len > 0 and !std.mem.startsWith(u8, base_path, "blento.app");
-    // leaflet + basePath + rkey → https://{basePath}/{rkey}
-    if (std.mem.eql(u8, platform, "leaflet") and usable_base and rkey.len > 0) {
-        return std.fmt.allocPrint(alloc, "https://{s}/{s}", .{ base_path, rkey }) catch "";
-    }
-    // basePath + path → https://{basePath}[/]{path}
+    // explicit path wins → https://{basePath}[/]{path}
+    // the rkey-URL form below is a leaflet.pub convention; it must NOT override an
+    // author-set path. site.standard.document records embedding pub.leaflet.content
+    // get tagged platform=leaflet (indexer.zig) but are served by their own path —
+    // native pub.leaflet.document records never carry a path, so they fall through.
     if (usable_base and path.len > 0) {
         const sep: []const u8 = if (path[0] == '/') "" else "/";
         return std.fmt.allocPrint(alloc, "https://{s}{s}{s}", .{ base_path, sep, path }) catch "";
+    }
+    // leaflet + basePath + rkey → https://{basePath}/{rkey}
+    if (std.mem.eql(u8, platform, "leaflet") and usable_base and rkey.len > 0) {
+        return std.fmt.allocPrint(alloc, "https://{s}/{s}", .{ base_path, rkey }) catch "";
     }
     // leaflet fallback → https://leaflet.pub/p/{did}/{rkey}
     if (std.mem.eql(u8, platform, "leaflet") and did.len > 0 and rkey.len > 0) {
@@ -361,13 +365,13 @@ const DocsByPubBasePathAndPlatformAndSince = zql.Query(
 // assertion below catches the case where one of the queries drifts from
 // the rest.
 const DocQueries = .{
-    DocsByTag,                       DocsByFtsAndTag,
-    DocsByFts,                       DocsByFtsAndSince,
-    DocsByFtsAndPlatform,            DocsByFtsAndPlatformAndSince,
-    DocsByTagAndPlatform,            DocsByFtsAndTagAndPlatform,
-    DocsByPlatform,                  DocsByAuthor,
-    DocsByAuthorAndPlatform,         DocsByPubBasePath,
-    DocsByPubBasePathAndPlatform,    DocsByPubBasePathAndSince,
+    DocsByTag,                            DocsByFtsAndTag,
+    DocsByFts,                            DocsByFtsAndSince,
+    DocsByFtsAndPlatform,                 DocsByFtsAndPlatformAndSince,
+    DocsByTagAndPlatform,                 DocsByFtsAndTagAndPlatform,
+    DocsByPlatform,                       DocsByAuthor,
+    DocsByAuthorAndPlatform,              DocsByPubBasePath,
+    DocsByPubBasePathAndPlatform,         DocsByPubBasePathAndSince,
     DocsByPubBasePathAndPlatformAndSince,
 };
 
@@ -1633,4 +1637,24 @@ test "buildFtsQuery: mixed quotes and OR" {
     const result = try buildFtsQuery(std.testing.allocator, "\"exact phrase\" OR python");
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("\"exact phrase\" OR \"OR\" OR python*", result);
+}
+
+test "buildDocUrl: native leaflet doc uses rkey (no path)" {
+    const url = buildDocUrl(std.testing.allocator, "article", "leaflet", "leaflet.pub", "", "abc123", "did:plc:x");
+    defer std.testing.allocator.free(url);
+    try std.testing.expectEqualStrings("https://leaflet.pub/abc123", url);
+}
+
+test "buildDocUrl: site.standard doc tagged leaflet uses path, not rkey" {
+    // regression: feliciarondo.com site.standard.document records embed pub.leaflet.content
+    // so get platform=leaflet, but must link to the author-set path — not the rkey
+    const url = buildDocUrl(std.testing.allocator, "article", "leaflet", "feliciarondo.com", "/rondo-of-blog/2025/The-Heart-of-Peach/", "3m5i74ey7zs2c", "did:plc:2atpw7zrdrdptzqo7jw63rzv");
+    defer std.testing.allocator.free(url);
+    try std.testing.expectEqualStrings("https://feliciarondo.com/rondo-of-blog/2025/The-Heart-of-Peach/", url);
+}
+
+test "buildDocUrl: path without leading slash gets separator" {
+    const url = buildDocUrl(std.testing.allocator, "article", "pckt", "example.com", "posts/hello", "rk", "did:plc:x");
+    defer std.testing.allocator.free(url);
+    try std.testing.expectEqualStrings("https://example.com/posts/hello", url);
 }
