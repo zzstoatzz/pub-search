@@ -23,7 +23,7 @@ search is also exposed as an MCP server for AI agents like Claude Code:
 claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'
 ```
 
-see [mcp/README.md](mcp/README.md) for local setup and usage details.
+see [pub-search-mcp/README.md](pub-search-mcp/README.md) for local setup and usage details.
 
 ## api
 

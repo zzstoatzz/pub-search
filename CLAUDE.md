@@ -42,7 +42,8 @@
 
 ## MCP server
 - hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
-- local dev: `cd mcp && uv run pytest` for tests
+- local dev: `cd pub-search-mcp && uv run pytest` for tests
+- directory is `pub-search-mcp/` (NOT `mcp/`) — renamed to avoid collision with the PyPI `mcp` SDK in fastmcp.app's build template
 - deployed on fastmcp.app
 
 ## common tasks
