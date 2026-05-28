@@ -153,6 +153,7 @@ class TestMcpServerRegistration:
             "find_similar",
             "discover_focal_post",
             "describe_cluster",
+            "recommended_by_top_authors",
             "get_tags",
             "get_stats",
             "get_popular",

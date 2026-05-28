@@ -40,6 +40,7 @@ search long-form writing on ATProto: leaflet, pckt, offprint, greengale, whitewi
 - `find_similar(uri)` - find related documents (raw)
 - `discover_focal_post(window, sort)` - what's notable right now (top/trending in a window)
 - `describe_cluster(uri)` - a focal post's neighborhood + cross-platform / author / shared-terms observations
+- `recommended_by_top_authors(top_authors, window)` - transitive taste: what the most-recommended writers are themselves recommending. tunable resolution via the pool size.
 - `get_tags()` - available tags
 - `get_stats()` - index statistics
 - `get_popular()` - popular queries
@@ -323,6 +324,49 @@ def _title_terms(title: str) -> set[str]:
         if len(w) >= 4 and w not in _TITLE_STOPWORDS and not w.isdigit():
             out.add(w)
     return out
+
+
+@mcp.tool
+async def recommended_by_top_authors(
+    top_authors: int = 10,
+    window: Window = "month",
+    limit: int = 10,
+) -> list[SearchResult]:
+    """what are the network's most-recommended writers themselves recommending?
+
+    a transitive-taste signal distinct from raw popularity: surface what the
+    people who *write* the most-recommended posts have themselves endorsed.
+    pub-search is the only place that sees every long-form ATProto platform
+    as one corpus, so this is uniquely available here.
+
+    resolution knobs (think of it like tuning a microscope):
+    - `top_authors`: pool size. small (5-10) = sharp, opinionated focal point;
+      large (50-100) = broader consensus across the network's signal-writers.
+    - `window`: when those authors made their recommendations. shorter
+      (week/month) = current taste; longer (year/all) = enduring favorites.
+
+    each result's `recommendCount` is the endorsement count from the top-author
+    pool inside the window (drives rank); `totalCount` is the all-time count
+    from that pool. neither is global popularity.
+
+    args:
+        top_authors: how many top writers to draw the taste-pool from (default 10)
+        window: day | week | month | year | all (default month)
+        limit: max results (default 10)
+
+    returns:
+        list of SearchResult sorted by endorsement count (desc), then recency
+    """
+    async with get_http_client() as client:
+        response = await client.get(
+            "/recommended-by-top-authors",
+            params={"pool": top_authors, "since": window},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    results = _extract_results(data)
+    return [SearchResult(**r) for r in results[:limit]]
 
 
 @mcp.tool

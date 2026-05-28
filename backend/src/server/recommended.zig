@@ -230,13 +230,57 @@ const TrendingByCuratorQuery = zql.Query(
     \\LIMIT 250
 );
 
-// Comptime safety: all six queries must select the same columns in the
+// Top-author cascade: what have the top-N authors (by all-time recommends
+// received) themselves recommended in the requested window? Distinct signal
+// from raw popularity — surfaces the curation choices of the network's
+// higher-signal writers.
+//
+// Two positional params: (1) date modifier for the recommendation window;
+// (2) pool size (how many top authors to draw the taste-pool from). Pool
+// size is a runtime int, not part of the SQL constant.
+//
+// `recommend_count` (windowed) = how many top-pool authors endorsed the doc
+// inside the window. `total_count` (all-time) = how many endorsed it ever.
+// Both are restricted to the top-pool authors — *not* global popularity.
+const RecommendedByTopAuthorsQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  agg.recommend_count AS recommend_count,
+    \\  agg.total_count AS total_count
+    \\FROM (
+    \\  SELECT r.document_uri,
+    \\    COUNT(DISTINCT CASE
+    \\      WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\      THEN r.did END) AS recommend_count,
+    \\    COUNT(DISTINCT r.did) AS total_count
+    \\  FROM recommends r
+    \\  WHERE r.did IN (
+    \\    SELECT d2.did
+    \\    FROM documents d2
+    \\    JOIN recommends r2 ON r2.document_uri = d2.uri
+    \\    GROUP BY d2.did
+    \\    ORDER BY COUNT(DISTINCT r2.did) DESC
+    \\    LIMIT ?
+    \\  )
+    \\  GROUP BY r.document_uri
+    \\  HAVING recommend_count > 0
+    \\) agg
+    \\JOIN documents d ON d.uri = agg.document_uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\ORDER BY agg.recommend_count DESC, d.created_at DESC
+    \\LIMIT 250
+);
+
+// Comptime safety: all seven queries must select the same columns in the
 // same order so Row's column lookup via TopQuery works for all of them.
 comptime {
     const all_queries = .{
-        TopQuery,          TrendingQuery,
-        TopByAuthorQuery,  TrendingByAuthorQuery,
-        TopByCuratorQuery, TrendingByCuratorQuery,
+        TopQuery,                     TrendingQuery,
+        TopByAuthorQuery,             TrendingByAuthorQuery,
+        TopByCuratorQuery,            TrendingByCuratorQuery,
+        RecommendedByTopAuthorsQuery,
     };
     for (all_queries) |Q| {
         if (Q.columns.len != TopQuery.columns.len) @compileError("recommended query column count drift");
@@ -332,6 +376,57 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort, filter: Filter) ![]co
     for (res.rows) |row| {
         // Both queries share the column projection (asserted at comptime
         // above), so either one's fromRow works.
+        const r = TopQuery.fromRow(Row, row);
+        const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
+        try jw.write(JsonRow{
+            .type = doc_type,
+            .uri = r.uri,
+            .did = r.did,
+            .title = r.title,
+            .createdAt = r.created_at,
+            .rkey = r.rkey,
+            .basePath = r.base_path,
+            .platform = r.platform,
+            .path = r.path,
+            .publicationName = r.publication_name,
+            .url = search.buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
+            .recommendCount = r.recommend_count,
+            .totalCount = r.total_count,
+        });
+    }
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+/// Top-author cascade fetch. Distinct from `fetch` (which ranks documents
+/// by recommends) — this ranks DOCS by how many of the top-pool AUTHORS
+/// endorsed each. Uncached: pool_size is a continuous int and Phi calls
+/// this a handful of times per cycle, so a cache slot per (pool, window)
+/// pair would balloon for no real win.
+pub fn fetchTopAuthorCascade(alloc: Allocator, window: Window, pool_size: i64) ![]const u8 {
+    const c = db.getClient() orelse return error.NotInitialized;
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    const date_mod = window.dateModifier();
+    const failEnvelope = struct {
+        fn fail(out: *std.Io.Writer.Allocating) anyerror![]const u8 {
+            try out.writer.writeAll("{\"error\":\"failed to fetch top-author cascade\"}");
+            return try out.toOwnedSlice();
+        }
+    }.fail;
+
+    // c.query positional bindings are []const u8; SQLite parses LIMIT ? from
+    // a numeric string fine.
+    var pool_buf: [16]u8 = undefined;
+    const pool_str = try std.fmt.bufPrint(&pool_buf, "{d}", .{pool_size});
+    var res = c.query(RecommendedByTopAuthorsQuery.positional, &.{ date_mod, pool_str }) catch return failEnvelope(&output);
+    defer res.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    for (res.rows) |row| {
         const r = TopQuery.fromRow(Row, row);
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(JsonRow{

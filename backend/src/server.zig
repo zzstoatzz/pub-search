@@ -101,6 +101,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
         try handleRecommended(request, target, io);
+    } else if (mem.eql(u8, path, "/recommended-by-top-authors")) {
+        try handleRecommendedByTopAuthors(request, target);
     } else if (mem.eql(u8, path, "/curators")) {
         try handleCurators(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
@@ -111,7 +113,6 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try sendNotFound(request);
     }
 }
-
 
 fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void {
     const start_time = microTimestamp(io);
@@ -397,6 +398,38 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
         body = snapshot.?;
     }
 
+    const sliced = try recommended.sliceJson(alloc, body, limit, offset);
+    try sendJson(request, sliced);
+}
+
+/// /recommended-by-top-authors — what have the network's top-N writers
+/// (by all-time recommends received) themselves recommended in `since=`?
+/// A transitive-taste signal distinct from raw popularity. Tunable resolution
+/// via `pool=` (how many authors form the taste-pool — small = sharp focal,
+/// large = broader consensus) and `since=` (day/week/month/year/all).
+fn handleRecommendedByTopAuthors(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const span = logfire.span("http.recommended_by_top_authors", .{});
+    defer span.end();
+
+    const limit_str = parseQueryParam(alloc, target, "limit") catch null;
+    const offset_str = parseQueryParam(alloc, target, "offset") catch null;
+    const since_str = parseQueryParam(alloc, target, "since") catch null;
+    const pool_str = parseQueryParam(alloc, target, "pool") catch null;
+    const limit: usize = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 10 else 10;
+    const offset: usize = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
+    const window = recommended.Window.fromString(since_str);
+    // Clamp pool to a sane range. <1 is meaningless; >500 is wider than the
+    // active recommender set and just slows things down for no signal change.
+    const pool_raw: i64 = if (pool_str) |s| std.fmt.parseInt(i64, s, 10) catch 10 else 10;
+    const pool: i64 = @max(1, @min(500, pool_raw));
+    span.setAttribute("window", window.slug());
+    span.setAttribute("pool", pool);
+
+    const body = try recommended.fetchTopAuthorCascade(alloc, window, pool);
     const sliced = try recommended.sliceJson(alloc, body, limit, offset);
     try sendJson(request, sliced);
 }
