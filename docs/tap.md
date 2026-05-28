@@ -170,6 +170,37 @@ look for:
 | repo shows `records: 0` after adding | resync failed or collection not in filters | check tap logs for resync errors, verify `TAP_COLLECTION_FILTERS` |
 | new platform records not appearing | platform's collection not in `TAP_COLLECTION_FILTERS` | add collection to filters, restart tap |
 | indexing stopped, tap shows "started" | tap catching up from downtime | check firehose position in logs, wait for catch-up |
+| indexing dead, tap "started", `/stats/{cursors,outbox-buffer,resync-buffer}` all frozen across two polls | tap process wedged (e.g. after a relay rebuild) | `fly machine restart <id> -a leaflet-search-tap` — firehose resumes from saved cursor |
+| crawler logs `failed to list repos by collection: HTTP 400 ... cursor was not valid` | relay rebuilt → stale enumeration cursor in old format | clear it (see below); restart not needed |
+
+### relay rebuild → stale crawler cursor
+
+If the relay (`relay.waow.tech`) is rebuilt, its `listReposByCollection`
+cursor format can change (old builds returned an opaque binary cursor, newer
+ones a bare `did:plc:...`). The tap persists the old cursor in
+`collection_cursors` and keeps re-sending it → relay 400s → the crawler can't
+enumerate (new-repo discovery + quiet-repo re-backfill stop). The realtime
+firehose is unaffected. Fix by clearing the stale row so the crawler
+enumerates fresh (`getCollectionCursor` returns "" when absent):
+
+```sh
+fly ssh console -a leaflet-search-tap
+apk add --no-cache sqlite          # not in the image by default
+sqlite3 /data/tap.db "DELETE FROM collection_cursors WHERE url='https://relay.waow.tech'"
+```
+
+Safe to run live — the crawler only *writes* the cursor on a successful
+batch (which isn't happening while it 400s), so no write race. Within ~1 min
+`/stats/cursors` `list_repos` flips to a bare DID and the 400s stop. This
+re-enumerates the whole network → a one-time full resync sweep; use
+`just turbo` to drain it, then `just normal`. Recovery of any ingestion gap
+goes through tap's own resyncer (firehose `PrevData`-mismatch trigger +
+crawler), **except repos whose own PDS is down** — tap resyncs from the PDS,
+not the relay, so those wait for the PDS to return.
+
+A logfire alert (`tap ingestion stalled (no index_record in 1h)`, project
+`pub-search`) fires when zero `tap.index_record` spans land in an hour — wire
+a notification channel to it so a stall pages instead of going unnoticed.
 
 ## tap API endpoints
 
