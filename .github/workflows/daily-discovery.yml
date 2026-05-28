@@ -1,0 +1,53 @@
+name: Daily Discovery
+
+# pub-search posts a transitive-taste signal to bsky once a day, aligned with
+# bsky's standard.site embed so the card renders rich for human followers and
+# the AT-URI is in the post text for phi (already has the pub-search MCP wired)
+# to act on without lookup.
+#
+# Requires repo secrets: ATPROTO_HANDLE, ATPROTO_PASSWORD (pub-search creds).
+
+on:
+  schedule:
+    - cron: '0 17 * * *' # 17:00 UTC daily — noon ET, mid-morning PT
+  workflow_dispatch:
+    inputs:
+      top_authors:
+        description: 'pool size (resolution knob — small=sharp, large=broad consensus)'
+        required: false
+        default: '25'
+      window:
+        description: 'when endorsements count: day | week | month | year | all'
+        required: false
+        default: 'week'
+      dry_run:
+        description: 'preview the artifact without posting'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Post daily discovery (or dry-run on manual trigger)
+        env:
+          ATPROTO_HANDLE: ${{ secrets.ATPROTO_HANDLE }}
+          ATPROTO_PASSWORD: ${{ secrets.ATPROTO_PASSWORD }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="--dry-run"
+          fi
+          if [ -n "${{ github.event.inputs.top_authors }}" ]; then
+            ARGS="$ARGS --top-authors ${{ github.event.inputs.top_authors }}"
+          fi
+          if [ -n "${{ github.event.inputs.window }}" ]; then
+            ARGS="$ARGS --window ${{ github.event.inputs.window }}"
+          fi
+          ./scripts/daily-discovery $ARGS

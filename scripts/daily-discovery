@@ -1,0 +1,179 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "httpx",
+#     "atproto",
+#     "pydantic-settings",
+# ]
+# ///
+"""Daily curation post from pub-search.
+
+Selects a focal via the backend's /recommended-by-top-authors cascade (what
+the network's signal-writers are themselves recommending), constructs an
+`app.bsky.embed.external` artifact aligned with bsky's standard.site embed
+shape, and posts from pub-search.waow.tech.
+
+The post is built to be simultaneously human-readable and Phi-actionable:
+- text headline → readable in the bsky feed, parseable by Phi's notification poller
+- the doc's AT-URI is in the post text → Phi can pass it directly into
+  `describe_cluster()` / `get_document()` via the pub-search MCP it already
+  has wired (no URL→AT-URI lookup needed)
+- standard external embed with title + url → rich card render in bsky clients
+
+Dedups against pub-search's own recent posts: if the same focal URL was
+posted in the last 20h, skip (don't repost on quiet days).
+
+Creds: ATPROTO_HANDLE / ATPROTO_PASSWORD (from .env, or env / ENV_FILE).
+
+Usage:
+    ./scripts/daily-discovery                       # select, dedup, post if new
+    ./scripts/daily-discovery --dry-run             # print artifact, don't post
+    ./scripts/daily-discovery --top-authors 50      # tune resolution
+    ./scripts/daily-discovery --window month        # tune time scope
+    ./scripts/daily-discovery --force               # skip the dedup check
+"""
+
+import argparse
+import datetime
+import json
+import os
+import sys
+
+import httpx
+from atproto import Client, models
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND = "https://leaflet-search-backend.fly.dev"
+DEFAULT_POOL = 25
+DEFAULT_WINDOW = "week"
+DEDUP_HOURS_DEFAULT = 20
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    atproto_handle: str = ""
+    atproto_password: str = ""
+
+
+def fetch_focal(pool: int, window: str) -> dict | None:
+    """Top item from the top-author cascade. Returns None on quiet days."""
+    r = httpx.get(
+        f"{BACKEND}/recommended-by-top-authors",
+        params={"pool": pool, "since": window, "limit": 1},
+        timeout=30,
+    )
+    r.raise_for_status()
+    items = r.json()
+    return items[0] if items else None
+
+
+def compose_text(focal: dict, pool: int, window: str) -> str:
+    """Headline + AT-URI line. AT-URI is in plain text so Phi extracts it
+    straight from the post record without any URL→AT-URI lookup."""
+    n = focal["recommendCount"]
+    plural = "writer" if pool == 1 else "writers"
+    return (
+        f"{n} of the top {pool} signal-{plural} on long-form ATProto endorsed "
+        f"this ({window}):\n\n"
+        f"“{focal['title']}”\n\n"
+        f"{focal['uri']}"
+    )
+
+
+def build_embed(focal: dict) -> models.AppBskyEmbedExternal.Main:
+    """Standard external embed — title + url for the card render. bsky's
+    standard.site embed renderer keys on the URL hostname (leaflet.pub etc.)
+    so a plain external embed is enough to get the rich card layout."""
+    return models.AppBskyEmbedExternal.Main(
+        external=models.AppBskyEmbedExternal.External(
+            uri=focal["url"],
+            title=focal["title"],
+            description="",  # v1: empty. layer in first-paragraph fetch later.
+        )
+    )
+
+
+def already_posted(client: Client, focal_url: str, hours: int) -> bool:
+    """True if pub-search already posted this focal URL within the window."""
+    try:
+        feed = client.get_author_feed(client.me.did, limit=10).feed
+    except Exception:
+        return False
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
+    for item in feed:
+        rec = getattr(item.post, "record", None)
+        emb = getattr(rec, "embed", None)
+        ext = getattr(emb, "external", None) if emb is not None else None
+        if ext is None or getattr(ext, "uri", None) != focal_url:
+            continue
+        created = getattr(rec, "created_at", None)
+        if not created:
+            return True
+        try:
+            if datetime.datetime.fromisoformat(created.replace("Z", "+00:00")) > cutoff:
+                return True
+        except ValueError:
+            return True
+    return False
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="pub-search daily curation post")
+    ap.add_argument("--top-authors", type=int, default=DEFAULT_POOL,
+                    help="signal-writer pool size (resolution knob — small=sharp, large=broad)")
+    ap.add_argument("--window", default=DEFAULT_WINDOW,
+                    choices=["day", "week", "month", "year", "all"],
+                    help="when endorsements count (default week)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the artifact (text + embed JSON), don't post")
+    ap.add_argument("--force", action="store_true",
+                    help="skip the dedup check (for testing)")
+    ap.add_argument("--dedup-hours", type=int, default=DEDUP_HOURS_DEFAULT)
+    args = ap.parse_args()
+
+    settings = Settings()
+    if not (settings.atproto_handle and settings.atproto_password) and not args.dry_run:
+        print("ATPROTO_HANDLE/ATPROTO_PASSWORD not set — skipping (configure to enable)")
+        return
+
+    focal = fetch_focal(args.top_authors, args.window)
+    if not focal:
+        print(f"no focal in pool={args.top_authors} window={args.window} — quiet day, skipping")
+        return
+
+    text = compose_text(focal, args.top_authors, args.window)
+    embed = build_embed(focal)
+
+    if args.dry_run:
+        print("=== text ===")
+        print(text)
+        print(f"\n=== embed (app.bsky.embed.external) ===")
+        print(json.dumps(
+            {"$type": "app.bsky.embed.external", "external": {
+                "uri": embed.external.uri,
+                "title": embed.external.title,
+                "description": embed.external.description,
+            }},
+            indent=2,
+        ))
+        print(f"\n=== focal ===  endorsements={focal['recommendCount']}  platform={focal['platform']}")
+        print(f"  at-uri:  {focal['uri']}")
+        print(f"  web url: {focal['url']}")
+        return
+
+    client = Client()
+    client.login(settings.atproto_handle, settings.atproto_password)
+
+    if not args.force and already_posted(client, focal["url"], args.dedup_hours):
+        print(f"skipped — already posted within {args.dedup_hours}h: {focal['url']}")
+        return
+
+    resp = client.send_post(text=text, embed=embed)
+    print(f"posted: {resp.uri}")
+
+
+if __name__ == "__main__":
+    main()
