@@ -74,7 +74,7 @@ tap loads **entire repo CARs into memory** during resync. some bsky users have r
   memory = '2gb'  # 1gb is not enough
 
 [env]
-  TAP_RELAY_URL = 'https://relay.waow.tech'  # custom relay (not default bsky.network)
+  TAP_RELAY_URL = 'https://zlay.waow.tech'   # custom relay (not default bsky.network)
   TAP_RESYNC_PARALLELISM = '1'               # only one repo CAR in memory at a time (default: 5)
   TAP_FIREHOSE_PARALLELISM = '5'             # concurrent event processors (default: 10)
   TAP_OUTBOX_CAPACITY = '10000'              # event buffer size (default: 100000)
@@ -175,7 +175,7 @@ look for:
 
 ### relay rebuild → stale crawler cursor
 
-If the relay (`relay.waow.tech`) is rebuilt, its `listReposByCollection`
+If the relay (`zlay.waow.tech`) is rebuilt, its `listReposByCollection`
 cursor format can change (old builds returned an opaque binary cursor, newer
 ones a bare `did:plc:...`). The tap persists the old cursor in
 `collection_cursors` and keeps re-sending it → relay 400s → the crawler can't
@@ -186,7 +186,7 @@ enumerates fresh (`getCollectionCursor` returns "" when absent):
 ```sh
 fly ssh console -a leaflet-search-tap
 apk add --no-cache sqlite          # not in the image by default
-sqlite3 /data/tap.db "DELETE FROM collection_cursors WHERE url='https://relay.waow.tech'"
+sqlite3 /data/tap.db "DELETE FROM collection_cursors WHERE url='https://zlay.waow.tech'"
 ```
 
 Safe to run live — the crawler only *writes* the cursor on a successful
