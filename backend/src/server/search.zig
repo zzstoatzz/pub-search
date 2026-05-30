@@ -1006,6 +1006,10 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
         if (count >= limit) break;
         if (try isDuplicateAuthorTitle(&seen_authors, alloc, r.did, r.title)) continue;
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
+        // prefer authoritative local-replica URL fields over stale tpuf attrs
+        const platform = extras.platforms.get(r.uri) orelse r.platform;
+        const base_path = extras.base_paths.get(r.uri) orelse r.base_path;
+        const path = extras.paths.get(r.uri) orelse r.path;
         try jw.write(SearchResultJson{
             .type = doc_type,
             .uri = r.uri,
@@ -1014,12 +1018,12 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
             .snippet = extras.snippets.get(r.uri) orelse "",
             .createdAt = r.created_at,
             .rkey = r.rkey,
-            .basePath = r.base_path,
-            .platform = r.platform,
-            .path = r.path,
+            .basePath = base_path,
+            .platform = platform,
+            .path = path,
             .coverImage = extras.cover_images.get(r.uri) orelse "",
             .publicationName = extras.pub_names.get(r.uri) orelse "",
-            .url = buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
+            .url = buildDocUrl(alloc, doc_type, platform, base_path, path, r.rkey, r.did),
         });
         count += 1;
     }
@@ -1347,6 +1351,12 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     for (filtered_indices[0..filtered_count]) |idx| {
         const r = results[idx];
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
+        // prefer the local replica's URL fields over tpuf's stored attributes,
+        // which can be stale (written at embed time). Falls back to tpuf values
+        // when the doc isn't in the local replica yet.
+        const platform = extras.platforms.get(r.uri) orelse r.platform;
+        const base_path = extras.base_paths.get(r.uri) orelse r.base_path;
+        const path = extras.paths.get(r.uri) orelse r.path;
         try jw.write(SearchResultJson{
             .type = doc_type,
             .uri = r.uri,
@@ -1355,12 +1365,12 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
             .snippet = extras.snippets.get(r.uri) orelse "",
             .createdAt = r.created_at,
             .rkey = r.rkey,
-            .basePath = r.base_path,
-            .platform = r.platform,
-            .path = r.path,
+            .basePath = base_path,
+            .platform = platform,
+            .path = path,
             .coverImage = extras.cover_images.get(r.uri) orelse "",
             .publicationName = extras.pub_names.get(r.uri) orelse "",
-            .url = buildDocUrl(alloc, doc_type, r.platform, r.base_path, r.path, r.rkey, r.did),
+            .url = buildDocUrl(alloc, doc_type, platform, base_path, path, r.rkey, r.did),
         });
     }
     try jw.endArray();
@@ -1375,6 +1385,12 @@ const LocalExtras = struct {
     snippets: std.StringHashMap([]const u8),
     cover_images: std.StringHashMap([]const u8),
     pub_names: std.StringHashMap([]const u8),
+    // authoritative URL-determining fields from the local replica. tpuf stores
+    // these as attributes at embed time, which go stale when a doc's platform/
+    // path changes without re-embedding — so prefer these for buildDocUrl.
+    platforms: std.StringHashMap([]const u8),
+    base_paths: std.StringHashMap([]const u8),
+    paths: std.StringHashMap([]const u8),
 };
 
 /// Fetch content previews, cover images, and publication names from local SQLite for a list of URIs.
@@ -1383,10 +1399,14 @@ fn fetchLocalExtras(alloc: Allocator, uris: []const []const u8) LocalExtras {
     var snippets = std.StringHashMap([]const u8).init(alloc);
     var cover_images = std.StringHashMap([]const u8).init(alloc);
     var pub_names = std.StringHashMap([]const u8).init(alloc);
-    const local = db.getLocalDb() orelse return .{ .snippets = snippets, .cover_images = cover_images, .pub_names = pub_names };
+    var platforms = std.StringHashMap([]const u8).init(alloc);
+    var base_paths = std.StringHashMap([]const u8).init(alloc);
+    var paths = std.StringHashMap([]const u8).init(alloc);
+    const empty: LocalExtras = .{ .snippets = snippets, .cover_images = cover_images, .pub_names = pub_names, .platforms = platforms, .base_paths = base_paths, .paths = paths };
+    const local = db.getLocalDb() orelse return empty;
     for (uris) |uri| {
         var rows = local.query(
-            "SELECT substr(content, 1, 200), COALESCE(cover_image, ''), COALESCE((SELECT name FROM publications WHERE uri = documents.publication_uri), '') FROM documents WHERE uri = ?",
+            "SELECT substr(content, 1, 200), COALESCE(cover_image, ''), COALESCE((SELECT name FROM publications WHERE uri = documents.publication_uri), ''), platform, COALESCE(base_path, ''), COALESCE(path, '') FROM documents WHERE uri = ?",
             .{uri},
         ) catch continue;
         defer rows.deinit();
@@ -1406,9 +1426,14 @@ fn fetchLocalExtras(alloc: Allocator, uris: []const []const u8) LocalExtras {
                 const duped = alloc.dupe(u8, pub_name) catch continue;
                 pub_names.put(uri, duped) catch continue;
             }
+            // authoritative URL fields — platform always present; dupe so they
+            // outlive the row (rows.deinit frees the backing memory).
+            if (alloc.dupe(u8, row.text(3))) |p| platforms.put(uri, p) catch {} else |_| {}
+            if (alloc.dupe(u8, row.text(4))) |b| base_paths.put(uri, b) catch {} else |_| {}
+            if (alloc.dupe(u8, row.text(5))) |pa| paths.put(uri, pa) catch {} else |_| {}
         }
     }
-    return .{ .snippets = snippets, .cover_images = cover_images, .pub_names = pub_names };
+    return .{ .snippets = snippets, .cover_images = cover_images, .pub_names = pub_names, .platforms = platforms, .base_paths = base_paths, .paths = paths };
 }
 
 // --- JSON helpers (for hybrid search parsing) ---
