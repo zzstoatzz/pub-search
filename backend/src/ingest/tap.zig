@@ -1,5 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
+const http = std.http;
 const json = std.json;
 const Allocator = mem.Allocator;
 const websocket = @import("websocket");
@@ -412,6 +413,216 @@ fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collecti
 
     try indexer.insertRecommend(uri, did, rkey, document_uri, created_at);
     logfire.counter("tap.recommends_indexed", 1);
+}
+
+// ---------------------------------------------------------------------------
+// Targeted backfill: pull every record of our collections for a single repo
+// directly from its PDS and run it through the SAME extract+index path the
+// firehose uses. Lets us ingest a specific author on demand without waiting
+// on tap's serial resync queue (which can sit behind a whole-network sweep).
+// ---------------------------------------------------------------------------
+
+const BACKFILL_COLLECTIONS = [_][]const u8{
+    LEAFLET_DOCUMENT,    STANDARD_DOCUMENT,    WHITEWIND_ENTRY,
+    LEAFLET_PUBLICATION, STANDARD_PUBLICATION, STANDARD_RECOMMEND,
+    LEAFLET_RECOMMEND,
+};
+
+pub const BackfillCounts = struct {
+    documents: usize = 0,
+    publications: usize = 0,
+    recommends: usize = 0,
+    skipped: usize = 0,
+};
+
+/// Backfill one repo by DID. If `collection_filter` is non-null, only that
+/// collection is walked; otherwise all of BACKFILL_COLLECTIONS. Idempotent —
+/// indexer upserts, so re-running is safe.
+pub fn backfillRepo(
+    allocator: Allocator,
+    io: Io,
+    did_str: []const u8,
+    collection_filter: ?[]const u8,
+) !BackfillCounts {
+    const span = logfire.span("backfill.repo", .{ .did = did_str });
+    defer span.end();
+
+    const did = zat.Did.parse(did_str) orelse return error.InvalidDid;
+
+    const pds = try resolvePds(allocator, io, did.raw);
+    defer allocator.free(pds);
+    logfire.info("backfill: {s} → pds {s}", .{ did.raw, pds });
+
+    var counts: BackfillCounts = .{};
+    for (BACKFILL_COLLECTIONS) |collection| {
+        if (collection_filter) |f| {
+            if (!mem.eql(u8, f, collection)) continue;
+        }
+        backfillCollection(allocator, io, pds, did.raw, collection, &counts) catch |err| {
+            logfire.warn("backfill: collection {s} for {s} failed: {}", .{ collection, did.raw, err });
+        };
+    }
+
+    logfire.info("backfill: {s} done — docs {d}, pubs {d}, recs {d}, skipped {d}", .{
+        did.raw, counts.documents, counts.publications, counts.recommends, counts.skipped,
+    });
+    return counts;
+}
+
+fn backfillCollection(
+    allocator: Allocator,
+    io: Io,
+    pds: []const u8,
+    did: []const u8,
+    collection: []const u8,
+    counts: *BackfillCounts,
+) !void {
+    var cursor: ?[]const u8 = null;
+    defer if (cursor) |c| allocator.free(c);
+
+    while (true) {
+        const body = try listRecords(allocator, io, pds, did, collection, cursor);
+        defer allocator.free(body);
+
+        const parsed = json.parseFromSlice(json.Value, allocator, body, .{}) catch return error.BadListResponse;
+        defer parsed.deinit();
+
+        const records = parsed.value.object.get("records") orelse return;
+        if (records != .array) return;
+
+        for (records.array.items) |entry| {
+            if (entry != .object) continue;
+            const rec_uri = zat.json.getString(entry, "uri") orelse continue;
+            const rkey = rkeyFromUri(rec_uri) orelse continue;
+            const value = entry.object.get("value") orelse continue;
+            if (value != .object) continue;
+            const inner = value.object;
+
+            var uri_buf: [256]u8 = undefined;
+            const uri = zat.AtUri.format(&uri_buf, did, collection, rkey) orelse {
+                counts.skipped += 1;
+                continue;
+            };
+
+            if (isDocumentCollection(collection)) {
+                if (mem.eql(u8, collection, WHITEWIND_ENTRY)) {
+                    const visibility = zat.json.getString(value, "visibility") orelse "public";
+                    if (mem.eql(u8, visibility, "author")) {
+                        counts.skipped += 1;
+                        continue;
+                    }
+                }
+                processDocument(allocator, uri, did, rkey, inner, collection) catch {
+                    counts.skipped += 1;
+                    continue;
+                };
+                counts.documents += 1;
+            } else if (isPublicationCollection(collection)) {
+                processPublication(allocator, uri, did, rkey, inner) catch {
+                    counts.skipped += 1;
+                    continue;
+                };
+                counts.publications += 1;
+            } else if (isRecommendCollection(collection)) {
+                processRecommend(uri, did, rkey, collection, inner) catch {
+                    counts.skipped += 1;
+                    continue;
+                };
+                counts.recommends += 1;
+            }
+        }
+
+        // advance cursor; stop when the PDS stops returning one
+        const next = zat.json.getString(parsed.value, "cursor") orelse break;
+        if (next.len == 0) break;
+        const owned = try allocator.dupe(u8, next);
+        if (cursor) |c| allocator.free(c);
+        cursor = owned;
+
+        // gentle on the PDS
+        io.sleep(Io.Duration.fromMilliseconds(100), .awake) catch {};
+    }
+}
+
+fn listRecords(
+    allocator: Allocator,
+    io: Io,
+    pds: []const u8,
+    did: []const u8,
+    collection: []const u8,
+    cursor: ?[]const u8,
+) ![]u8 {
+    var url_buf: [768]u8 = undefined;
+    const url = if (cursor) |c|
+        std.fmt.bufPrint(&url_buf, "{s}/xrpc/com.atproto.repo.listRecords?repo={s}&collection={s}&limit=100&cursor={s}", .{ pds, did, collection, c }) catch return error.UrlTooLong
+    else
+        std.fmt.bufPrint(&url_buf, "{s}/xrpc/com.atproto.repo.listRecords?repo={s}&collection={s}&limit=100", .{ pds, did, collection }) catch return error.UrlTooLong;
+
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
+    defer http_client.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(allocator);
+    defer sink.deinit();
+
+    const res = try http_client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .response_writer = &sink.writer,
+    });
+    if (@intFromEnum(res.status) < 200 or @intFromEnum(res.status) >= 300) return error.ListRecordsFailed;
+
+    return sink.toOwnedSlice();
+}
+
+/// Resolve a DID to its PDS endpoint via plc.directory. Caller owns the result.
+fn resolvePds(allocator: Allocator, io: Io, did: []const u8) ![]u8 {
+    var url_buf: [256]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://plc.directory/{s}", .{did}) catch return error.UrlTooLong;
+
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
+    defer http_client.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(allocator);
+    defer sink.deinit();
+
+    const res = try http_client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .response_writer = &sink.writer,
+    });
+    if (res.status != .ok) return error.PlcLookupFailed;
+
+    const body = try sink.toOwnedSlice();
+    defer allocator.free(body);
+
+    const parsed = json.parseFromSlice(json.Value, allocator, body, .{}) catch return error.BadPlcResponse;
+    defer parsed.deinit();
+
+    const services = parsed.value.object.get("service") orelse return error.NoPds;
+    if (services != .array) return error.NoPds;
+    for (services.array.items) |svc| {
+        if (svc != .object) continue;
+        const svc_type = svc.object.get("type") orelse continue;
+        if (svc_type != .string or !mem.eql(u8, svc_type.string, "AtprotoPersonalDataServer")) continue;
+        const endpoint = svc.object.get("serviceEndpoint") orelse continue;
+        if (endpoint != .string) continue;
+        return allocator.dupe(u8, endpoint.string);
+    }
+    return error.NoPds;
+}
+
+/// Last path segment of an AT-URI ("at://did/collection/rkey" → "rkey").
+fn rkeyFromUri(uri: []const u8) ?[]const u8 {
+    const last_slash = mem.lastIndexOfScalar(u8, uri, '/') orelse return null;
+    const rkey = uri[last_slash + 1 ..];
+    return if (rkey.len == 0) null else rkey;
+}
+
+test "rkeyFromUri" {
+    const t = std.testing;
+    try t.expectEqualStrings("3mn3z7u7jgsgl", rkeyFromUri("at://did:plc:abc/site.standard.document/3mn3z7u7jgsgl").?);
+    try t.expectEqual(@as(?[]const u8, null), rkeyFromUri("no-slashes"));
+    try t.expectEqual(@as(?[]const u8, null), rkeyFromUri("at://did:plc:abc/coll/"));
 }
 
 fn stripUrlScheme(url: ?[]const u8) ?[]const u8 {

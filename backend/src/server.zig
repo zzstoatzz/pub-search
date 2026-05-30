@@ -8,6 +8,7 @@ const logfire = @import("logfire");
 const zql = @import("zql");
 const zat = @import("zat");
 const db = @import("db.zig");
+const ingest = @import("ingest.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
 const dashboard = @import("server/dashboard.zig");
@@ -109,6 +110,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
         try handleActivity(request);
+    } else if (mem.eql(u8, path, "/admin/backfill")) {
+        try handleBackfill(request, target, io);
     } else {
         try sendNotFound(request);
     }
@@ -544,6 +547,52 @@ fn handleStats(request: *http.Server.Request) !void {
     try jw.endObject();
 
     try sendJson(request, try output.toOwnedSlice());
+}
+
+/// On-demand backfill of a single repo, bypassing tap's serial resync queue.
+/// `POST /admin/backfill?did=<did>[&collection=<nsid>]`. Pulls every record of
+/// our collections straight from the author's PDS through the normal
+/// extract+index path. Guarded by BACKFILL_TOKEN (?token=) when that env is set.
+fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    if (std.c.getenv("BACKFILL_TOKEN")) |tok_c| {
+        const expected = std.mem.span(tok_c);
+        const provided = parseQueryParam(alloc, target, "token") catch "";
+        if (!mem.eql(u8, provided, expected)) {
+            try request.respond("{\"error\":\"unauthorized\"}", .{
+                .status = .unauthorized,
+                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+            });
+            return;
+        }
+    }
+
+    const did = parseQueryParam(alloc, target, "did") catch {
+        try request.respond("{\"error\":\"missing did param\"}", .{
+            .status = .bad_request,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+        return;
+    };
+    const collection: ?[]const u8 = parseQueryParam(alloc, target, "collection") catch null;
+
+    const counts = ingest.tap.backfillRepo(alloc, io, did, collection) catch |err| {
+        const body = try std.fmt.allocPrint(alloc, "{{\"error\":\"backfill failed: {s}\"}}", .{@errorName(err)});
+        try request.respond(body, .{
+            .status = .internal_server_error,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+        return;
+    };
+
+    const body = try std.fmt.allocPrint(alloc,
+        "{{\"did\":\"{s}\",\"documents\":{d},\"publications\":{d},\"recommends\":{d},\"skipped\":{d}}}",
+        .{ did, counts.documents, counts.publications, counts.recommends, counts.skipped },
+    );
+    try sendJson(request, body);
 }
 
 fn sendJson(request: *http.Server.Request, body: []const u8) !void {
