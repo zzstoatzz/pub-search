@@ -7,7 +7,7 @@ primary_region = 'ewr'
 [env]
   TAP_DATABASE_URL = 'sqlite:///data/tap.db'
   TAP_BIND = ':2480'
-  TAP_RELAY_URL = 'https://zlay.waow.tech'
+  TAP_RELAY_URL = 'https://relay1.us-east.bsky.network'
   TAP_SIGNAL_COLLECTION = 'site.standard.document'
   TAP_COLLECTION_FILTERS = 'pub.leaflet.document,pub.leaflet.publication,pub.leaflet.interactions.recommend,site.standard.document,site.standard.publication,site.standard.graph.recommend,com.whtwnd.blog.entry'
   TAP_LOG_LEVEL = 'info'
