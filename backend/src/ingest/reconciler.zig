@@ -261,6 +261,15 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
             continue;
         };
 
+        // authoritative bridgy-fed classification: brid.gy-hosted DIDs are bridged
+        // content we exclude from search. this replaces the old ingest-time
+        // "HTTP site field" heuristic, which mislabeled legit standard.site
+        // custom-domain blogs. mark + skip (no point URL-checking bridged junk).
+        if (std.mem.indexOf(u8, pds, "brid.gy") != null) {
+            markBridgyfed(client, doc.uri);
+            continue;
+        }
+
         // check if record still exists at source
         const status = checkRecord(allocator, pds, parts.did, parts.collection, parts.rkey);
 
@@ -335,6 +344,20 @@ fn updateVerifiedAt(client: *db.Client, uri: []const u8) void {
         &.{ now.slice(), uri },
     ) catch |err| {
         logfire.warn("reconcile: failed to update verified_at for {s}: {}", .{ uri, err });
+    };
+}
+
+/// Mark a doc as bridgy-fed (excluded from all search paths). Bumps indexed_at so
+/// the local SQLite replica picks up the flag via incremental sync, and stamps
+/// verified_at so the doc leaves the reconcile queue.
+fn markBridgyfed(client: *db.Client, uri: []const u8) void {
+    const ts: i64 = @intCast(@divFloor(Io.Timestamp.now(global_io.?, .real).nanoseconds, std.time.ns_per_s));
+    const now = formatTimestamp(ts);
+    client.exec(
+        "UPDATE documents SET is_bridgyfed = '1', verified_at = ?, indexed_at = ? WHERE uri = ?",
+        &.{ now.slice(), now.slice(), uri },
+    ) catch |err| {
+        logfire.warn("reconcile: failed to mark bridgyfed for {s}: {}", .{ uri, err });
     };
 }
 

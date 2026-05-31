@@ -3,6 +3,34 @@ const Io = std.Io;
 const logfire = @import("logfire");
 const db = @import("../db.zig");
 
+fn isHttpUrl(s: []const u8) bool {
+    return std.mem.startsWith(u8, s, "https://") or std.mem.startsWith(u8, s, "http://");
+}
+
+/// If `url` is an HTTP(S) URL pointing at a site ROOT (no path after the host,
+/// or just "/"), return its host. A standard.site document stores its canonical
+/// home in the `site` field; a bare root there is the publication's own domain
+/// (e.g. "https://blog.mainasara.dev" → "blog.mainasara.dev") and should win over
+/// a same-author publication guessed by DID. A `site` carrying a path (e.g.
+/// leaflet's "https://leaflet.pub/p/<did>") is a deep link, not a base host, so
+/// this returns null and the DID lookup finds the real subdomain pub instead.
+fn httpSiteRootHost(url: []const u8) ?[]const u8 {
+    const rest = if (std.mem.startsWith(u8, url, "https://"))
+        url["https://".len..]
+    else if (std.mem.startsWith(u8, url, "http://"))
+        url["http://".len..]
+    else
+        return null;
+    const slash = std.mem.indexOfScalar(u8, rest, '/');
+    const host = if (slash) |i| rest[0..i] else rest;
+    if (host.len == 0) return null;
+    // only a root: nothing after the host, or just a trailing "/"
+    if (slash) |i| {
+        if (rest.len - i > 1) return null;
+    }
+    return host;
+}
+
 /// Hash title+content for cross-platform dedup.
 /// Returns a 16-char hex string (wyhash of "title\x00content").
 fn computeContentHash(title: []const u8, content: []const u8) [16]u8 {
@@ -84,6 +112,19 @@ pub fn insertDocument(
                 }
             }
         } else |_| {}
+    }
+    // prefer the document's own `site` root host (read into publication_uri) over
+    // a DID-guessed publication. authors can run BOTH a known-platform publication
+    // and a standard.site custom-domain blog; without this, the DID fallback below
+    // glues the custom-domain doc onto the unrelated platform pub and emits a dead
+    // link (e.g. neutrino2211.leaflet.pub/... 404 vs blog.mainasara.dev/... 200).
+    if (base_path.len == 0 and isHttpUrl(pub_uri)) {
+        if (httpSiteRootHost(pub_uri)) |host| {
+            if (host.len <= base_path_buf.len) {
+                @memcpy(base_path_buf[0..host.len], host);
+                base_path = base_path_buf[0..host.len];
+            }
+        }
     }
     // fallback: find publication by DID, preferring platform-specific matches
     if (base_path.len == 0) {
@@ -178,20 +219,13 @@ pub fn insertDocument(
         }
     }
 
-    // bridgy fed detection: if platform is "other" and pub_uri is an HTTP(S) URL,
-    // this is likely bridgy fed content (only bridgy fed puts HTTP URLs in the "site" field)
-    const is_bridgyfed: []const u8 = if (std.mem.eql(u8, actual_platform, "other") and
-        (std.mem.startsWith(u8, pub_uri, "http://") or std.mem.startsWith(u8, pub_uri, "https://")))
-        "1"
-    else
-        "0";
-
-    // drop bridgy fed content entirely — low quality, pollutes the index
-    if (std.mem.eql(u8, is_bridgyfed, "1")) {
-        logfire.debug("indexer: dropping bridgy fed content {s}", .{uri});
-        logfire.span("tap.dropped", .{ .reason = "bridgy_fed", .uri = uri, .pub_uri = pub_uri }).end();
-        return;
-    }
+    // bridgy fed is classified authoritatively by the reconciler, which resolves
+    // the DID's PDS and marks docs hosted on brid.gy. We can't cheaply resolve the
+    // PDS here without blocking the firehose worker, so default to "0" at ingest.
+    // (The old "platform==other && HTTP site field ⇒ bridgy fed" heuristic was
+    // wrong — legit standard.site custom-domain blogs also put an HTTP URL in the
+    // `site` field, so it dropped real content like blog.mainasara.dev.)
+    const is_bridgyfed: []const u8 = "0";
 
     // use ON CONFLICT to preserve embedded_at (INSERT OR REPLACE would nuke it)
     // indexed_at uses strftime to record when this row was inserted/updated in Turso
@@ -368,4 +402,17 @@ pub fn deletePublication(uri: []const u8) void {
     // delete record
     c.exec("DELETE FROM publications WHERE uri = ?", &.{uri}) catch {};
     c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
+}
+
+test "httpSiteRootHost: root URL → host, deep link → null" {
+    const t = std.testing;
+    // bare root: the publication's own domain → use it
+    try t.expectEqualStrings("blog.mainasara.dev", httpSiteRootHost("https://blog.mainasara.dev").?);
+    try t.expectEqualStrings("blog.mainasara.dev", httpSiteRootHost("https://blog.mainasara.dev/").?);
+    try t.expectEqualStrings("piffey.net", httpSiteRootHost("https://piffey.net").?);
+    // deep link (leaflet's generic site field) → not a base host
+    try t.expect(httpSiteRootHost("https://leaflet.pub/p/did:plc:abc") == null);
+    try t.expect(httpSiteRootHost("https://example.com/posts/x") == null);
+    // not http
+    try t.expect(httpSiteRootHost("at://did:plc:abc/foo") == null);
 }
