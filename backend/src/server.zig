@@ -680,7 +680,7 @@ fn handleLatencyApi(request: *http.Server.Request, target: []const u8) !void {
 }
 
 fn getDashboardUrl() []const u8 {
-    return if (std.c.getenv("DASHBOARD_URL")) |p| std.mem.span(p) else "https://pub-search.waow.tech/dashboard.html";
+    return if (std.c.getenv("DASHBOARD_URL")) |p| std.mem.span(p) else "https://pub-search.waow.tech/stats";
 }
 
 fn handleDashboard(request: *http.Server.Request) !void {
