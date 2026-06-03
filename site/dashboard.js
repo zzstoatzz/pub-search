@@ -68,9 +68,15 @@ function renderTimeline(timeline, bucket) {
   });
 }
 
-async function loadTimeline(range) {
+let timelineRange = '30d';
+let timelineField = 'indexed';
+
+async function loadTimeline(range, field) {
+  if (range) timelineRange = range;
+  if (field) timelineField = field;
   try {
-    const r = await fetch(API_BASE + '/api/timeline?range=' + encodeURIComponent(range));
+    const r = await fetch(API_BASE + '/api/timeline?range=' + encodeURIComponent(timelineRange) +
+      '&field=' + encodeURIComponent(timelineField));
     const data = await r.json();
     renderTimeline(data.points, data.bucket);
   } catch (e) {
@@ -423,7 +429,15 @@ document.getElementById('timeline-range')?.addEventListener('click', function(e)
   if (!btn) return;
   this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  loadTimeline(btn.dataset.range);
+  loadTimeline(btn.dataset.range, null);
+});
+
+document.getElementById('timeline-field')?.addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-field]');
+  if (!btn) return;
+  this.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadTimeline(null, btn.dataset.field);
 });
 
 document.getElementById('latency-range')?.addEventListener('click', function(e) {

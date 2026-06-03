@@ -87,13 +87,19 @@
     <section class="ranged-section">
       <div class="ranged-header">
         <div class="section-title">documents over time</div>
-        <span class="range-btns" id="timeline-range">
-          <button data-range="7d">7d</button>
-          <button data-range="30d" class="active">30d</button>
-          <button data-range="90d">90d</button>
-          <button data-range="1y">1y</button>
-          <button data-range="all">all</button>
-        </span>
+        <div class="ranged-controls">
+          <span class="range-btns" id="timeline-field">
+            <button data-field="indexed" class="active">indexed</button>
+            <button data-field="created">created</button>
+          </span>
+          <span class="range-btns" id="timeline-range">
+            <button data-range="7d">7d</button>
+            <button data-range="30d" class="active">30d</button>
+            <button data-range="90d">90d</button>
+            <button data-range="1y">1y</button>
+            <button data-range="all">all</button>
+          </span>
+        </div>
       </div>
       <div class="chart-box">
         <div class="timeline" id="timeline"></div>

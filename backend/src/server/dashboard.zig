@@ -41,57 +41,52 @@ pub const TimelineRange = enum {
         };
     }
 
-    fn sql(self: TimelineRange) []const u8 {
+    /// Build the timeline query for this range bucketed on `col` (a bare
+    /// column name, either `indexed_at` or `created_at`). Both `self` and
+    /// `col` are comptime, so each (range × field) pair is a distinct
+    /// comptime-known SQL string — same shape the DB layer expects.
+    fn sql(comptime self: TimelineRange, comptime col: []const u8) []const u8 {
+        const bucket = switch (self) {
+            .d7, .d30, .d90 => "DATE(" ++ col ++ ")",
+            .y1 => "DATE(" ++ col ++ ", 'weekday 0', '-6 days')",
+            .all_time => "strftime('%Y-%m-01', " ++ col ++ ")",
+        };
+        const lower = switch (self) {
+            .d7 => "AND DATE(" ++ col ++ ") >= DATE('now', '-6 days')",
+            .d30 => "AND DATE(" ++ col ++ ") >= DATE('now', '-29 days')",
+            .d90 => "AND DATE(" ++ col ++ ") >= DATE('now', '-89 days')",
+            .y1 => "AND DATE(" ++ col ++ ") >= DATE('now', '-364 days')",
+            .all_time => "",
+        };
+        return std.fmt.comptimePrint(
+            \\SELECT {[bucket]s} as date, COUNT(*) as count,
+            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
+            \\FROM documents
+            \\WHERE {[col]s} IS NOT NULL AND {[col]s} != ''
+            \\AND DATE({[col]s}) <= DATE('now')
+            \\{[lower]s}
+            \\GROUP BY {[bucket]s}
+            \\ORDER BY date DESC
+        , .{ .bucket = bucket, .col = col, .lower = lower });
+    }
+};
+
+/// Which timestamp the documents-over-time chart buckets on:
+///   indexed -> when we ingested it (ingestion throughput)
+///   created -> when the author published it (content age)
+pub const TimelineField = enum {
+    indexed,
+    created,
+
+    pub fn fromString(s: []const u8) TimelineField {
+        if (std.mem.eql(u8, s, "created")) return .created;
+        return .indexed;
+    }
+
+    fn column(self: TimelineField) []const u8 {
         return switch (self) {
-            .d7 =>
-            \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
-            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
-            \\FROM documents
-            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
-            \\AND DATE(indexed_at) <= DATE('now')
-            \\AND DATE(indexed_at) >= DATE('now', '-6 days')
-            \\GROUP BY DATE(indexed_at)
-            \\ORDER BY date DESC
-            ,
-            .d30 =>
-            \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
-            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
-            \\FROM documents
-            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
-            \\AND DATE(indexed_at) <= DATE('now')
-            \\AND DATE(indexed_at) >= DATE('now', '-29 days')
-            \\GROUP BY DATE(indexed_at)
-            \\ORDER BY date DESC
-            ,
-            .d90 =>
-            \\SELECT DATE(indexed_at) as date, COUNT(*) as count,
-            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
-            \\FROM documents
-            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
-            \\AND DATE(indexed_at) <= DATE('now')
-            \\AND DATE(indexed_at) >= DATE('now', '-89 days')
-            \\GROUP BY DATE(indexed_at)
-            \\ORDER BY date DESC
-            ,
-            .y1 =>
-            \\SELECT DATE(indexed_at, 'weekday 0', '-6 days') as date, COUNT(*) as count,
-            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
-            \\FROM documents
-            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
-            \\AND DATE(indexed_at) <= DATE('now')
-            \\AND DATE(indexed_at) >= DATE('now', '-364 days')
-            \\GROUP BY DATE(indexed_at, 'weekday 0', '-6 days')
-            \\ORDER BY date DESC
-            ,
-            .all_time =>
-            \\SELECT strftime('%Y-%m-01', indexed_at) as date, COUNT(*) as count,
-            \\  SUM(CASE WHEN COALESCE(is_bridgyfed, 0) = 1 THEN 1 ELSE 0 END) as bridgyfed
-            \\FROM documents
-            \\WHERE indexed_at IS NOT NULL AND indexed_at != ''
-            \\AND DATE(indexed_at) <= DATE('now')
-            \\GROUP BY strftime('%Y-%m-01', indexed_at)
-            \\ORDER BY date DESC
-            ,
+            .indexed => "indexed_at",
+            .created => "created_at",
         };
     }
 };
@@ -171,7 +166,7 @@ const StatsQuery = zql.Query(STATS_SQL);
 const PlatformsQuery = zql.Query(PLATFORMS_SQL);
 const TagsQuery = zql.Query(TAGS_SQL);
 const TopPubsQuery = zql.Query(TOP_PUBS_SQL);
-const TimelineQueryRef = zql.Query((TimelineRange.d30).sql());
+const TimelineQueryRef = zql.Query((TimelineRange.d30).sql("indexed_at"));
 
 const StatsRow = struct {
     docs: i64,
@@ -205,7 +200,7 @@ pub fn fetch(alloc: Allocator) !Data {
         .{ .sql = STATS_SQL },
         .{ .sql = PLATFORMS_SQL },
         .{ .sql = TAGS_SQL },
-        .{ .sql = DEFAULT_TIMELINE_RANGE.sql() },
+        .{ .sql = DEFAULT_TIMELINE_RANGE.sql("indexed_at") },
         .{ .sql = TOP_PUBS_SQL },
     }) catch return error.QueryFailed;
     defer batch.deinit();
@@ -292,7 +287,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const tags_json = try formatTagsJsonLocal(alloc, &tags_rows);
 
     // timeline query
-    var timeline_rows = try local.query(DEFAULT_TIMELINE_RANGE.sql(), .{});
+    var timeline_rows = try local.query(DEFAULT_TIMELINE_RANGE.sql("indexed_at"), .{});
     defer timeline_rows.deinit();
     const timeline_json = try formatTimelineJsonLocal(alloc, &timeline_rows);
 
@@ -476,7 +471,7 @@ fn formatTrafficJson(alloc: Allocator) ![]const u8 {
 
 /// Fetch the documents-indexed timeline at the requested range.
 /// Returns a JSON object: `{"bucket":"daily|weekly|monthly","range":"30d","points":[...]}`.
-pub fn fetchTimeline(alloc: Allocator, range: TimelineRange) ![]const u8 {
+pub fn fetchTimeline(alloc: Allocator, range: TimelineRange, field: TimelineField) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
     var jw: json.Stringify = .{ .writer = &output.writer };
@@ -486,16 +481,16 @@ pub fn fetchTimeline(alloc: Allocator, range: TimelineRange) ![]const u8 {
     try jw.write(range.bucketLabel());
     try jw.objectField("range");
     try jw.write(@tagName(range));
+    try jw.objectField("field");
+    try jw.write(@tagName(field));
     try jw.objectField("points");
 
-    // local + turso queries both take comptime SQL — dispatch on the range tag
-    // and run the matching comptime-known query string in each branch
+    // local + turso queries both take comptime SQL — dispatch on the (range,
+    // field) tags so each branch runs a comptime-known query string
     switch (range) {
-        .d7 => try writeTimelinePoints(&jw, comptime TimelineRange.d7.sql()),
-        .d30 => try writeTimelinePoints(&jw, comptime TimelineRange.d30.sql()),
-        .d90 => try writeTimelinePoints(&jw, comptime TimelineRange.d90.sql()),
-        .y1 => try writeTimelinePoints(&jw, comptime TimelineRange.y1.sql()),
-        .all_time => try writeTimelinePoints(&jw, comptime TimelineRange.all_time.sql()),
+        inline else => |r| switch (field) {
+            inline else => |f| try writeTimelinePoints(&jw, comptime r.sql(f.column())),
+        },
     }
 
     try jw.endObject();
@@ -632,4 +627,17 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
 
     try jw.endObject();
     return try output.toOwnedSlice();
+}
+
+test "timeline sql buckets on the requested field column" {
+    // every (range × field) pair must compile and reference the right column
+    inline for (.{ TimelineRange.d7, .d30, .d90, .y1, .all_time }) |range| {
+        inline for (.{ TimelineField.indexed, TimelineField.created }) |field| {
+            const q = comptime range.sql(field.column());
+            try std.testing.expect(std.mem.indexOf(u8, q, field.column()) != null);
+            // the opposite column must never leak in
+            const other = if (field == .indexed) "created_at" else "indexed_at";
+            try std.testing.expect(std.mem.indexOf(u8, q, other) == null);
+        }
+    }
 }

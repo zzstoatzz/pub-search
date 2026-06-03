@@ -655,7 +655,10 @@ fn handleTimelineApi(request: *http.Server.Request, target: []const u8) !void {
     const range_str = parseQueryParam(alloc, target, "range") catch "30d";
     const range = dashboard.TimelineRange.fromString(range_str);
 
-    const json_response = dashboard.fetchTimeline(alloc, range) catch {
+    const field_str = parseQueryParam(alloc, target, "field") catch "indexed";
+    const field = dashboard.TimelineField.fromString(field_str);
+
+    const json_response = dashboard.fetchTimeline(alloc, range, field) catch {
         try sendJson(request, "{\"error\":\"failed to fetch timeline\"}");
         return;
     };
