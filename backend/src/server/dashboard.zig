@@ -46,17 +46,23 @@ pub const TimelineRange = enum {
     /// `col` are comptime, so each (range × field) pair is a distinct
     /// comptime-known SQL string — same shape the DB layer expects.
     fn sql(comptime self: TimelineRange, comptime col: []const u8) []const u8 {
+        // created_at spans decades (authored dates, incl. backfilled content),
+        // so the all-time view buckets yearly; indexed_at is service-lifetime
+        // only, so it stays monthly. see also bucketLabelFor.
+        const created = comptime std.mem.eql(u8, col, "created_at");
         const bucket = switch (self) {
             .d7, .d30, .d90 => "DATE(" ++ col ++ ")",
             .y1 => "DATE(" ++ col ++ ", 'weekday 0', '-6 days')",
-            .all_time => "strftime('%Y-%m-01', " ++ col ++ ")",
+            .all_time => if (created) "strftime('%Y-01-01', " ++ col ++ ")" else "strftime('%Y-%m-01', " ++ col ++ ")",
         };
         const lower = switch (self) {
             .d7 => "AND DATE(" ++ col ++ ") >= DATE('now', '-6 days')",
             .d30 => "AND DATE(" ++ col ++ ") >= DATE('now', '-29 days')",
             .d90 => "AND DATE(" ++ col ++ ") >= DATE('now', '-89 days')",
             .y1 => "AND DATE(" ++ col ++ ") >= DATE('now', '-364 days')",
-            .all_time => "",
+            // floor out junk pre-internet created_at dates (year 0001, 0110, 1921…)
+            // that would otherwise stretch the axis back two millennia
+            .all_time => if (created) "AND DATE(" ++ col ++ ") >= '2000-01-01'" else "",
         };
         return std.fmt.comptimePrint(
             \\SELECT {[bucket]s} as date, COUNT(*) as count,
@@ -90,6 +96,14 @@ pub const TimelineField = enum {
         };
     }
 };
+
+/// Bucket label for a (range, field) pair. Matches the bucketing in
+/// `TimelineRange.sql`: all-time on created_at is yearly, everything else
+/// follows the range's own granularity.
+fn bucketLabelFor(range: TimelineRange, field: TimelineField) []const u8 {
+    if (range == .all_time and field == .created) return "yearly";
+    return range.bucketLabel();
+}
 
 /// All data needed to render the dashboard
 pub const Data = struct {
@@ -478,7 +492,7 @@ pub fn fetchTimeline(alloc: Allocator, range: TimelineRange, field: TimelineFiel
 
     try jw.beginObject();
     try jw.objectField("bucket");
-    try jw.write(range.bucketLabel());
+    try jw.write(bucketLabelFor(range, field));
     try jw.objectField("range");
     try jw.write(@tagName(range));
     try jw.objectField("field");
@@ -640,4 +654,17 @@ test "timeline sql buckets on the requested field column" {
             try std.testing.expect(std.mem.indexOf(u8, q, other) == null);
         }
     }
+}
+
+test "all-time created_at buckets yearly with a pre-2000 junk floor" {
+    const q = comptime TimelineRange.all_time.sql(TimelineField.created.column());
+    try std.testing.expect(std.mem.indexOf(u8, q, "strftime('%Y-01-01'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, q, ">= '2000-01-01'") != null);
+    try std.testing.expectEqualStrings("yearly", bucketLabelFor(.all_time, .created));
+
+    // indexed_at all-time stays monthly with no floor
+    const qi = comptime TimelineRange.all_time.sql(TimelineField.indexed.column());
+    try std.testing.expect(std.mem.indexOf(u8, qi, "strftime('%Y-%m-01'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, qi, "2000-01-01") == null);
+    try std.testing.expectEqualStrings("monthly", bucketLabelFor(.all_time, .indexed));
 }

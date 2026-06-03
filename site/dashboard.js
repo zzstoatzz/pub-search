@@ -32,6 +32,9 @@ function formatBucketLabel(date, bucket) {
   // dates from the API are YYYY-MM-DD strings (UTC) — parse without timezone shift
   const [y, m, d] = date.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
+  if (bucket === 'yearly') {
+    return String(y);
+  }
   if (bucket === 'monthly') {
     return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', timeZone: 'UTC' });
   }
