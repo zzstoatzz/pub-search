@@ -822,10 +822,94 @@ fn resolveHandle(alloc: std.mem.Allocator, handle: []const u8, io: Io) ![]const 
     var resolver = zat.HandleResolver.init(io, alloc);
     defer resolver.deinit();
 
-    return resolver.resolve(parsed) catch |err| {
-        logfire.warn("resolveHandle: failed for {s}: {}", .{ handle, err });
-        return error.ResolveFailed;
-    };
+    if (resolver.resolve(parsed)) |did| {
+        return did;
+    } else |err| {
+        // zat's DoH parser rejects Cloudflare's `Comment` field (present on
+        // DNSSEC handles like dholms.at), surfacing as InvalidDnsResponse and
+        // silently dropping the author filter. Fall back to a lenient DoH
+        // lookup here so DNS-based handles still resolve. See zat note:
+        // BUG-doh-comment-field.md. Remove once a fixed zat is pinned.
+        logfire.warn("resolveHandle: zat failed for {s}: {}, trying DoH fallback", .{ handle, err });
+        return resolveHandleDoh(alloc, handle, io) catch |fb_err| {
+            logfire.warn("resolveHandle: DoH fallback failed for {s}: {}", .{ handle, fb_err });
+            return error.ResolveFailed;
+        };
+    }
+}
+
+// Lenient DNS-over-HTTPS resolution of `_atproto.<handle>` TXT → did=.
+// Mirrors zat's resolveDns but parses with ignore_unknown_fields so the
+// optional `Comment` field Cloudflare adds for DNSSEC zones doesn't abort
+// the parse (the root cause of dropped author filters for dholms.at et al).
+fn resolveHandleDoh(alloc: Allocator, handle: []const u8, io: Io) ![]const u8 {
+    var url_buf: [256]u8 = undefined;
+    const url = try std.fmt.bufPrint(
+        &url_buf,
+        "https://cloudflare-dns.com/dns-query?name=_atproto.{s}&type=TXT",
+        .{handle},
+    );
+
+    var client: http.Client = .{ .allocator = alloc, .io = io };
+    defer client.deinit();
+
+    var response_body: std.Io.Writer.Allocating = .init(alloc);
+    defer response_body.deinit();
+
+    const res = client.fetch(.{
+        .location = .{ .url = url },
+        .extra_headers = &.{.{ .name = "accept", .value = "application/dns-json" }},
+        .response_writer = &response_body.writer,
+    }) catch return error.DohRequestFailed;
+    if (res.status != .ok) return error.DohRequestFailed;
+
+    return didFromDohBody(alloc, response_body.written());
+}
+
+const DohAnswer = struct { data: ?[]const u8 = null };
+const DohResponse = struct { Answer: ?[]DohAnswer = null };
+
+// Parse a Cloudflare DoH JSON body and pull the did= out of the TXT answer.
+// Parses leniently (ignore_unknown_fields) so the optional `Comment` field
+// Cloudflare emits for DNSSEC zones doesn't abort the parse.
+fn didFromDohBody(alloc: Allocator, body: []const u8) ![]const u8 {
+    const parsed = json.parseFromSlice(DohResponse, alloc, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return error.InvalidDohResponse;
+    defer parsed.deinit();
+
+    const answers = parsed.value.Answer orelse return error.NoDnsRecords;
+    for (answers) |answer| {
+        var data = answer.data orelse continue;
+        // TXT data arrives quoted, e.g. "\"did=did:plc:...\""
+        if (data.len >= 2 and data[0] == '"' and data[data.len - 1] == '"') {
+            data = data[1 .. data.len - 1];
+        }
+        const prefix = "did=";
+        if (mem.startsWith(u8, data, prefix)) {
+            return try alloc.dupe(u8, data[prefix.len..]);
+        }
+    }
+    return error.NoDidInTxt;
+}
+
+test "didFromDohBody tolerates Cloudflare Comment field (dholms.at regression)" {
+    // the literal body Cloudflare returns for _atproto.dholms.at — the trailing
+    // `Comment` field is what broke zat's strict parser and silently dropped the
+    // author filter (2026-06-05). lenient parse must still extract the did.
+    const body =
+        \\{"Status":0,"TC":false,"RD":true,"RA":true,"AD":false,"CD":false,"Question":[{"name":"_atproto.dholms.at","type":16}],"Answer":[{"name":"_atproto.dholms.at","type":16,"TTL":3600,"data":"\"did=did:plc:yk4dd2qkboz2yv6tpubpc6co\""}],"Comment":["EDE(10): RRSIGs Missing for DNSKEY at., id = 1253"]}
+    ;
+    const did = try didFromDohBody(std.testing.allocator, body);
+    defer std.testing.allocator.free(did);
+    try std.testing.expectEqualStrings("did:plc:yk4dd2qkboz2yv6tpubpc6co", did);
+}
+
+test "didFromDohBody errors when no TXT answer present" {
+    const body =
+        \\{"Status":0,"TC":false,"RD":true,"RA":true,"AD":false,"CD":false}
+    ;
+    try std.testing.expectError(error.NoDnsRecords, didFromDohBody(std.testing.allocator, body));
 }
 
 fn handleActivity(request: *http.Server.Request) !void {

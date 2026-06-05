@@ -160,4 +160,5 @@ test {
     _ = @import("db/migrations.zig");
     _ = @import("ingest/extractor.zig");
     _ = @import("server/search.zig");
+    _ = @import("server.zig");
 }
