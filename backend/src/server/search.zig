@@ -402,7 +402,6 @@ const Pub = struct {
     rkey: []const u8,
     basePath: []const u8,
     platform: []const u8,
-    createdAt: []const u8,
 
     fn fromRow(row: db.Row) Pub {
         return .{
@@ -413,7 +412,6 @@ const Pub = struct {
             .rkey = row.text(pubCol("rkey")),
             .basePath = row.text(pubCol("base_path")),
             .platform = row.text(pubCol("platform")),
-            .createdAt = row.text(pubCol("created_at")),
         };
     }
 
@@ -427,7 +425,6 @@ const Pub = struct {
             .rkey = row.text(pubCol("rkey")),
             .basePath = row.text(pubCol("base_path")),
             .platform = row.text(pubCol("platform")),
-            .createdAt = row.text(pubCol("created_at")),
         };
     }
 
@@ -441,7 +438,6 @@ const Pub = struct {
             .rkey = self.rkey,
             .basePath = self.basePath,
             .platform = self.platform,
-            .createdAt = self.createdAt,
             .url = buildDocUrl(alloc, "publication", self.platform, self.basePath, "", self.rkey, self.did),
         };
     }
@@ -450,7 +446,7 @@ const Pub = struct {
 const PubSearch = zql.Query(
     \\SELECT f.uri, p.did, p.name,
     \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
-    \\  p.rkey, p.base_path, p.platform, COALESCE(p.created_at, '') as created_at
+    \\  p.rkey, p.base_path, p.platform
     \\FROM publications_fts f
     \\JOIN publications p ON f.uri = p.uri
     \\WHERE publications_fts MATCH :query
@@ -689,7 +685,6 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, pub_result.did, af)) continue;
             }
-            if (!passesSince(pub_result.createdAt, since_filter)) continue;
             try jw.write(pub_result.toJson(alloc));
         }
     }
@@ -863,7 +858,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
         var pub_rows = try local.query(
             \\SELECT f.uri, p.did, p.name,
             \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
-            \\  p.rkey, p.base_path, p.platform, COALESCE(p.created_at, '') as created_at
+            \\  p.rkey, p.base_path, p.platform
             \\FROM publications_fts f
             \\JOIN publications p ON f.uri = p.uri
             \\WHERE publications_fts MATCH ? AND (? = '' OR p.did = ?)
@@ -882,10 +877,6 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                         pub_count += 1;
                         continue;
                     }
-                }
-                if (!passesSince(pub_result.createdAt, since_filter)) {
-                    pub_count += 1;
-                    continue;
                 }
                 try jw.write(pub_result.toJson(alloc));
                 pub_count += 1;
