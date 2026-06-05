@@ -229,33 +229,79 @@ fn syncStatsDelta(c: *db.Client, searches: i64, errors: i64, cache_hits: i64, ca
     logfire.debug("stats_buffer: synced deltas (searches={d}, errors={d}, hits={d}, misses={d})", .{ searches, errors, cache_hits, cache_misses });
 }
 
-fn syncPopularSearches(c: *db.Client) void {
+// Drain the pending-search ring buffer into `out` under the lock. Memory-only:
+// the critical section must NEVER span network I/O. A hung Turso write here
+// would hold search_mutex and block every incoming search in queuePopularSearch
+// — that caused the 2026-06-05 multi-minute search stall. Returns the count
+// written to `out`; transfers ownership of each query slice to the caller.
+fn drainPendingSearches(out: *[MAX_PENDING_SEARCHES][]const u8) usize {
     const io = global_io.?;
     search_mutex.lockUncancelable(io);
     defer search_mutex.unlock(io);
 
-    var synced: usize = 0;
+    var n: usize = 0;
     while (search_read_idx != search_write_idx) {
         if (pending_searches[search_read_idx]) |query| {
-            // Append an event row instead of bumping a monotonic counter — lets
-            // /popular window by recency and lets old test/seed traffic age out.
-            // Timestamps are stamped at sync time (not queue time), so events
-            // in the same batch share a second-level timestamp. Acceptable
-            // because the sync interval is small (~5s).
-            c.exec(
-                "INSERT INTO search_events (query, at) VALUES (?, strftime('%s', 'now'))",
-                &.{query},
-            ) catch {};
-
-            // free and clear
-            search_allocator.free(query);
+            out[n] = query;
+            n += 1;
             pending_searches[search_read_idx] = null;
-            synced += 1;
         }
         search_read_idx = (search_read_idx + 1) % MAX_PENDING_SEARCHES;
     }
+    return n;
+}
 
-    if (synced > 0) {
-        logfire.debug("stats_buffer: synced {d} search events", .{synced});
+fn syncPopularSearches(c: *db.Client) void {
+    // Phase 1: drain into a local list under the lock (fast, in-memory).
+    var drained: [MAX_PENDING_SEARCHES][]const u8 = undefined;
+    const n = drainPendingSearches(&drained);
+
+    // Phase 2: write to Turso with the lock released. If Turso hangs, only this
+    // background thread waits — incoming searches keep enqueueing (and drop
+    // oldest when full) instead of blocking on search_mutex.
+    for (drained[0..n]) |query| {
+        // Append an event row instead of bumping a monotonic counter — lets
+        // /popular window by recency and lets old test/seed traffic age out.
+        // Timestamps are stamped at sync time (not queue time), so events
+        // in the same batch share a second-level timestamp. Acceptable
+        // because the sync interval is small (~5s).
+        c.exec(
+            "INSERT INTO search_events (query, at) VALUES (?, strftime('%s', 'now'))",
+            &.{query},
+        ) catch {};
+        search_allocator.free(query);
     }
+
+    if (n > 0) {
+        logfire.debug("stats_buffer: synced {d} search events", .{n});
+    }
+}
+
+test "drainPendingSearches empties the ring and releases ownership" {
+    // regression: the drain step must be memory-only so search_mutex is never
+    // held across the Turso write in syncPopularSearches (2026-06-05 stall).
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    global_io = threaded.io();
+    defer global_io = null;
+
+    // reset ring state (these are module globals)
+    for (&pending_searches) |*slot| slot.* = null;
+    search_read_idx = 0;
+    search_write_idx = 0;
+
+    queuePopularSearch("zig");
+    queuePopularSearch("ATPROTO"); // normalizes to lowercase
+    queuePopularSearch(" x "); // < 2 chars after trim → dropped
+
+    var out: [MAX_PENDING_SEARCHES][]const u8 = undefined;
+    const n = drainPendingSearches(&out);
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("zig", out[0]);
+    try std.testing.expectEqualStrings("atproto", out[1]);
+    for (out[0..n]) |q| search_allocator.free(q);
+
+    // ring is empty and immediately reusable (no leftover blocking state)
+    try std.testing.expectEqual(search_read_idx, search_write_idx);
+    try std.testing.expectEqual(@as(usize, 0), drainPendingSearches(&out));
 }
