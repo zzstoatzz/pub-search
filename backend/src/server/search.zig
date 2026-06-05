@@ -630,7 +630,10 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     }
 
     // query 2: publications (only when no tag/platform filter)
-    const run_pubs = tag_filter == null and platform_filter == null and has_query;
+    // Publications carry no post-date (the local replica omits created_at), so
+    // they can't honor a date bound. Under an active date filter, suppress them
+    // rather than leaking undated publication shells into a recency-bounded view.
+    const run_pubs = tag_filter == null and platform_filter == null and has_query and !has_since;
     if (run_pubs) {
         statements[stmt_count] = try addAuthorCondition(alloc, .{ .sql = PubSearch.positional, .args = &.{fts_query} }, "p.did", author_val);
         stmt_count += 1;
@@ -854,19 +857,21 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             logfire.info("search.iterate.base_path rows={d}", .{bp_count});
         }
 
-        // publication search
-        var pub_rows = try local.query(
-            \\SELECT f.uri, p.did, p.name,
-            \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
-            \\  p.rkey, p.base_path, p.platform
-            \\FROM publications_fts f
-            \\JOIN publications p ON f.uri = p.uri
-            \\WHERE publications_fts MATCH ? AND (? = '' OR p.did = ?)
-            \\ORDER BY rank LIMIT 10
-        , .{ fts_query, author_val, author_val });
-        defer pub_rows.deinit();
+        // publication search — publications have no post-date (the local
+        // replica omits created_at), so skip them under an active date filter
+        // rather than leak undated publication shells into a recency view.
+        if (since_filter == null) {
+            var pub_rows = try local.query(
+                \\SELECT f.uri, p.did, p.name,
+                \\  snippet(publications_fts, 2, '', '', '...', 32) as snippet,
+                \\  p.rkey, p.base_path, p.platform
+                \\FROM publications_fts f
+                \\JOIN publications p ON f.uri = p.uri
+                \\WHERE publications_fts MATCH ? AND (? = '' OR p.did = ?)
+                \\ORDER BY rank LIMIT 10
+            , .{ fts_query, author_val, author_val });
+            defer pub_rows.deinit();
 
-        {
             const iter_span = logfire.span("search.iterate.pubs_fts", .{});
             defer iter_span.end();
             var pub_count: u32 = 0;
