@@ -111,7 +111,7 @@ const Doc = struct {
 };
 
 /// Build canonical URL for a document/publication from its fields.
-/// Mirrors the frontend's buildDocUrl logic (site/index.html:1174).
+/// Single source of truth: the frontend renders `doc.url` from this verbatim.
 pub fn buildDocUrl(alloc: Allocator, doc_type: []const u8, platform: []const u8, base_path: []const u8, path: []const u8, rkey: []const u8, did: []const u8) []const u8 {
     // publication → https://{basePath}
     if (std.mem.eql(u8, doc_type, "publication") and base_path.len > 0) {
@@ -455,8 +455,32 @@ const PubSearch = zql.Query(
 
 pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, mode: SearchMode) ![]const u8 {
     if (mode == .hybrid) return searchHybrid(alloc, query, tag_filter, platform_filter, since_filter, author_filter);
-    if (mode == .semantic) return searchSemantic(alloc, query, platform_filter, author_filter);
+    if (mode == .semantic) return searchSemantic(alloc, query, platform_filter, since_filter, author_filter);
     return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter);
+}
+
+/// Whether a doc's `created_at` satisfies an active `since` lower bound.
+/// No filter → always passes. Empty created_at fails when a filter is active
+/// (an unknown date can't be proven in-range — previously these leaked through).
+/// Lexicographic compare is valid because both are ISO-8601: `created_at` is a
+/// full timestamp, `since` a date prefix, so "2026-05-29T..." >= "2026-05-29".
+fn passesSince(created_at: []const u8, since_filter: ?[]const u8) bool {
+    const since = since_filter orelse return true;
+    if (created_at.len == 0) return false;
+    return std.mem.order(u8, created_at, since) != .lt;
+}
+
+test "passesSince" {
+    // no active filter: everything passes, including empty dates
+    try std.testing.expect(passesSince("", null));
+    try std.testing.expect(passesSince("2020-01-01T00:00:00Z", null));
+
+    const since: ?[]const u8 = "2026-05-29";
+    try std.testing.expect(passesSince("2026-06-02T18:23:34.663Z", since)); // newer
+    try std.testing.expect(passesSince("2026-05-29T00:00:00Z", since)); // same day, kept
+    try std.testing.expect(!passesSince("2026-05-28T23:59:59Z", since)); // older, dropped
+    try std.testing.expect(!passesSince("2025-04-05T18:15:48.435Z", since)); // much older
+    try std.testing.expect(!passesSince("", since)); // unknown date dropped under filter
 }
 
 /// Check if we've already seen a result from the same author with the same title.
@@ -720,9 +744,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
-            if (since_filter) |since| {
-                if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
-            }
+            if (!passesSince(doc.createdAt, since_filter)) continue;
             if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
@@ -750,9 +772,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
-            if (since_filter) |since| {
-                if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
-            }
+            if (!passesSince(doc.createdAt, since_filter)) continue;
             if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                 try jw.write(doc.toJson(alloc));
             }
@@ -784,9 +804,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                 if (author_filter) |af| {
                     if (!std.mem.eql(u8, doc.did, af)) continue;
                 }
-                if (since_filter) |since| {
-                    if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) continue;
-                }
+                if (!passesSince(doc.createdAt, since_filter)) continue;
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 const uri_dupe = try alloc.dupe(u8, doc.uri);
                 try seen_uris.put(uri_dupe, {});
@@ -824,11 +842,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                         continue;
                     }
                 }
-                if (since_filter) |since| {
-                    if (doc.createdAt.len > 0 and std.mem.order(u8, doc.createdAt, since) == .lt) {
-                        bp_count += 1;
-                        continue;
-                    }
+                if (!passesSince(doc.createdAt, since_filter)) {
+                    bp_count += 1;
+                    continue;
                 }
                 if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                     try jw.write(doc.toJson(alloc));
@@ -1047,7 +1063,7 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
     };
 
     // 2. semantic search (~550ms via voyage + tpuf)
-    const sem_json = searchSemantic(alloc, query, platform_filter, author_filter) catch |err| blk: {
+    const sem_json = searchSemantic(alloc, query, platform_filter, since_filter, author_filter) catch |err| blk: {
         logfire.warn("search.hybrid: semantic failed: {}", .{err});
         break :blk try alloc.dupe(u8, "[]");
     };
@@ -1265,7 +1281,7 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
 }
 
 /// Semantic search: embed query via Voyage, ANN search via turbopuffer.
-fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
+fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
     if (query.len == 0) return try alloc.dupe(u8, "[]");
 
     if (!tpuf.isSemanticEnabled()) {
@@ -1322,6 +1338,9 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         if (author_filter) |af| {
             if (!std.mem.eql(u8, r.did, af)) continue;
         }
+        // date filter: tpuf has no since predicate, so apply it here (the
+        // keyword path filters in SQL / via passesSince — semantic must match).
+        if (!passesSince(r.created_at, since_filter)) continue;
         var is_dup = false;
         for (seen[0..seen_count]) |s| {
             if (std.mem.eql(u8, s, r.uri)) {
