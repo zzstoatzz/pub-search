@@ -67,6 +67,13 @@ pub fn main() !void {
     metrics.timing.setIo(io);
     metrics.buffer.init(io);
 
+    // read vector-store config (env-only, no I/O) before the accept loop.
+    // isSemanticEnabled() gates semantic search on these keys; if init ran
+    // later in the background initServices thread (behind slow schema
+    // migrations + local-db sync), every deploy served "semantic search not
+    // available" for the whole startup window. keepalive (network) stays async.
+    tpuf.init(io);
+
     // init local db and other services in background (slow)
     const init_thread = try Thread.spawn(.{}, initServices, .{ allocator, io });
     init_thread.detach();
@@ -104,8 +111,9 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // up in main() before the listener starts so request handlers can safely
     // call record() on them.
 
-    // init vector store (reads TURBOPUFFER_API_KEY from env)
-    tpuf.init(io);
+    // tpuf.init() ran synchronously in main() before the accept loop (it is
+    // env-only and gates semantic search). keepalive does network I/O, so it
+    // stays here in the background.
     tpuf.startKeepalive(allocator);
 
     // keep turso connection warm (avoids ~1s TLS handshake on first query after idle)
