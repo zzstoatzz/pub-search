@@ -578,6 +578,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             defer res.deinit();
             for (res.rows) |row| {
                 const doc = Doc.fromRow(row);
+                if (!passesSince(doc.createdAt, since_filter)) continue;
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 try jw.write(doc.toJson(alloc));
             }
@@ -589,6 +590,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             defer res.deinit();
             for (res.rows) |row| {
                 const doc = Doc.fromRow(row);
+                if (!passesSince(doc.createdAt, since_filter)) continue;
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 try jw.write(doc.toJson(alloc));
             }
