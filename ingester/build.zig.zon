@@ -1,0 +1,25 @@
+.{
+    .name = .leaflet_ingester,
+    .version = "0.0.1",
+    .fingerprint = 0x3eca3ee311fe26bf,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .websocket = .{
+            .url = "https://github.com/zzstoatzz/websocket.zig/archive/80c6434.tar.gz",
+            .hash = "websocket-0.1.0-ZPISdTHwAwA1d45BsYRE81Z8wNwZ3RhukgNADOma4eym",
+        },
+        .zat = .{
+            .url = "https://tangled.sh/zat.dev/zat/archive/v0.3.0-alpha.16",
+            .hash = "zat-0.3.0-alpha.15-5PuC7nVhBQC8QDphqwrmXGqng1Xvo8ua_H5MqS-smp1T",
+        },
+        .logfire = .{
+            .url = "https://tangled.sh/@zzstoatzz.io/logfire-zig/archive/v0.2.2.tar.gz",
+            .hash = "logfire_zig-0.2.2-x2yDLqCPAABljJ7YXfiGMnkCJmmy9ygmMSSWKxrp-I7Z",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
