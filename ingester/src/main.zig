@@ -137,7 +137,12 @@ const Handler = struct {
 pub fn main() !void {
     const allocator = std.heap.smp_allocator;
 
-    var threaded = Io.Threaded.init(allocator, .{});
+    // match zlay's io options — concurrent_limit caps io.concurrent tasks
+    // (firehose + server accept loop + one per connection). Defaults can be too
+    // tight for a server that spawns a task per connection.
+    var threaded = Io.Threaded.init(allocator, .{
+        .concurrent_limit = Io.Limit.limited(4096),
+    });
     const io = threaded.io();
 
     _ = logfire.configure(.{
@@ -170,24 +175,53 @@ pub fn main() !void {
 
     const path = cursorPath();
     const cursor = readCursor(path);
-
-    // start the tap-compatible /channel websocket server (the backend points
-    // its TAP_HOST here to cut over — once verification lands).
     const port: u16 = blk: {
         const s = if (std.c.getenv("PORT")) |p| std.mem.span(p) else "2480";
         break :blk std.fmt.parseInt(u16, s, 10) catch 2480;
     };
+
     var channel = ch.Channel{};
-    const server_thread = ch.start(allocator, io, &channel, port) catch |err| {
-        logfire.err("channel: failed to start server on port {d}: {}", .{ port, err });
-        return err;
+
+    // Both the firehose consumer and the /channel server run as Io-native
+    // concurrent tasks sharing one io — zlay's pattern (relay + firehose
+    // consumer in one process). The server uses runIo (NOT the internal
+    // listen() loop, which doesn't tolerate other threads under Io.Threaded).
+    const fctx = FirehoseCtx{
+        .allocator = allocator,
+        .io = io,
+        .channel = &channel,
+        .hosts = hosts,
+        .cursor = cursor,
+        .cursor_path = path,
     };
-    server_thread.detach();
+    if (std.c.getenv("SKIP_FIREHOSE") == null) {
+        const fh_thread = try std.Thread.spawn(.{}, runFirehose, .{fctx});
+        fh_thread.detach();
+    } else {
+        logfire.info("SKIP_FIREHOSE set — /channel server only", .{});
+    }
+
     logfire.info("leaflet-ingester starting, /channel on :{d}, {d} relay host(s), primary={s}, resume_cursor={?d}", .{ port, hosts.len, hosts[0], cursor });
 
-    var client = zat.FirehoseClient.init(io, allocator, .{ .hosts = hosts, .cursor = cursor });
-    defer client.deinit();
+    // websocket server blocks on main; karlseguin's worker pool coexists with
+    // the firehose thread fine.
+    try ch.serve(allocator, io, &channel, port);
+}
 
-    var handler = Handler{ .allocator = allocator, .channel = &channel, .cursor_path = path };
-    try client.subscribe(&handler);
+const FirehoseCtx = struct {
+    allocator: std.mem.Allocator,
+    io: Io,
+    channel: *ch.Channel,
+    hosts: []const []const u8,
+    cursor: ?i64,
+    cursor_path: [:0]const u8,
+};
+
+fn runFirehose(ctx: FirehoseCtx) void {
+    var client = zat.FirehoseClient.init(ctx.io, ctx.allocator, .{ .hosts = ctx.hosts, .cursor = ctx.cursor });
+    defer client.deinit();
+    var handler = Handler{ .allocator = ctx.allocator, .channel = ctx.channel, .cursor_path = ctx.cursor_path };
+    client.subscribe(&handler) catch |err| {
+        logfire.err("firehose subscribe ended: {s}", .{@errorName(err)});
+    };
 }

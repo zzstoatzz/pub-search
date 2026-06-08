@@ -91,17 +91,15 @@ pub const Handler = struct {
     channel: *Channel,
     conn: *ws.Conn,
 
-    pub fn init(h: *const ws.Handshake, conn: *ws.Conn, channel: *Channel) !Handler {
+    pub fn init(h: *ws.Handshake, conn: *ws.Conn, channel: *Channel) !Handler {
         _ = h;
         channel.register(conn);
         return .{ .channel = channel, .conn = conn };
     }
 
-    pub fn clientMessage(self: *Handler, allocator: std.mem.Allocator, data: []const u8) !void {
+    pub fn clientMessage(self: *Handler, data: []const u8) !void {
         // backend sends {"type":"ack","id":N}; we have no outbox to drain, so
-        // just count them. Never write here — keeps the firehose thread the
-        // sole writer.
-        _ = allocator;
+        // just count them.
         _ = data;
         self.channel.acks += 1;
     }
@@ -133,14 +131,17 @@ pub fn buildRecordFrame(
     try w.writeAll("}}");
 }
 
-/// Start the websocket server on `port` in a new thread. Returns immediately.
-pub fn start(allocator: std.mem.Allocator, io: Io, channel: *Channel, port: u16) !std.Thread {
-    const Server = ws.Server(Handler);
-    const server = try allocator.create(Server);
-    server.* = try Server.init(allocator, io, .{
+pub const Server = ws.Server(Handler);
+
+/// Run the websocket server (blocks). karlseguin's server manages its own
+/// worker pool, so it coexists with the firehose thread fine.
+pub fn serve(allocator: std.mem.Allocator, io: Io, channel: *Channel, port: u16) !void {
+    var server = try Server.init(io, allocator, .{
         .port = port,
         .address = "0.0.0.0",
-        .handshake = .{ .timeout = 10, .max_size = 4096, .max_headers = 30 },
+        .max_conn = 64,
+        .max_message_size = 5 * 1024 * 1024,
     });
-    return try server.listenInNewThread(channel);
+    defer server.deinit();
+    try server.listen(channel);
 }

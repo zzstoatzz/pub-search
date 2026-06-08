@@ -42,11 +42,6 @@ pub fn writeValue(writer: *std.Io.Writer, alloc: std.mem.Allocator, value: cbor.
             try writer.writeAll(b32);
             try writer.writeAll("\"}");
         },
-        .tag => |t| {
-            // generic CBOR tag (CIDs are already decoded to .cid). Serialize the
-            // wrapped content — the tag number has no dag-json representation.
-            try writeValue(writer, alloc, t.content.*);
-        },
         .bytes => |b| {
             const enc = std.base64.standard.Encoder;
             const out = try alloc.alloc(u8, enc.calcSize(b.len));
