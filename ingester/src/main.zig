@@ -16,6 +16,7 @@ const std = @import("std");
 const Io = std.Io;
 const logfire = @import("logfire");
 const zat = @import("zat");
+const ch = @import("channel.zig");
 
 // Collections we index — mirrors the backend's TAP_COLLECTION_FILTERS / tap.zig.
 const COLLECTIONS = [_][]const u8{
@@ -77,6 +78,8 @@ fn persistCursor(path: [:0]const u8, seq: i64) void {
 }
 
 const Handler = struct {
+    allocator: std.mem.Allocator,
+    channel: *ch.Channel,
     matched: u64 = 0,
     events: u64 = 0,
     last_seq: i64 = 0,
@@ -91,15 +94,17 @@ const Handler = struct {
                 for (commit.ops) |op| {
                     if (!isTracked(op.collection)) continue;
                     self.matched += 1;
-                    // one structured line per matched record — this is the
-                    // comparison signal. uri = at://{did}/{collection}/{rkey}.
+
+                    // comparison signal (uri = at://{did}/{collection}/{rkey}).
                     logfire.info("ingester.captured action={s} collection={s} did={s} rkey={s} seq={d}", .{
-                        @tagName(op.action),
-                        op.collection,
-                        commit.repo,
-                        op.rkey,
-                        commit.seq,
+                        @tagName(op.action), op.collection, commit.repo, op.rkey, commit.seq,
                     });
+
+                    // emit the tap-compatible /channel frame to any connected
+                    // backend. NOTE: unverified for now (verification blocked on
+                    // zat exposing raw CAR bytes) — safe because nothing points
+                    // at us yet; we won't cut over until verification lands.
+                    self.emit(op, commit.repo, commit.seq);
                 }
             },
             else => {},
@@ -109,6 +114,19 @@ const Handler = struct {
             persistCursor(self.cursor_path, self.last_seq);
             logfire.debug("ingester progress: events={d} matched={d} seq={d}", .{ self.events, self.matched, self.last_seq });
         }
+    }
+
+    fn emit(self: *Handler, op: zat.firehose.RepoOp, did: []const u8, seq: i64) void {
+        if (!self.channel.hasClients()) return;
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var out: std.Io.Writer.Allocating = .init(a);
+        ch.buildRecordFrame(&out, a, seq, @tagName(op.action), did, op.collection, op.rkey, op.record) catch |err| {
+            logfire.warn("channel: frame build failed: {s}", .{@errorName(err)});
+            return;
+        };
+        _ = self.channel.broadcast(out.written());
     }
 
     pub fn onError(_: *Handler, err: anyerror) void {
@@ -152,11 +170,24 @@ pub fn main() !void {
 
     const path = cursorPath();
     const cursor = readCursor(path);
-    logfire.info("leaflet-ingester starting, {d} relay host(s), primary={s}, resume_cursor={?d}", .{ hosts.len, hosts[0], cursor });
+
+    // start the tap-compatible /channel websocket server (the backend points
+    // its TAP_HOST here to cut over — once verification lands).
+    const port: u16 = blk: {
+        const s = if (std.c.getenv("PORT")) |p| std.mem.span(p) else "2480";
+        break :blk std.fmt.parseInt(u16, s, 10) catch 2480;
+    };
+    var channel = ch.Channel{};
+    const server_thread = ch.start(allocator, io, &channel, port) catch |err| {
+        logfire.err("channel: failed to start server on port {d}: {}", .{ port, err });
+        return err;
+    };
+    server_thread.detach();
+    logfire.info("leaflet-ingester starting, /channel on :{d}, {d} relay host(s), primary={s}, resume_cursor={?d}", .{ port, hosts.len, hosts[0], cursor });
 
     var client = zat.FirehoseClient.init(io, allocator, .{ .hosts = hosts, .cursor = cursor });
     defer client.deinit();
 
-    var handler = Handler{ .cursor_path = path };
+    var handler = Handler{ .allocator = allocator, .channel = &channel, .cursor_path = path };
     try client.subscribe(&handler);
 }
