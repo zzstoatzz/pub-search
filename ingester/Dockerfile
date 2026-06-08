@@ -13,7 +13,12 @@ RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_V
 
 WORKDIR /app
 COPY build.zig build.zig.zon ./
+COPY scripts ./scripts
 COPY src ./src
+
+# pre-fetch deps with github fallback for tangled.* outages (tangled.sh flaked
+# mid-build otherwise — same mitigation as the backend).
+RUN ./scripts/fetch-deps.sh
 
 # pin to x86_64_v3 (AVX2) — matches the backend; fly EPYC machines support it.
 RUN zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu -Dcpu=x86_64_v3
