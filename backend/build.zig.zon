@@ -5,16 +5,16 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .websocket = .{
-            .url = "https://github.com/zzstoatzz/websocket.zig/archive/80c6434.tar.gz",
-            .hash = "websocket-0.1.0-ZPISdTHwAwA1d45BsYRE81Z8wNwZ3RhukgNADOma4eym",
+            .url = "https://github.com/zzstoatzz/websocket.zig/archive/refs/tags/v0.1.5.tar.gz",
+            .hash = "websocket-0.1.2-ZPISdUpYBAA-B2Ru4-MN2TLWlTUMcZd3Yu87eLS-et-V",
         },
         .zql = .{
             .url = "https://github.com/zzstoatzz/zql/archive/main.tar.gz",
             .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
         },
         .zat = .{
-            .url = "https://tangled.sh/zat.dev/zat/archive/v0.3.0-alpha.16",
-            .hash = "zat-0.3.0-alpha.15-5PuC7nVhBQC8QDphqwrmXGqng1Xvo8ua_H5MqS-smp1T",
+            .url = "https://tangled.org/zat.dev/zat/archive/af0e50dd11a877452a42bdb7d9f975fba82772c9.tar.gz",
+            .hash = "zat-0.3.6-5PuC7l5xCQDpuYx8mdk22znf8GntN7gv9372YtIDVtzy",
         },
         .zqlite = .{
             .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",

@@ -136,7 +136,7 @@ pub const Server = ws.Server(Handler);
 /// Run the websocket server (blocks). karlseguin's server manages its own
 /// worker pool, so it coexists with the firehose thread fine.
 pub fn serve(allocator: std.mem.Allocator, io: Io, channel: *Channel, port: u16) !void {
-    var server = try Server.init(io, allocator, .{
+    var server = try Server.init(allocator, io, .{
         .port = port,
         .address = "0.0.0.0",
         .max_conn = 64,
