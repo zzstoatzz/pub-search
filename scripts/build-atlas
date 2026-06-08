@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import asyncio
+import gc
 import json
 import os
 import re
@@ -418,14 +419,17 @@ def main():
         print("too few documents to build atlas", file=sys.stderr)
         sys.exit(1)
 
-    # parse into arrays
-    vectors = []
+    # Parse into a dense float32 matrix without retaining a second Python list
+    # of vector objects. Turbopuffer returns vectors as JSON lists; holding
+    # rows + vectors + X at once was enough to OOM the Prefect pod as the
+    # corpus grew.
+    valid_rows = [row for row in rows if row.get("vector")]
+    first_vec = valid_rows[0]["vector"]
+    X = np.empty((len(valid_rows), len(first_vec)), dtype=np.float32)
     metadata = []
-    for row in rows:
-        vec = row.get("vector")
-        if not vec:
-            continue
-        vectors.append(vec)
+    for i, row in enumerate(valid_rows):
+        vec = row.pop("vector")
+        X[i] = vec
         metadata.append({
             "uri": row.get("uri", row.get("id", "")),
             "title": row.get("title", ""),
@@ -434,8 +438,8 @@ def main():
             "path": row.get("path", ""),
             "did": row.get("did", ""),
         })
-
-    X = np.array(vectors, dtype=np.float32)
+    del rows, valid_rows
+    gc.collect()
     log(f"  {X.shape[0]} vectors, {X.shape[1]} dims")
 
     # --- step 2: dimensionality reduction ---
