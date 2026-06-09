@@ -2,21 +2,22 @@
 //!
 //! Standalone service that replaces the indigo `tap` sidecar. It consumes the
 //! real firehose (com.atproto.sync.subscribeRepos), filters to leaflet-search's
-//! collections, and (eventually) verifies each commit (MST + signature) in
-//! process before re-emitting verified records over a tap-compatible `/channel`
-//! websocket so the backend's existing consumer can point at us unchanged.
+//! collections, verifies each matched commit (signature + MST, see
+//! verifier.zig) in process, and re-emits verified records over a
+//! tap-compatible `/channel` websocket so the backend's existing consumer can
+//! point at us unchanged.
 //!
-//! Current mode: COMPARISON / observe-only. Connects + filters + persists its
-//! firehose cursor + emits one `ingester.captured` log per matched record so we
-//! can diff its coverage against what tap actually delivered to Turso, BEFORE
-//! cutting the backend over. Verification and the /channel server are the
-//! remaining cutover-blockers (see project_own_firehose_ingester memory).
+//! Current mode: COMPARISON. Nothing points at /channel yet; every matched
+//! record logs `ingester.captured` (with a verified flag) so we can diff
+//! coverage against what tap delivers to Turso before cutting the backend
+//! over (see project_own_firehose_ingester memory).
 
 const std = @import("std");
 const Io = std.Io;
 const logfire = @import("logfire");
 const zat = @import("zat");
 const ch = @import("channel.zig");
+const vf = @import("verifier.zig");
 
 // Collections we index — mirrors the backend's TAP_COLLECTION_FILTERS / tap.zig.
 const COLLECTIONS = [_][]const u8{
@@ -80,6 +81,7 @@ fn persistCursor(path: [:0]const u8, seq: i64) void {
 const Handler = struct {
     allocator: std.mem.Allocator,
     channel: *ch.Channel,
+    verifier: *vf.Verifier,
     matched: u64 = 0,
     events: u64 = 0,
     last_seq: i64 = 0,
@@ -91,28 +93,39 @@ const Handler = struct {
 
         switch (event) {
             .commit => |commit| {
+                var tracked_ops: usize = 0;
                 for (commit.ops) |op| {
-                    if (!isTracked(op.collection)) continue;
-                    self.matched += 1;
+                    if (isTracked(op.collection)) tracked_ops += 1;
+                }
+                if (tracked_ops > 0) {
+                    // verify the commit before emitting any of its records.
+                    // rejected commits are still logged as captured so coverage
+                    // comparison against tap stays honest, but they never
+                    // reach /channel.
+                    const verdict = self.verifier.verifyCommit(commit);
+                    for (commit.ops) |op| {
+                        if (!isTracked(op.collection)) continue;
+                        self.matched += 1;
 
-                    // comparison signal (uri = at://{did}/{collection}/{rkey}).
-                    logfire.info("ingester.captured action={s} collection={s} did={s} rkey={s} seq={d}", .{
-                        @tagName(op.action), op.collection, commit.repo, op.rkey, commit.seq,
-                    });
+                        // comparison signal (uri = at://{did}/{collection}/{rkey}).
+                        logfire.info("ingester.captured action={s} collection={s} did={s} rkey={s} seq={d} verified={s}", .{
+                            @tagName(op.action), op.collection, commit.repo, op.rkey, commit.seq, @tagName(verdict),
+                        });
 
-                    // emit the tap-compatible /channel frame to any connected
-                    // backend. NOTE: unverified for now (verification blocked on
-                    // zat exposing raw CAR bytes) — safe because nothing points
-                    // at us yet; we won't cut over until verification lands.
-                    self.emit(op, commit.repo, commit.seq);
+                        if (verdict != .rejected) self.emit(op, commit.repo, commit.seq);
+                    }
                 }
             },
+            .identity => |id| self.verifier.evict(id.did),
             else => {},
         }
 
         if (self.events % CURSOR_PERSIST_EVERY == 0) {
             persistCursor(self.cursor_path, self.last_seq);
-            logfire.debug("ingester progress: events={d} matched={d} seq={d}", .{ self.events, self.matched, self.last_seq });
+            logfire.debug("ingester progress: events={d} matched={d} seq={d} verified={d} sig_only={d} rejected={d} unresolvable={d}", .{
+                self.events,            self.matched,            self.last_seq,          self.verifier.verified,
+                self.verifier.sig_only, self.verifier.rejected, self.verifier.unresolvable,
+            });
         }
     }
 
@@ -220,7 +233,9 @@ const FirehoseCtx = struct {
 fn runFirehose(ctx: FirehoseCtx) void {
     var client = zat.FirehoseClient.init(ctx.io, ctx.allocator, .{ .hosts = ctx.hosts, .cursor = ctx.cursor });
     defer client.deinit();
-    var handler = Handler{ .allocator = ctx.allocator, .channel = ctx.channel, .cursor_path = ctx.cursor_path };
+    var verifier = vf.Verifier.init(ctx.io, ctx.allocator);
+    defer verifier.deinit();
+    var handler = Handler{ .allocator = ctx.allocator, .channel = ctx.channel, .verifier = &verifier, .cursor_path = ctx.cursor_path };
     client.subscribe(&handler) catch |err| {
         logfire.err("firehose subscribe ended: {s}", .{@errorName(err)});
     };
