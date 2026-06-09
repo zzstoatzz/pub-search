@@ -213,6 +213,9 @@ pub fn main() !void {
         logfire.info("SKIP_FIREHOSE set — /channel server only", .{});
     }
 
+    const hb_thread = try std.Thread.spawn(.{}, runHeartbeat, .{ io, &channel });
+    hb_thread.detach();
+
     logfire.info("leaflet-ingester starting, /channel on :{d}, {d} relay host(s), primary={s}, resume_cursor={?d}", .{ port, hosts.len, hosts[0], cursor });
 
     // websocket server blocks on main; karlseguin's worker pool coexists with
@@ -228,6 +231,16 @@ const FirehoseCtx = struct {
     cursor: ?i64,
     cursor_path: [:0]const u8,
 };
+
+// 20s heartbeat: paired with the backend's ~90s staleness watchdog, so a
+// half-open socket (our restart leaves no RST behind for an idle peer) gets
+// detected and re-dialed instead of hanging the backend's read loop forever.
+fn runHeartbeat(io: Io, channel: *ch.Channel) void {
+    while (true) {
+        io.sleep(Io.Duration.fromSeconds(20), .awake) catch {};
+        channel.ping();
+    }
+}
 
 fn runFirehose(ctx: FirehoseCtx) void {
     var client = zat.FirehoseClient.init(ctx.io, ctx.allocator, .{ .hosts = ctx.hosts, .cursor = ctx.cursor });

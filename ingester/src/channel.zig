@@ -133,6 +133,22 @@ pub const Channel = struct {
         }
     }
 
+    /// App-level heartbeat to every connected client. Never buffered — a
+    /// heartbeat only means something live. This is what lets the backend's
+    /// staleness watchdog distinguish "quiet firehose" from "dead socket":
+    /// as long as we're up, frames arrive at least every heartbeat interval.
+    pub fn ping(self: *Channel) void {
+        self.lock();
+        defer self.unlock();
+        for (&self.conns) |*slot| {
+            if (slot.*) |conn| {
+                conn.write("{\"id\":0,\"type\":\"ping\"}") catch {
+                    slot.* = null;
+                };
+            }
+        }
+    }
+
     fn evictOldest(self: *Channel) void {
         const frame = self.ring[self.ring_tail].?;
         self.ring_bytes -= frame.len;

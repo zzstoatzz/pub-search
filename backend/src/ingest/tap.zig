@@ -112,17 +112,18 @@ const Handler = struct {
     io: Io,
     client: *websocket.Client,
     pool: *TapPool,
-    msg_count: usize = 0,
+    // atomic: read by the staleness watchdog thread
+    msg_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     ack_count: usize = 0,
     no_id_count: usize = 0,
     ack_buf: [64]u8 = undefined,
 
     pub fn serverMessage(self: *Handler, data: []const u8) !void {
-        self.msg_count += 1;
-        if (self.msg_count % 1000 == 0) {
+        const count = self.msg_count.fetchAdd(1, .monotonic) + 1;
+        if (count % 1000 == 0) {
             const c = self.pool.counters(self.io);
             logfire.info("tap: recv {d}, acks {d}, accepted {d}, processed {d}, dropped {d}, queued {d}", .{
-                self.msg_count, self.ack_count, c.accepted, c.processed, c.dropped, c.queued,
+                count, self.ack_count, c.accepted, c.processed, c.dropped, c.queued,
             });
         }
 
@@ -166,6 +167,42 @@ const Handler = struct {
     }
 
     pub fn close(_: *Handler) void {}
+};
+
+/// Detects half-open channel sockets. The ingester restarting (deploy, crash)
+/// leaves an idle peer with no RST — and since we only write ACKs in response
+/// to frames, readLoop would block forever and ingestion silently stops
+/// (observed at cutover, 2026-06-09). The ingester heartbeats every 20s, so
+/// "no frames for ~90s" reliably means the connection is dead: force-close it
+/// and let the consumer loop re-dial.
+const Watchdog = struct {
+    io: Io,
+    client: *websocket.Client,
+    handler: *Handler,
+    stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const TICK_SECONDS = 1;
+    const STALE_TICKS = 90;
+
+    fn run(self: *Watchdog) void {
+        var last: usize = 0;
+        var stale: u32 = 0;
+        while (!self.stop.load(.acquire)) {
+            self.io.sleep(Io.Duration.fromSeconds(TICK_SECONDS), .awake) catch {};
+            const n = self.handler.msg_count.load(.monotonic);
+            if (n != last) {
+                last = n;
+                stale = 0;
+                continue;
+            }
+            stale += 1;
+            if (stale >= STALE_TICKS) {
+                logfire.warn("tap: no frames for {d}s, closing connection to force reconnect", .{STALE_TICKS * TICK_SECONDS});
+                self.client.close(.{}) catch {};
+                return;
+            }
+        }
+    }
 };
 
 fn extractMessageId(allocator: Allocator, payload: []const u8) ?i64 {
@@ -227,6 +264,19 @@ fn connect(allocator: Allocator, io: Io) !void {
     defer pool.shutdown(io);
 
     var handler = Handler{ .allocator = allocator, .io = io, .client = &client, .pool = &pool };
+
+    var watchdog = Watchdog{ .io = io, .client = &client, .handler = &handler };
+    const wd_thread = std.Thread.spawn(.{}, Watchdog.run, .{&watchdog}) catch |err| {
+        logfire.err("tap: failed to spawn watchdog: {}", .{err});
+        return err;
+    };
+    defer {
+        // joined, not detached — the watchdog borrows stack locals (client,
+        // handler) that die when this function returns. 1s tick bounds the wait.
+        watchdog.stop.store(true, .release);
+        wd_thread.join();
+    }
+
     client.readLoop(&handler) catch |err| {
         logfire.err("websocket read loop error: {}", .{err});
         return err;
