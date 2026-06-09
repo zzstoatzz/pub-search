@@ -33,9 +33,63 @@ pub const Verdict = enum {
     rejected,
 };
 
-pub const Verifier = struct {
+/// how long the firehose thread waits for a DID resolution before giving up
+/// on the commit. zig 0.16's http client has NO timeouts, so a wedged PLC
+/// connection would otherwise freeze the read loop forever (it did, in prod,
+/// 2026-06-09 22:33 UTC — ~6 min of zero ingestion until a restart).
+const RESOLVE_DEADLINE_MS: u64 = 10_000;
+const RESOLVE_POLL_MS: u64 = 50;
+
+const TASK_RUNNING: u8 = 0;
+const TASK_DONE: u8 = 1;
+const TASK_ABANDONED: u8 = 2;
+
+/// one in-flight DID resolution, heap-owned so it can outlive the firehose
+/// thread's patience: whoever loses the state race (resolver thread finishing
+/// vs firehose thread abandoning) is responsible for freeing it.
+const ResolveTask = struct {
+    io: Io,
     allocator: std.mem.Allocator,
-    resolver: zat.DidResolver,
+    did_buf: [512]u8 = undefined,
+    did_len: usize = 0,
+    state: std.atomic.Value(u8) = std.atomic.Value(u8).init(TASK_RUNNING),
+    ok: bool = false,
+    key: CachedKey = undefined,
+
+    fn run(task: *ResolveTask) void {
+        task.ok = resolveKey(task.io, task.allocator, task.did_buf[0..task.did_len], &task.key);
+        if (task.state.swap(TASK_DONE, .acq_rel) == TASK_ABANDONED) {
+            task.allocator.destroy(task);
+        }
+    }
+};
+
+/// resolve DID -> decoded signing key. fresh resolver per call: a resolver is
+/// not thread-safe and an abandoned (hung) task must not poison a shared one.
+fn resolveKey(io: Io, allocator: std.mem.Allocator, did: []const u8, out: *CachedKey) bool {
+    const parsed = zat.Did.parse(did) orelse return false;
+    var resolver = zat.DidResolver.initWithOptions(io, allocator, .{ .keep_alive = false });
+    defer resolver.deinit();
+    var doc = resolver.resolve(parsed) catch |err| {
+        logfire.warn("verifier: DID resolve failed for {s}: {s}", .{ did, @errorName(err) });
+        return false;
+    };
+    defer doc.deinit();
+
+    const vm = doc.signingKey() orelse return false;
+    const key_bytes = zat.multibase.decode(allocator, vm.public_key_multibase) catch return false;
+    defer allocator.free(key_bytes);
+    const public_key = zat.multicodec.parsePublicKey(key_bytes) catch return false;
+    if (public_key.raw.len > 33) return false;
+
+    out.* = .{ .key_type = public_key.key_type, .raw = undefined, .len = @intCast(public_key.raw.len) };
+    @memcpy(out.raw[0..public_key.raw.len], public_key.raw);
+    return true;
+}
+
+pub const Verifier = struct {
+    io: Io,
+    allocator: std.mem.Allocator,
     cache: std.StringHashMapUnmanaged(CachedKey) = .empty,
     verified: u64 = 0,
     sig_only: u64 = 0,
@@ -44,17 +98,13 @@ pub const Verifier = struct {
     last_err: []const u8 = "none",
 
     pub fn init(io: Io, allocator: std.mem.Allocator) Verifier {
-        return .{
-            .allocator = allocator,
-            .resolver = zat.DidResolver.initWithOptions(io, allocator, .{ .keep_alive = true }),
-        };
+        return .{ .io = io, .allocator = allocator };
     }
 
     pub fn deinit(self: *Verifier) void {
         var it = self.cache.iterator();
         while (it.next()) |entry| self.allocator.free(entry.key_ptr.*);
         self.cache.deinit(self.allocator);
-        self.resolver.deinit();
     }
 
     /// verify a commit's CAR bytes against the repo's signing key. callers
@@ -141,30 +191,46 @@ pub const Verifier = struct {
 
     /// cached signing key for a DID, resolving via PLC/did:web on miss.
     /// `force` re-resolves even on a cache hit (key rotation path).
+    ///
+    /// resolution runs on a detached thread and we wait at most
+    /// RESOLVE_DEADLINE_MS — the firehose read loop must never block
+    /// indefinitely on network I/O. on timeout the commit is dropped
+    /// (unresolvable) and the orphaned thread frees itself whenever the
+    /// kernel finally gives up on its socket.
     fn signingKey(self: *Verifier, did: []const u8, force: bool) ?CachedKey {
         if (!force) {
             if (self.cache.get(did)) |cached| return cached;
         }
+        if (did.len > 512) return null;
 
-        const parsed = zat.Did.parse(did) orelse return null;
-        var doc = self.resolver.resolve(parsed) catch |err| {
-            logfire.warn("verifier: DID resolve failed for {s}: {s}", .{ did, @errorName(err) });
+        const task = self.allocator.create(ResolveTask) catch return null;
+        task.* = .{ .io = self.io, .allocator = self.allocator, .did_len = did.len };
+        @memcpy(task.did_buf[0..did.len], did);
+
+        const thread = std.Thread.spawn(.{}, ResolveTask.run, .{task}) catch {
+            self.allocator.destroy(task);
             return null;
         };
-        defer doc.deinit();
+        thread.detach();
 
-        const vm = doc.signingKey() orelse return null;
-        const key_bytes = zat.multibase.decode(self.allocator, vm.public_key_multibase) catch return null;
-        defer self.allocator.free(key_bytes);
-        const public_key = zat.multicodec.parsePublicKey(key_bytes) catch return null;
-        if (public_key.raw.len > 33) return null;
+        var waited: u64 = 0;
+        while (task.state.load(.acquire) != TASK_DONE and waited < RESOLVE_DEADLINE_MS) {
+            self.io.sleep(Io.Duration.fromMilliseconds(RESOLVE_POLL_MS), .awake) catch {};
+            waited += RESOLVE_POLL_MS;
+        }
 
-        var cached = CachedKey{
-            .key_type = public_key.key_type,
-            .raw = undefined,
-            .len = @intCast(public_key.raw.len),
-        };
-        @memcpy(cached.raw[0..public_key.raw.len], public_key.raw);
+        if (task.state.load(.acquire) != TASK_DONE) {
+            // raced abandon: if the task finished between the check and the
+            // swap, it's ours to consume after all.
+            if (task.state.swap(TASK_ABANDONED, .acq_rel) != TASK_DONE) {
+                logfire.warn("verifier: DID resolve timed out for {s} after {d}ms", .{ did, RESOLVE_DEADLINE_MS });
+                return null;
+            }
+        }
+
+        defer self.allocator.destroy(task);
+        if (!task.ok) return null;
+        const cached = task.key;
 
         const gop = self.cache.getOrPut(self.allocator, did) catch return cached;
         if (!gop.found_existing) {
