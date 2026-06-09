@@ -130,7 +130,6 @@ const Handler = struct {
     }
 
     fn emit(self: *Handler, op: zat.firehose.RepoOp, did: []const u8, seq: i64) void {
-        if (!self.channel.hasClients()) return;
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const a = arena.allocator();
@@ -193,7 +192,7 @@ pub fn main() !void {
         break :blk std.fmt.parseInt(u16, s, 10) catch 2480;
     };
 
-    var channel = ch.Channel{};
+    var channel = ch.Channel{ .allocator = allocator };
 
     // Both the firehose consumer and the /channel server run as Io-native
     // concurrent tasks sharing one io — zlay's pattern (relay + firehose

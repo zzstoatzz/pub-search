@@ -2,12 +2,19 @@
 //!
 //! Emits the exact frame shape the backend's tap.zig consumer expects:
 //!   {"id":<seq>,"type":"record","record":{"action":..,"did":..,"collection":..,"rkey":..[,"record":<value>]}}
-//! and accepts (ignores) the backend's {"type":"ack","id":..} replies — we
-//! stream live with no outbox to drain, so acks are advisory.
+//! and accepts (ignores) the backend's {"type":"ack","id":..} replies — frames
+//! replayed from the ring are delivered at-least-once and the backend's
+//! upserts are idempotent, so acks are advisory.
+//!
+//! While no client is connected (backend deploy/restart), frames land in a
+//! bounded in-memory ring instead of being dropped; the ring drains in order
+//! to the next client that connects. This stands in for tap's durable outbox —
+//! at our matched-event rate (~tens/min) the ring covers hours of backend
+//! downtime, and anything beyond that is `/admin/backfill` territory.
 //!
 //! The firehose thread calls broadcast(); the websocket worker thread only
-//! reads acks (never writes), so the firehose thread is the sole writer per
-//! conn and concurrent-write hazards are avoided.
+//! reads acks (never writes outside register's drain, which holds the same
+//! lock broadcast does), so concurrent-write hazards are avoided.
 
 const std = @import("std");
 const Io = std.Io;
@@ -17,14 +24,23 @@ const logfire = @import("logfire");
 const cbor_json = @import("cbor_json.zig");
 
 const MAX_CLIENTS = 8;
+const RING_SLOTS = 8192;
+const RING_MAX_BYTES = 64 * 1024 * 1024;
 
 pub const Channel = struct {
+    allocator: std.mem.Allocator,
     // tiny spinlock — std.Thread.Mutex is gone in 0.16 and Io.Mutex needs an
     // io handle the ws worker threads don't carry. Contention is near-zero
     // (one backend client, a few broadcasts/sec), so a spinlock is fine.
     locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     conns: [MAX_CLIENTS]?*ws.Conn = .{null} ** MAX_CLIENTS,
     acks: u64 = 0,
+    // FIFO ring of frames buffered while no client is connected.
+    ring: [RING_SLOTS]?[]u8 = .{null} ** RING_SLOTS,
+    ring_tail: usize = 0, // oldest frame
+    ring_len: usize = 0,
+    ring_bytes: usize = 0,
+    ring_dropped: u64 = 0,
 
     fn lock(self: *Channel) void {
         while (self.locked.swap(true, .acquire)) std.atomic.spinLoopHint();
@@ -39,7 +55,10 @@ pub const Channel = struct {
         for (&self.conns) |*slot| {
             if (slot.* == null) {
                 slot.* = conn;
-                logfire.info("channel: client connected", .{});
+                const buffered = self.ring_len;
+                self.drainTo(conn);
+                logfire.info("channel: client connected, drained {d} buffered frame(s) (dropped while down: {d})", .{ buffered, self.ring_dropped });
+                self.ring_dropped = 0;
                 return;
             }
         }
@@ -58,8 +77,8 @@ pub const Channel = struct {
         }
     }
 
-    /// Write a pre-serialized frame to every connected client. Prunes any conn
-    /// whose write fails (disconnected). Returns the number of clients written.
+    /// Write a pre-serialized frame to every connected client, or buffer it in
+    /// the ring when none is connected. Prunes any conn whose write fails.
     pub fn broadcast(self: *Channel, frame: []const u8) usize {
         self.lock();
         defer self.unlock();
@@ -73,16 +92,54 @@ pub const Channel = struct {
                 n += 1;
             }
         }
+        if (n == 0) self.buffer(frame);
         return n;
     }
 
-    pub fn hasClients(self: *Channel) bool {
-        self.lock();
-        defer self.unlock();
-        for (self.conns) |slot| {
-            if (slot != null) return true;
+    /// Copy a frame into the ring, evicting oldest frames to stay within the
+    /// slot and byte budgets. Caller holds the lock.
+    fn buffer(self: *Channel, frame: []const u8) void {
+        while (self.ring_len > 0 and (self.ring_len == RING_SLOTS or self.ring_bytes + frame.len > RING_MAX_BYTES)) {
+            self.evictOldest();
+            self.ring_dropped += 1;
         }
-        return false;
+        const copy = self.allocator.dupe(u8, frame) catch {
+            self.ring_dropped += 1;
+            return;
+        };
+        const head = (self.ring_tail + self.ring_len) % RING_SLOTS;
+        self.ring[head] = copy;
+        self.ring_len += 1;
+        self.ring_bytes += copy.len;
+    }
+
+    /// Replay buffered frames in FIFO order. On write failure the conn is dead:
+    /// prune it and keep the remaining frames for the next client. Caller holds
+    /// the lock.
+    fn drainTo(self: *Channel, conn: *ws.Conn) void {
+        while (self.ring_len > 0) {
+            const frame = self.ring[self.ring_tail].?;
+            conn.write(frame) catch {
+                for (&self.conns) |*slot| {
+                    if (slot.* == conn) slot.* = null;
+                }
+                return;
+            };
+            self.ring[self.ring_tail] = null;
+            self.ring_tail = (self.ring_tail + 1) % RING_SLOTS;
+            self.ring_len -= 1;
+            self.ring_bytes -= frame.len;
+            self.allocator.free(frame);
+        }
+    }
+
+    fn evictOldest(self: *Channel) void {
+        const frame = self.ring[self.ring_tail].?;
+        self.ring_bytes -= frame.len;
+        self.allocator.free(frame);
+        self.ring[self.ring_tail] = null;
+        self.ring_tail = (self.ring_tail + 1) % RING_SLOTS;
+        self.ring_len -= 1;
     }
 };
 
@@ -93,8 +150,14 @@ pub const Handler = struct {
 
     pub fn init(h: *ws.Handshake, conn: *ws.Conn, channel: *Channel) !Handler {
         _ = h;
-        channel.register(conn);
         return .{ .channel = channel, .conn = conn };
+    }
+
+    // register (and drain the ring) only AFTER the server has written the
+    // HTTP 101 handshake reply — registering in init() puts replayed frames
+    // on the wire ahead of the upgrade response, corrupting the handshake.
+    pub fn afterInit(self: *Handler) !void {
+        self.channel.register(self.conn);
     }
 
     pub fn clientMessage(self: *Handler, data: []const u8) !void {
@@ -138,7 +201,8 @@ pub const Server = ws.Server(Handler);
 pub fn serve(allocator: std.mem.Allocator, io: Io, channel: *Channel, port: u16) !void {
     var server = try Server.init(allocator, io, .{
         .port = port,
-        .address = "0.0.0.0",
+        // fly 6PN (.internal) is IPv6-only — "::" binds both families.
+        .address = "::",
         .max_conn = 64,
         .max_message_size = 5 * 1024 * 1024,
     });
