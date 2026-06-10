@@ -133,3 +133,41 @@ Before the backfill: extend the volume (1GB → 3GB+), keep RAM ≥ 2x the hot
 working set or accept reader stalls during sync, and consider whether the
 local replica needs full patent *content* at all (FTS needs it; everything
 else doesn't — a contentless-FTS / trimmed-replica design would cap growth).
+
+## addendum 2: the seven-hour sync stall, and the two bug classes
+
+At 07:34 one incremental sync cycle failed transiently; every 5-minute retry
+refetched the ENTIRE missed window in one unbounded query; the window only
+grew; each multi-minute failing fetch starved the box while search/stats timed
+out. Seven hours of search staleness, correctly detected only by the CI
+ingestion watchdog (which checks *freshness* — the soaks here only checked
+*latency*). Fixed by keyset pagination (`b43cfb6`): bounded 2,000-row pages,
+per-page lock holds, immune to backlog size.
+
+The damning detail: the unbounded query was eight lines above the 22:33 edit
+(`d95bea4`) in the same function. Instance fixed, sibling missed.
+
+### the recurring classes (git-history audit)
+
+**Class 1 — shared resource held across a slow remote call:**
+`1268461` (Feb), `dfc58ad` (Feb), `2444124` (Mar), `0f8191e` (May),
+`4e52ab6` (Jun 5), `f63325a` (Jun 9). Six instances, fixed one at a time.
+
+**Class 2 — work proportional to data size on a hot path:**
+`79a3112` (Feb), `97758ab` (Mar), access-pattern audit (May), `96b5e86` +
+`d95bea4` (Jun 9), `b43cfb6` (Jun 10). Each was latent until corpus/throughput
+crossed its threshold; the patent bot + lossless ingester crossed ~five
+thresholds in one week.
+
+### rules going forward
+
+1. When fixing either class, grep for every sibling in the codebase before
+   committing — the class recurs because instances get fixed in isolation.
+2. Verification must include *freshness* invariants ("a doc published N
+   minutes ago is searchable"), not just endpoint latency. The watchdog was
+   right while the soaks were green.
+3. The queued architecture work IS the class-level fix: snapshot-swap replica
+   (kills Class 1 on the read path), rowid FTS + paginated/offline everything
+   (kills Class 2's worst instances), socket deadlines post-otel-fix (kills
+   Class 1's remote half). They are prerequisites for the backfill, not
+   nice-to-haves.
