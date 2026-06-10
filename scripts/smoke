@@ -1,0 +1,63 @@
+#!/bin/sh
+# Production smoke test — THE definition of "prod is healthy".
+#
+#   scripts/smoke          fast mode (~30s): full check once
+#   scripts/smoke soak     sustained (5min): catches periodic flaps
+#
+# Checks the EXACT request set the frontends make (see dashboard.js,
+# index.html), not a sample. Bodies are inspected, not just status codes
+# (Pages serves the SPA as a fake 200 for unknown paths — never trust a
+# status code you haven't read the body of). Exit 0 = healthy.
+
+set -u
+BASE="https://leaflet-search-backend.fly.dev"
+BUDGET=3   # seconds — anything slower than this is degraded, full stop
+FAILS=0
+
+probe() {
+  ep="$1"; want="$2"
+  body=$(curl -s --max-time "$BUDGET" -w '\n%{http_code} %{time_total}' "$BASE/$ep" 2>/dev/null)
+  meta=$(printf '%s' "$body" | tail -1)
+  code=${meta%% *}; t=${meta##* }
+  payload=$(printf '%s' "$body" | head -c 100)
+  if [ "$code" != "200" ]; then
+    echo "FAIL /$ep -> ${code:-timeout} (${t:->$BUDGET}s)"; FAILS=$((FAILS+1)); return
+  fi
+  case "$payload" in
+    *"$want"*) echo "ok   /$ep ${t}s" ;;
+    *) echo "FAIL /$ep 200 but body wrong: $(printf '%s' "$payload" | head -c 60)"; FAILS=$((FAILS+1)) ;;
+  esac
+}
+
+round() {
+  # search modes — the product
+  probe "search?q=test&mode=keyword"   '"uri"'
+  probe "search?q=test&mode=semantic"  '"uri"'
+  probe "search?q=test&mode=hybrid"    '"uri"'
+  probe "search?q=&mode=keyword"       '"uri"'        # homepage browse
+  # stats page request set (dashboard.js)
+  probe "api/dashboard"                '"startedAt"'
+  probe "api/timeline?range=30d"       '"points"'
+  probe "api/latency?range=24h"        '"endpoints"'
+  probe "activity"                     '0'
+  probe "stats"                        '"documents"'
+  probe "tags?format=v2"               '"tag"'
+  probe "popular?format=v2"            '"'
+  # parallel burst — pages fetch concurrently
+  for ep in "api/dashboard" "api/timeline?range=30d" "stats" "search?q=atproto&mode=keyword"; do
+    ( c=$(curl -s -o /dev/null --max-time "$BUDGET" -w '%{http_code}' "$BASE/$ep" 2>/dev/null)
+      [ "$c" != "200" ] && echo "FAIL parallel /$ep -> ${c:-timeout}" ) &
+  done
+  wait
+}
+
+if [ "${1:-}" = "soak" ]; then
+  i=0
+  while [ $i -lt 10 ]; do
+    i=$((i+1)); echo "--- round $i ---"; round; sleep 25
+  done
+else
+  round
+fi
+
+if [ "$FAILS" = "0" ]; then echo "SMOKE PASS"; else echo "SMOKE FAIL: $FAILS"; exit 1; fi
