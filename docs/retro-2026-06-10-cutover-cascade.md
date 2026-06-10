@@ -171,3 +171,61 @@ thresholds in one week.
    (kills Class 2's worst instances), socket deadlines post-otel-fix (kills
    Class 1's remote half). They are prerequisites for the backfill, not
    nice-to-haves.
+
+## addendum 3 (the second wave): the sync stall and the kill switch
+
+At 07:34 one incremental sync cycle failed transiently. The retry design
+refetched the entire missed window in one unbounded query; the window grew for
+seven hours until it was structurally unfetchable, and every 5-minute retry
+ground the box while user-facing reads timed out. The fix chain that followed
+— keyset pagination (`b43cfb6`), the composite index it needed (turso had NO
+index on `documents.indexed_at`; every sync query since January was a full
+scan), payload-bounded 100-row pages (patent docs average ~24KB; 2,000-row
+pages were 47MB responses that stall the backend's http path) — each removed a
+real obstacle, and the drain STILL degraded serving, because the drain and the
+readers share a box, a file, and a page cache.
+
+Resolution: `SYNC_DISABLE=1` (machine env + fly.toml). The serving box now has
+**zero background writers** — stale-but-fast, per the operating rule that ended
+the incident: **background data movement must never interrupt serving.** The
+replica catch-up runs off-box (`scripts/offline-replica-catchup`) and ships as
+a finished file. In-place incremental sync is dead; the snapshot architecture
+(see `docs/scaling-plan.md`) replaces it.
+
+### the verification standard (learned the hard way, twice)
+
+"Stable" claims require ALL of:
+1. The exact request set the browser makes (read the frontend source), not a
+   representative sample — bodies inspected, not status codes (Pages returns
+   the SPA as a fake 200 for unknown paths).
+2. Both IP stacks; CORS headers when cross-origin.
+3. Parallel bursts (pages fetch concurrently), not serial probes.
+4. Sustained windows spanning multiple background-cycle periods — flapping
+   systems look healthy between beats.
+5. Freshness invariants, not just latency ("a doc published N minutes ago is
+   searchable") — the CI watchdog measured this and was right while latency
+   probes were green.
+
+## addendum 4: the last flap, and the clean soak
+
+After the purge + snapshot swap, searches still stalled periodically while
+cached endpoints stayed green. Logfire receipts named it: the cache-refresh
+threads run their "local-first" aggregates (tags GROUP BY: 6.71s max, stats
+counts: 6.01s max) on the SAME single read connection every search uses —
+sqlite serializes per-connection, so every refresh tick convoyed all live
+searches. Fixed with a 4-connection round-robin read pool (WAL supports
+concurrent readers natively; one shared read conn was never necessary).
+
+Final state, certified by a 10-round zero-failure soak:
+- corpus: 41,525 docs, drivepatents purged (tpuf: 25,096 vectors deleted;
+  replica rebuilt offline; turso purge partially complete — remaining rows
+  invisible to serving, cleanup is bookkeeping) and double-banned
+  (ingester + indexer)
+- serving box: no background writers (SYNC_DISABLE pinned), all aggregates
+  cache-served, read pool, 2GB RAM, 3GB volume
+- snapshot pipeline proven end-to-end: offline build → chunked+verified
+  upload → sha256 gate → atomic adopt-on-boot (`local.db.new`)
+- span use-after-free fixed (the crash-looper); otel package still owes a
+  defensive fix upstream
+- freshness: replica refreshed via `scripts/offline-replica-catchup` until
+  the snapshot builder is productized (docs/scaling-plan.md)
