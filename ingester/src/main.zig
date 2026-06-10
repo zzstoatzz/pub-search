@@ -30,6 +30,19 @@ const COLLECTIONS = [_][]const u8{
     "com.whtwnd.blog.entry",
 };
 
+// banned repos: bulk-archive bots that flooded the corpus (96k+ automotive
+// patents, ~44%+ of all docs). decision 2026-06-10: purge and ban entirely.
+const BANNED_DIDS = [_][]const u8{
+    "did:plc:oql6ds5vnff4ugar6rruliwd", // drivepatents.com
+};
+
+fn isBanned(did: []const u8) bool {
+    for (BANNED_DIDS) |b| {
+        if (std.mem.eql(u8, b, did)) return true;
+    }
+    return false;
+}
+
 fn isTracked(collection: []const u8) bool {
     for (COLLECTIONS) |c| {
         if (std.mem.eql(u8, c, collection)) return true;
@@ -93,6 +106,7 @@ const Handler = struct {
 
         switch (event) {
             .commit => |commit| {
+                if (isBanned(commit.repo)) return;
                 var tracked_ops: usize = 0;
                 for (commit.ops) |op| {
                     if (isTracked(op.collection)) tracked_ops += 1;
