@@ -394,6 +394,18 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
 }
 
 fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
+    // FTS delete-by-uri full-scans documents_fts (uri is UNINDEXED — same
+    // pathology as the turso-side indexer fix). Most incremental rows are NEW
+    // docs, so check the PK first (sub-ms) and only pay the scan on real
+    // replacements. Unchecked, a busy cycle held the local write lock for
+    // 300s+ and wedged everything sharing it (2026-06-10 stats/dashboard
+    // outage).
+    var fts_stale = false;
+    if (conn.row("SELECT 1 FROM documents WHERE uri = ?", .{row.text(0)}) catch null) |r| {
+        defer r.deinit();
+        fts_stale = true;
+    }
+
     // insert into main table
     conn.exec(
         \\INSERT OR REPLACE INTO documents
@@ -422,9 +434,11 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
         return err;
     };
 
-    // update FTS
+    // update FTS (scan-on-replace only — see fts_stale above)
     const uri = row.text(0);
-    conn.exec("DELETE FROM documents_fts WHERE uri = ?", .{uri}) catch {};
+    if (fts_stale) {
+        conn.exec("DELETE FROM documents_fts WHERE uri = ?", .{uri}) catch {};
+    }
     conn.exec(
         "INSERT INTO documents_fts (uri, title, content) VALUES (?, ?, ?)",
         .{ uri, row.text(3), row.text(4) },
