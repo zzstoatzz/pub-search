@@ -16,15 +16,27 @@ pub const Stats = struct {
 
 const default_stats: Stats = .{ .documents = 0, .publications = 0, .embeddings = 0, .searches = 0, .errors = 0, .started_at = 0, .cache_hits = 0, .cache_misses = 0 };
 
+// last successful local read. /stats backs the public page footer — a few
+// seconds of staleness is invisible, but a live turso query on the request
+// path can stall for seconds under write pressure (1/60 soak probes,
+// 2026-06-10). plain struct copy guarded by the write being rare and the
+// fields being independently-read counters: a torn read across fields is
+// harmless here.
+var last_good: ?Stats = null;
+
 pub fn getStats() Stats {
     // try local SQLite first (fast)
     if (db.getLocalDb()) |local| {
         if (getStatsLocal(local)) |result| {
+            last_good = result;
             return result;
         } else |_| {}
     }
 
-    // fall back to Turso (slow)
+    // serve slightly-stale counts rather than block on a live turso query
+    if (last_good) |cached| return cached;
+
+    // first-ever read (boot, local not ready yet): turso is the only source
     const c = db.getClient() orelse return default_stats;
 
     var res = c.query(
