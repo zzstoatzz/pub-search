@@ -1,0 +1,118 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""Catch a local-replica sqlite file up to turso, entirely off-box.
+
+Usage:
+  turso db tokens create leaf   # mint a token
+  TURSO_TOKEN=... scripts/offline-replica-catchup local.db [since_iso]
+
+Pages documents from turso via the hrana pipeline API and applies them to
+the given sqlite file with the same write pattern the backend uses
+(INSERT OR REPLACE + existence-gated FTS maintenance). Run while the
+backend has SYNC_DISABLE=1 so the file on the volume is quiescent; then
+upload the result and restart. Production serving is never touched.
+"""
+
+import json
+import os
+import sqlite3
+import sys
+import time
+
+import httpx
+
+TURSO_URL = "https://leaf-zzstoatzz.aws-us-east-1.turso.io/v2/pipeline"
+PAGE = 500
+
+COLS = (
+    "uri, did, rkey, title, content, created_at, publication_uri, platform, "
+    "source_collection, path, base_path, has_publication, indexed_at, embedded_at, "
+    "COALESCE(cover_image,'') , COALESCE(is_bridgyfed,0), COALESCE(url_dead,0)"
+)
+
+
+def hrana(client: httpx.Client, token: str, sql: str, args: list) -> list[list]:
+    r = client.post(
+        TURSO_URL,
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "requests": [
+                {
+                    "type": "execute",
+                    "stmt": {
+                        "sql": sql,
+                        "args": [{"type": "text", "value": str(a)} for a in args],
+                    },
+                },
+                {"type": "close"},
+            ]
+        },
+        timeout=60,
+    )
+    r.raise_for_status()
+    res = r.json()["results"][0]
+    if res["type"] != "ok":
+        raise RuntimeError(json.dumps(res)[:500])
+    rows = res["response"]["result"]["rows"]
+    return [[c.get("value") for c in row] for row in rows]
+
+
+def main() -> None:
+    db_path, since = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "1970-01-01")
+    token = os.environ["TURSO_TOKEN"]
+    db = sqlite3.connect(db_path)
+    db.execute("PRAGMA journal_mode=WAL")
+
+    cursor_at, cursor_uri, total, t0 = since, "", 0, time.time()
+    with httpx.Client() as client:
+        while True:
+            rows = hrana(
+                client,
+                token,
+                f"SELECT {COLS} FROM documents WHERE (indexed_at, uri) > (?, ?) "
+                "ORDER BY indexed_at, uri LIMIT ?",
+                [cursor_at, cursor_uri, PAGE],
+            )
+            if not rows:
+                break
+            for r in rows:
+                uri, title, content = r[0], r[3], r[4]
+                exists = db.execute(
+                    "SELECT 1 FROM documents WHERE uri = ?", (uri,)
+                ).fetchone()
+                db.execute(
+                    "INSERT OR REPLACE INTO documents (uri, did, rkey, title, content,"
+                    " created_at, publication_uri, platform, source_collection, path,"
+                    " base_path, has_publication, indexed_at, embedded_at, cover_image,"
+                    " is_bridgyfed, url_dead)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    r,
+                )
+                if exists:
+                    db.execute("DELETE FROM documents_fts WHERE uri = ?", (uri,))
+                db.execute(
+                    "INSERT INTO documents_fts (uri, title, content) VALUES (?,?,?)",
+                    (uri, title, content),
+                )
+            db.commit()
+            total += len(rows)
+            cursor_at, cursor_uri = rows[-1][12], rows[-1][0]
+            print(f"{total} docs ({time.time()-t0:.0f}s) cursor={cursor_at}", flush=True)
+            if len(rows) < PAGE:
+                break
+
+    # sentinels: row count sane, FTS answers
+    n = db.execute("SELECT count(*) FROM documents").fetchone()[0]
+    fts = db.execute(
+        "SELECT count(*) FROM documents_fts WHERE documents_fts MATCH 'the'"
+    ).fetchone()[0]
+    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    db.close()
+    print(f"DONE: applied {total}, documents={n}, fts-match-sample={fts}")
+
+
+if __name__ == "__main__":
+    main()
