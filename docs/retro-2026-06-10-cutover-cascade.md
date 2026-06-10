@@ -113,3 +113,23 @@ proportional to corpus size.* This night proved the write-path corollary:
 **no per-record ingest operation may do work proportional to corpus size,
 and no request handler may share a lock or a connection pool with one that
 does.** Every wedge tonight was one of those two sentences.
+
+## addendum (06:00 CDT): the last stall was memory pressure
+
+The post-revert soak showed correlated multi-minute stalls of all *local-read*
+endpoints (keyword FTS, /tags, /stats) aligned with heavy sync cycles — while
+cached endpoints stayed green. WAL was healthy (21MB), so the convoy/WAL
+theories died on data. The remaining suspect fit everything: **local.db is
+403MB on what was a 512MB-RAM machine** — a heavy sync cycle's allocations
+evict the page cache out from under every reader, all local reads go slow
+together for the duration, then recover. Light cycles (16s) caused no stalls;
+heavy patent-burst cycles did.
+
+Action taken: machine bumped to 1GB RAM. Verified by a post-bump soak (see
+commit history for the verdict).
+
+**Backfill implication**: tripling the corpus pushes local.db toward ~1GB.
+Before the backfill: extend the volume (1GB → 3GB+), keep RAM ≥ 2x the hot
+working set or accept reader stalls during sync, and consider whether the
+local replica needs full patent *content* at all (FTS needs it; everything
+else doesn't — a contentless-FTS / trimmed-replica design would cap growth).
