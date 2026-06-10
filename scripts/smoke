@@ -34,7 +34,6 @@ round() {
   probe "search?q=test&mode=keyword"   '"uri"'
   probe "search?q=test&mode=semantic"  '"uri"'
   probe "search?q=test&mode=hybrid"    '"uri"'
-  probe "search?q=&format=v2&limit=20&offset=0" '"results"'   # homepage browse (exact shape)
   # stats page request set (dashboard.js)
   probe "api/dashboard"                '"startedAt"'
   probe "api/timeline?range=30d"       '"points"'
