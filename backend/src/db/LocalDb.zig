@@ -9,8 +9,15 @@ const logfire = @import("logfire");
 
 const LocalDb = @This();
 
+const READ_POOL_SIZE = 4;
+
 conn: ?zqlite.Conn = null,
-read_conn: ?zqlite.Conn = null, // separate read connection — never blocked by writes in WAL mode
+read_conn: ?zqlite.Conn = null, // legacy single read conn (kept as pool[0] alias)
+// READ POOL: WAL supports concurrent readers natively. A single shared read
+// connection serializes ALL reads — a 6s cache-refresh GROUP BY convoyed
+// every search behind it, once per refresh tick (2026-06-10, the last flap).
+read_pool: [READ_POOL_SIZE]?zqlite.Conn = .{null} ** READ_POOL_SIZE,
+read_next: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 allocator: Allocator,
 io: Io,
 is_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -116,16 +123,20 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
     _ = self.conn.?.exec("PRAGMA journal_mode=WAL", .{}) catch {};
     _ = self.conn.?.exec("PRAGMA busy_timeout=5000", .{}) catch {};
 
-    // open separate read connection — WAL mode allows concurrent reads + writes
-    self.read_conn = zqlite.open(path, zqlite.OpenFlags.ReadOnly) catch |err| {
-        std.debug.print("local db: failed to open read conn: {}\n", .{err});
-        return err;
-    };
-    _ = self.read_conn.?.exec("PRAGMA busy_timeout=1000", .{}) catch {};
-    // mmap for fast reads — avoids pread() syscalls, uses OS page cache directly
-    _ = self.read_conn.?.exec("PRAGMA mmap_size=268435456", .{}) catch {};
-    // 20MB page cache — keeps FTS5 index pages in memory across queries
-    _ = self.read_conn.?.exec("PRAGMA cache_size=-20000", .{}) catch {};
+    // open the read POOL — WAL mode allows concurrent reads + writes
+    for (&self.read_pool) |*slot| {
+        const rc = zqlite.open(path, zqlite.OpenFlags.ReadOnly) catch |err| {
+            std.debug.print("local db: failed to open read conn: {}\n", .{err});
+            return err;
+        };
+        _ = rc.exec("PRAGMA busy_timeout=1000", .{}) catch {};
+        // mmap for fast reads — avoids pread() syscalls, uses OS page cache directly
+        _ = rc.exec("PRAGMA mmap_size=268435456", .{}) catch {};
+        // 20MB page cache per conn — keeps FTS5 index pages hot across queries
+        _ = rc.exec("PRAGMA cache_size=-20000", .{}) catch {};
+        slot.* = rc;
+    }
+    self.read_conn = self.read_pool[0];
 
     // check integrity - if corrupt, delete and recreate
     if (!self.checkIntegrity()) {
@@ -145,7 +156,10 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
 }
 
 pub fn deinit(self: *LocalDb) void {
-    if (self.read_conn) |c| c.close();
+    for (&self.read_pool) |*slot| {
+        if (slot.*) |c| c.close();
+        slot.* = null;
+    }
     self.read_conn = null;
     if (self.conn) |c| c.close();
     self.conn = null;
@@ -356,7 +370,8 @@ pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
     });
     defer span.end();
 
-    const c = self.read_conn orelse return error.NotOpen;
+    const idx = self.read_next.fetchAdd(1, .monotonic) % READ_POOL_SIZE;
+    const c = self.read_pool[idx] orelse return error.NotOpen;
     const rows = c.rows(sql, args) catch |e| {
         logfire.err("db.local.query failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
