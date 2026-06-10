@@ -4,6 +4,7 @@ primary_region = 'ewr'
 [build]
 
 [env]
+  SYNC_DISABLE = '1'
   TAP_HOST = 'leaflet-search-ingester.internal'
   TAP_PORT = '2480'
   TAP_RELAY_URL = 'https://relay.waow.tech'
