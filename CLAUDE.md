@@ -3,7 +3,9 @@
 ## deployment
 - **backend**: push to `main` touching `backend/**` → auto-deploys via GitHub Actions
 - **frontend**: manual deploy from `site/` directory (`cd site && wrangler pages deploy . --project-name leaflet-search`)
-- **tap**: manual deploy from `tap/` directory (`fly deploy --app leaflet-search-tap`)
+- **tap**: manual deploy from `tap/` directory (`fly deploy --app leaflet-search-tap`) — STOPPED since 2026-06-09 (replaced by ingester; kept for rollback)
+- **ingester**: manual deploy from `ingester/` directory (`cd ingester && fly deploy --app leaflet-search-ingester`)
+- `--app` does NOT protect against deploying from the wrong directory — it only renames the target; the config (ports, env, mounts) still comes from that directory's `fly.toml`. Always `cd` into the app dir first. (2026-06-10: root-dir deploy with `--app leaflet-search-ingester` was stopped only by a volume-name mismatch.)
 
 ## remotes
 - `origin`: tangled.sh:zzstoatzz.io/leaflet-search
