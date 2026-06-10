@@ -66,7 +66,34 @@ pub fn open(self: *LocalDb) !void {
     const path_env = if (std.c.getenv("LOCAL_DB_PATH")) |p| std.mem.span(p) else "/data/local.db";
     self.path = path_env;
 
+    adoptPending(path_env);
     try self.openDb(path_env, false);
+}
+
+/// Snapshot adoption: if `<path>.new` exists at boot, rename it over the live
+/// file (plus clear stale WAL/SHM) before opening. This is how offline-built
+/// replicas ship: upload as .new while the old process serves, restart, and
+/// the swap is atomic — the serving path never coexists with a bulk writer.
+fn adoptPending(path_env: []const u8) void {
+    var new_buf: [256]u8 = undefined;
+    const new_path = std.fmt.bufPrintZ(&new_buf, "{s}.new", .{path_env}) catch return;
+    var cur_buf: [256]u8 = undefined;
+    const cur_path = std.fmt.bufPrintZ(&cur_buf, "{s}", .{path_env}) catch return;
+
+    const fd = std.c.open(new_path.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    if (fd < 0) return; // nothing pending
+    _ = std.c.close(fd);
+
+    var aux_buf: [264]u8 = undefined;
+    inline for (.{ "-wal", "-shm" }) |suffix| {
+        const aux = std.fmt.bufPrintZ(&aux_buf, "{s}{s}", .{ path_env, suffix }) catch return;
+        _ = std.c.unlink(aux.ptr);
+    }
+    if (std.c.rename(new_path.ptr, cur_path.ptr) == 0) {
+        std.debug.print("local db: adopted pending snapshot {s}\n", .{new_path});
+    } else {
+        std.debug.print("local db: snapshot adopt FAILED, serving existing file\n", .{});
+    }
 }
 
 fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {

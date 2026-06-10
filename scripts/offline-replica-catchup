@@ -73,6 +73,7 @@ def main() -> None:
                 client,
                 token,
                 f"SELECT {COLS} FROM documents WHERE (indexed_at, uri) > (?, ?) "
+                "AND did != 'did:plc:oql6ds5vnff4ugar6rruliwd' "
                 "ORDER BY indexed_at, uri LIMIT ?",
                 [cursor_at, cursor_uri, PAGE],
             )

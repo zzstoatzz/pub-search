@@ -59,6 +59,13 @@ pub fn insertDocument(
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
+    // banned bulk-archive repos (purged 2026-06-10): second gate behind the
+    // ingester's ban — nothing reinserts these, not even replays or backfills.
+    if (std.mem.eql(u8, did, "did:plc:oql6ds5vnff4ugar6rruliwd")) {
+        logfire.span("tap.dropped", .{ .reason = "banned_did", .uri = uri }).end();
+        return;
+    }
+
     // dedupe: if (did, rkey) exists with different uri, clean up old record first
     // this handles cross-collection duplicates (e.g., pub.leaflet.document + site.standard.document)
     var doc_exists = false;
@@ -289,6 +296,13 @@ pub fn insertPublication(
     base_path: ?[]const u8,
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
+
+    // banned bulk-archive repos (purged 2026-06-10): second gate behind the
+    // ingester's ban — nothing reinserts these, not even replays or backfills.
+    if (std.mem.eql(u8, did, "did:plc:oql6ds5vnff4ugar6rruliwd")) {
+        logfire.span("tap.dropped", .{ .reason = "banned_did", .uri = uri }).end();
+        return;
+    }
 
     // dedupe: if (did, rkey) exists with different uri, clean up old record first
     if (c.query("SELECT uri FROM publications WHERE did = ? AND rkey = ?", &.{ did, rkey })) |result_val| {

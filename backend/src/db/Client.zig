@@ -240,7 +240,10 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
         logfire.err("{s} turso error: {} | sql: {s} | response: {s}", .{ span_name, res.status, truncated, resp_preview });
         span.recordError(error.TursoError);
         span.setAttribute("turso.status", @intFromEnum(res.status));
-        span.setAttribute("turso.response", resp_preview);
+        // NEVER attach resp_preview to the span: it's freed by the defer
+        // above before `defer span.end()` (declared earlier, runs later)
+        // deep-copies attributes — use-after-free, segfault, process death.
+        // The log line above carries the preview; the span gets the status.
         return error.TursoError;
     }
 
