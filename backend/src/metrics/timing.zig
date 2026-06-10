@@ -108,6 +108,25 @@ var initialized: bool = false;
 
 pub fn setIo(io: Io) void {
     global_io = io;
+    // background persist: timing files flush every 30s, NOT per request.
+    // persisting inside record() put two fly-volume file writes under a
+    // global mutex on EVERY request — a volume latency spike serialized the
+    // entire process (all endpoints stalling together, 2026-06-10). Worst
+    // case now: 30s of latency samples lost on a crash.
+    const t = std.Thread.spawn(.{}, persistLoop, .{}) catch return;
+    t.detach();
+}
+
+fn persistLoop() void {
+    const io = getIo();
+    while (true) {
+        io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
+        mutex.lockUncancelable(io);
+        defer mutex.unlock(io);
+        if (!initialized) continue;
+        persistLocked();
+        persistHourlyLocked();
+    }
 }
 
 fn getIo() Io {
@@ -148,10 +167,9 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
     const ep_idx = @intFromEnum(endpoint);
     buffers[ep_idx].record(elapsed_us);
     hourly[ep_idx][hour_idx].record(current_hour, elapsed_us);
-
-    // persist immediately
-    persistLocked();
-    persistHourlyLocked();
+    // memory-only: persistence happens on the background loop (see setIo).
+    // NEVER do file/network I/O here — every handler runs through this
+    // mutex on every request.
 }
 
 fn loadLocked() void {
