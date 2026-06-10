@@ -287,6 +287,10 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
     // structurally unfetchable (7h stall + memory churn, 2026-06-10). Pages
     // are bounded regardless of how far behind we are, and each page holds
     // the local write lock only briefly.
+    //
+    // PAGE_SIZE is set by payload, not row count: patent docs average ~24KB,
+    // and responses beyond tens of MB stall the backend's http path (turso
+    // itself serves them in ~1s — measured). 100 rows ≈ 2.5MB per page.
     var new_docs: usize = 0;
     {
         var cursor_at_buf: [40]u8 = undefined;
@@ -303,7 +307,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
                 \\FROM documents
                 \\WHERE (indexed_at, uri) > (?, ?)
                 \\ORDER BY indexed_at, uri
-                \\LIMIT 2000
+                \\LIMIT 100
             , &.{ cursor_at, cursor_uri }) catch |err| {
                 logfire.warn("sync: incremental query failed (after {d} docs this cycle): {}", .{ new_docs, err });
                 sync_span.recordError(err);
@@ -327,7 +331,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             cursor_at = std.fmt.bufPrint(&cursor_at_buf, "{s}", .{last.text(12)}) catch break;
             cursor_uri = std.fmt.bufPrint(&cursor_uri_buf, "{s}", .{last.text(0)}) catch break;
 
-            if (result.rows.len < 2000) break;
+            if (result.rows.len < 100) break;
         }
 
         // update sync time only after the full window landed
