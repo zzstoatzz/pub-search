@@ -35,12 +35,19 @@ pub const Channel = struct {
     locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     conns: [MAX_CLIENTS]?*ws.Conn = .{null} ** MAX_CLIENTS,
     acks: u64 = 0,
-    // FIFO ring of frames buffered while no client is connected.
-    ring: [RING_SLOTS]?[]u8 = .{null} ** RING_SLOTS,
+    // FIFO ring of frames buffered while no client is connected. Entries keep
+    // their firehose seq so the cursor checkpoint can refuse to advance past
+    // undelivered work (see pendingSeq).
+    ring: [RING_SLOTS]?Entry = .{null} ** RING_SLOTS,
     ring_tail: usize = 0, // oldest frame
     ring_len: usize = 0,
     ring_bytes: usize = 0,
     ring_dropped: u64 = 0,
+
+    const Entry = struct {
+        frame: []u8,
+        seq: i64,
+    };
 
     fn lock(self: *Channel) void {
         while (self.locked.swap(true, .acquire)) std.atomic.spinLoopHint();
@@ -79,7 +86,7 @@ pub const Channel = struct {
 
     /// Write a pre-serialized frame to every connected client, or buffer it in
     /// the ring when none is connected. Prunes any conn whose write fails.
-    pub fn broadcast(self: *Channel, frame: []const u8) usize {
+    pub fn broadcast(self: *Channel, frame: []const u8, seq: i64) usize {
         self.lock();
         defer self.unlock();
         var n: usize = 0;
@@ -92,23 +99,42 @@ pub const Channel = struct {
                 n += 1;
             }
         }
-        if (n == 0) self.buffer(frame);
+        if (n == 0) self.buffer(frame, seq);
         return n;
+    }
+
+    /// Oldest undelivered seq, or null when nothing is buffered. The cursor
+    /// checkpoint must not advance past this: the spec's contract is "last
+    /// sequence number received AND successfully processed", and for a
+    /// forwarder "processed" means delivered, not read off the relay.
+    /// (2026-06-09: checkpointing the read position lost 351 events — ring
+    /// died with a restart and the resume skipped straight over them.)
+    pub fn pendingSeq(self: *Channel) ?i64 {
+        self.lock();
+        defer self.unlock();
+        if (self.ring_len == 0) return null;
+        return self.ring[self.ring_tail].?.seq;
     }
 
     /// Copy a frame into the ring, evicting oldest frames to stay within the
     /// slot and byte budgets. Caller holds the lock.
-    fn buffer(self: *Channel, frame: []const u8) void {
+    fn buffer(self: *Channel, frame: []const u8, seq: i64) void {
         while (self.ring_len > 0 and (self.ring_len == RING_SLOTS or self.ring_bytes + frame.len > RING_MAX_BYTES)) {
+            // overflow loses the evicted frame for this process's lifetime —
+            // but the durable cursor is pinned at/before it, so a restart
+            // replays it from the relay. Surface loudly anyway.
             self.evictOldest();
             self.ring_dropped += 1;
+            if (self.ring_dropped == 1 or self.ring_dropped % 1000 == 0) {
+                logfire.warn("channel: ring overflow, {d} frame(s) evicted undelivered (restart replays them from the relay)", .{self.ring_dropped});
+            }
         }
         const copy = self.allocator.dupe(u8, frame) catch {
             self.ring_dropped += 1;
             return;
         };
         const head = (self.ring_tail + self.ring_len) % RING_SLOTS;
-        self.ring[head] = copy;
+        self.ring[head] = .{ .frame = copy, .seq = seq };
         self.ring_len += 1;
         self.ring_bytes += copy.len;
     }
@@ -118,8 +144,8 @@ pub const Channel = struct {
     /// the lock.
     fn drainTo(self: *Channel, conn: *ws.Conn) void {
         while (self.ring_len > 0) {
-            const frame = self.ring[self.ring_tail].?;
-            conn.write(frame) catch {
+            const entry = self.ring[self.ring_tail].?;
+            conn.write(entry.frame) catch {
                 for (&self.conns) |*slot| {
                     if (slot.* == conn) slot.* = null;
                 }
@@ -128,8 +154,8 @@ pub const Channel = struct {
             self.ring[self.ring_tail] = null;
             self.ring_tail = (self.ring_tail + 1) % RING_SLOTS;
             self.ring_len -= 1;
-            self.ring_bytes -= frame.len;
-            self.allocator.free(frame);
+            self.ring_bytes -= entry.frame.len;
+            self.allocator.free(entry.frame);
         }
     }
 
@@ -150,9 +176,9 @@ pub const Channel = struct {
     }
 
     fn evictOldest(self: *Channel) void {
-        const frame = self.ring[self.ring_tail].?;
-        self.ring_bytes -= frame.len;
-        self.allocator.free(frame);
+        const entry = self.ring[self.ring_tail].?;
+        self.ring_bytes -= entry.frame.len;
+        self.allocator.free(entry.frame);
         self.ring[self.ring_tail] = null;
         self.ring_tail = (self.ring_tail + 1) % RING_SLOTS;
         self.ring_len -= 1;

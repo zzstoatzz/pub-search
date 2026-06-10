@@ -121,10 +121,16 @@ const Handler = struct {
         }
 
         if (self.events % CURSOR_PERSIST_EVERY == 0) {
-            persistCursor(self.cursor_path, self.last_seq);
-            logfire.debug("ingester progress: events={d} matched={d} seq={d} verified={d} sig_only={d} rejected={d} unresolvable={d}", .{
-                self.events,            self.matched,            self.last_seq,          self.verifier.verified,
-                self.verifier.sig_only, self.verifier.rejected, self.verifier.unresolvable,
+            // checkpoint = delivery position, not read position (event-stream
+            // spec: "last sequence number received and successfully
+            // processed"). While frames sit undelivered in the ring, pin the
+            // durable cursor just before the oldest one so a restart replays
+            // them from the relay; the backend's upserts absorb duplicates.
+            const checkpoint = if (self.channel.pendingSeq()) |pending| pending - 1 else self.last_seq;
+            persistCursor(self.cursor_path, checkpoint);
+            logfire.debug("ingester progress: events={d} matched={d} seq={d} checkpoint={d} verified={d} sig_only={d} rejected={d} unresolvable={d}", .{
+                self.events,            self.matched,            self.last_seq,          checkpoint,
+                self.verifier.verified, self.verifier.sig_only, self.verifier.rejected, self.verifier.unresolvable,
             });
         }
     }
@@ -138,7 +144,7 @@ const Handler = struct {
             logfire.warn("channel: frame build failed: {s}", .{@errorName(err)});
             return;
         };
-        _ = self.channel.broadcast(out.written());
+        _ = self.channel.broadcast(out.written(), seq);
     }
 
     pub fn onError(_: *Handler, err: anyerror) void {
