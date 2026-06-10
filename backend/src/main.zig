@@ -123,6 +123,7 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // so leaderboard pages never block user requests on a remote Turso query.
     server.initRecommendedCache(io);
     server.initCuratorsCache(io);
+    server.initDashboardCache(io);
 
     // prune search_events older than 90 days on each boot. Bounded
     // growth + natural privacy hygiene; the popular-searches window is

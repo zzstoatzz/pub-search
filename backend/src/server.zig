@@ -17,6 +17,7 @@ const curators = @import("server/curators.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
+pub const initDashboardCache = dashboard.initCache;
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -634,6 +635,13 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    // background-refreshed snapshot — the page never waits on a live turso
+    // query. Falls through to a live fetch only before the first refresh.
+    if (dashboard.ApiCache.snapshot(.main, alloc) catch null) |body| {
+        try sendJson(request, body);
+        return;
+    }
+
     const data = dashboard.fetch(alloc) catch {
         try sendJson(request, "{\"error\":\"failed to fetch dashboard data\"}");
         return;
@@ -657,6 +665,12 @@ fn handleTimelineApi(request: *http.Server.Request, target: []const u8) !void {
 
     const field_str = parseQueryParam(alloc, target, "field") catch "indexed";
     const field = dashboard.TimelineField.fromString(field_str);
+
+    // background-refreshed snapshot; live fetch only before the first refresh.
+    if (dashboard.TimelineCache.snapshot(dashboard.TimelineSlot.from(range, field), alloc) catch null) |body| {
+        try sendJson(request, body);
+        return;
+    }
 
     const json_response = dashboard.fetchTimeline(alloc, range, field) catch {
         try sendJson(request, "{\"error\":\"failed to fetch timeline\"}");

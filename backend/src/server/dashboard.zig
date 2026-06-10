@@ -6,6 +6,79 @@ const db = @import("../db.zig");
 const logfire = @import("logfire");
 const timing = @import("../metrics.zig").timing;
 const stats_buffer = @import("../metrics.zig").buffer;
+const cache = @import("cache.zig");
+
+/// /api/dashboard is the heaviest live-turso endpoint on the stats page and
+/// the first to flap under ingest write pressure (multi-second, sometimes
+/// timing out — 2026-06-10 outage). Serve it from a background-refreshed
+/// snapshot like /popular; a minute of staleness is invisible on a dashboard.
+const ApiSlot = enum { main };
+
+fn refreshApi(slot: ApiSlot, alloc: Allocator) anyerror![]const u8 {
+    _ = slot;
+    const data = try fetch(alloc);
+    return try toJson(alloc, data);
+}
+
+pub const ApiCache = cache.WindowedJsonCache(ApiSlot, .{
+    .name = "dashboard.api",
+    .refresh = &refreshApi,
+    .interval_ms = 60_000,
+});
+
+/// Timeline chart: same treatment, one slot per (range, field) combination.
+pub const TimelineSlot = enum {
+    d7_indexed,
+    d30_indexed,
+    d90_indexed,
+    y1_indexed,
+    all_time_indexed,
+    d7_created,
+    d30_created,
+    d90_created,
+    y1_created,
+    all_time_created,
+
+    pub fn from(r: TimelineRange, f: TimelineField) TimelineSlot {
+        const base: u4 = switch (r) {
+            .d7 => 0,
+            .d30 => 1,
+            .d90 => 2,
+            .y1 => 3,
+            .all_time => 4,
+        };
+        return @enumFromInt(base + @as(u4, if (f == .created) 5 else 0));
+    }
+
+    fn range(self: TimelineSlot) TimelineRange {
+        return switch (@intFromEnum(self) % 5) {
+            0 => .d7,
+            1 => .d30,
+            2 => .d90,
+            3 => .y1,
+            else => .all_time,
+        };
+    }
+
+    fn field(self: TimelineSlot) TimelineField {
+        return if (@intFromEnum(self) >= 5) .created else .indexed;
+    }
+};
+
+fn refreshTimelineSlot(slot: TimelineSlot, alloc: Allocator) anyerror![]const u8 {
+    return try fetchTimeline(alloc, slot.range(), slot.field());
+}
+
+pub const TimelineCache = cache.WindowedJsonCache(TimelineSlot, .{
+    .name = "dashboard.timeline",
+    .refresh = &refreshTimelineSlot,
+    .interval_ms = 60_000,
+});
+
+pub fn initCache(io: std.Io) void {
+    ApiCache.init(io);
+    TimelineCache.init(io);
+}
 
 // JSON output types
 const TagJson = struct { tag: []const u8, count: i64 };
