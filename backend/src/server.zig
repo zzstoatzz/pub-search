@@ -18,6 +18,24 @@ const curators = @import("server/curators.zig");
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
 pub const initDashboardCache = dashboard.initCache;
+pub const initTagsCache = TagsCache.init;
+
+const server_cache = @import("server/cache.zig");
+
+/// /tags reads local-then-turso live; both stall during sync write bursts
+/// (soak 2026-06-10). Tag aggregates tolerate minutes of staleness.
+const TagsSlot = enum { all };
+
+fn refreshTags(slot: TagsSlot, alloc: Allocator) anyerror![]const u8 {
+    _ = slot;
+    return try getTags(alloc);
+}
+
+const TagsCache = server_cache.WindowedJsonCache(TagsSlot, .{
+    .name = "tags",
+    .refresh = &refreshTags,
+    .interval_ms = 300_000,
+});
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
@@ -202,7 +220,11 @@ fn handleTags(request: *http.Server.Request, target: []const u8, io: Io) !void {
     const alloc = arena.allocator();
 
     const format = parseQueryParam(alloc, target, "format") catch "v1";
-    const tags = try getTags(alloc);
+    // background-refreshed snapshot; live only before the first refresh.
+    const tags = if (TagsCache.snapshot(.all, alloc) catch null) |body|
+        body
+    else
+        try getTags(alloc);
 
     if (mem.eql(u8, format, "v2")) {
         const wrapped = try wrapResponse(alloc, tags, "", "tags", 100, 0);

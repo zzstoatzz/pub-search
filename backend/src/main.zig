@@ -124,6 +124,7 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     server.initRecommendedCache(io);
     server.initCuratorsCache(io);
     server.initDashboardCache(io);
+    server.initTagsCache(io);
 
     // prune search_events older than 90 days on each boot. Bounded
     // growth + natural privacy hygiene; the popular-searches window is
