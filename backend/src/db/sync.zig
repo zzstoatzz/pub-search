@@ -280,33 +280,59 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
     sync_span.setAttribute("since", since_str);
 
     // fetch new documents (use indexed_at, not created_at, because resynced
-    // documents can have old publication dates but recent insertion times)
+    // documents can have old publication dates but recent insertion times).
+    //
+    // Paged via keyset (indexed_at, uri) — an unbounded since-window query
+    // grows without limit while sync keeps failing, until the response is
+    // structurally unfetchable (7h stall + memory churn, 2026-06-10). Pages
+    // are bounded regardless of how far behind we are, and each page holds
+    // the local write lock only briefly.
     var new_docs: usize = 0;
     {
-        var result = turso.query(
-            \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
-            \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at,
-            \\  COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed,
-            \\  COALESCE(url_dead, 0) as url_dead
-            \\FROM documents
-            \\WHERE indexed_at >= ?
-            \\ORDER BY indexed_at
-        , &.{since_str}) catch |err| {
-            logfire.warn("sync: incremental query failed: {}", .{err});
-            sync_span.recordError(err);
-            return;
-        };
-        defer result.deinit();
+        var cursor_at_buf: [40]u8 = undefined;
+        var cursor_uri_buf: [256]u8 = undefined;
+        var cursor_at: []const u8 = std.fmt.bufPrint(&cursor_at_buf, "{s}", .{since_str}) catch since_str;
+        var cursor_uri: []const u8 = "";
 
-        local.lock();
-        defer local.unlock();
+        while (true) {
+            var result = turso.query(
+                \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
+                \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at,
+                \\  COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed,
+                \\  COALESCE(url_dead, 0) as url_dead
+                \\FROM documents
+                \\WHERE (indexed_at, uri) > (?, ?)
+                \\ORDER BY indexed_at, uri
+                \\LIMIT 2000
+            , &.{ cursor_at, cursor_uri }) catch |err| {
+                logfire.warn("sync: incremental query failed (after {d} docs this cycle): {}", .{ new_docs, err });
+                sync_span.recordError(err);
+                return;
+            };
+            defer result.deinit();
 
-        for (result.rows) |row| {
-            insertDocumentLocal(conn, row) catch {};
-            new_docs += 1;
+            if (result.rows.len == 0) break;
+
+            {
+                local.lock();
+                defer local.unlock();
+                for (result.rows) |row| {
+                    insertDocumentLocal(conn, row) catch {};
+                    new_docs += 1;
+                }
+            }
+
+            // advance the keyset cursor past the last row of this page
+            const last = result.rows[result.rows.len - 1];
+            cursor_at = std.fmt.bufPrint(&cursor_at_buf, "{s}", .{last.text(12)}) catch break;
+            cursor_uri = std.fmt.bufPrint(&cursor_uri_buf, "{s}", .{last.text(0)}) catch break;
+
+            if (result.rows.len < 2000) break;
         }
 
-        // update sync time
+        // update sync time only after the full window landed
+        local.lock();
+        defer local.unlock();
         var ts_buf: [20]u8 = undefined;
         const inc_now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(turso.io, .real).nanoseconds, std.time.ns_per_s));
         const ts_str = std.fmt.bufPrint(&ts_buf, "{d}", .{inc_now_s}) catch "0";
