@@ -73,26 +73,44 @@ async def resolve_pds(
     return None
 
 
-def tpuf_query(
-    client: httpx.Client, settings: Settings, filters: list, top_k: int = 10000
-) -> list[dict]:
-    """Query turbopuffer with attribute filters."""
+def tpuf_export_dids(client: httpx.Client, settings: Settings) -> list[dict]:
+    """Page the ENTIRE namespace by id (same pattern as scripts/build-atlas).
+
+    A filtered top_k query maxes at 10k rows and gives no way to see the
+    tail — the 2026-06-10 re-sweep declared victory after one clean 10k page
+    while ~2.4k bridgy/banned vectors sat beyond it (caught because the atlas
+    rebuild, which pages everything, still showed donmai/drivepatents).
+    """
     url = f"https://api.turbopuffer.com/v2/namespaces/{settings.turbopuffer_namespace}/query"
-    resp = client.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {settings.turbopuffer_api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "top_k": top_k,
-            "filters": filters,
+    all_rows: list[dict] = []
+    last_id = None
+    while True:
+        body: dict = {
+            "rank_by": ["id", "asc"],
+            "limit": 10000,
             "include_attributes": ["did"],
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.json().get("rows", [])
+        }
+        if last_id is not None:
+            body["filters"] = ["id", "Gt", last_id]
+        resp = client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {settings.turbopuffer_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        rows = resp.json().get("rows", [])
+        if not rows:
+            break
+        all_rows.extend(rows)
+        last_id = rows[-1]["id"]
+        log(f"  fetched {len(all_rows)} vectors so far...")
+        if len(rows) < 10000:
+            break
+    return all_rows
 
 
 def tpuf_delete(client: httpx.Client, settings: Settings, ids: list[str]) -> None:
@@ -157,80 +175,52 @@ async def main():
     if not args.apply:
         log("=== DRY RUN (pass --apply to delete) ===\n")
 
-    # platform='other' alone (no base_path constraint — the 2026-06 scraper
-    # flood carries real base_paths); the per-DID PDS resolution below is what
-    # decides bridgy vs legit, so this filter is just a candidate pool.
+    # banned bulk-archive bots — purged unconditionally (mirrors the ingester's
+    # BANNED_DIDS list)
+    banned = {"did:plc:oql6ds5vnff4ugar6rruliwd"}  # drivepatents.com
+
     sync_client = httpx.Client()
-    filters = ["platform", "Eq", "other"]
+    log("exporting full namespace (id-keyed pages)...")
+    rows = tpuf_export_dids(sync_client, settings)
+    log(f"  {len(rows)} vectors total")
 
-    # cache: DID -> is_bridgy (persists across rounds)
+    did_to_ids: dict[str, list[str]] = {}
+    for row in rows:
+        did_to_ids.setdefault(row.get("did") or "(missing)", []).append(row["id"])
+    log(f"  {len(did_to_ids)} distinct DIDs")
+
     pds_cache: dict[str, bool] = {}
+    resolvable = [d for d in did_to_ids if d.startswith("did:")]
+    pds_cache = await resolve_new_dids(resolvable, pds_cache)
+
+    ids_to_delete = []
+    bad_dids = 0
+    for did, ids in did_to_ids.items():
+        if did in banned or pds_cache.get(did, False):
+            ids_to_delete.extend(ids)
+            bad_dids += 1
+
+    log(f"\n{bad_dids} banned/bridgy DIDs, {len(ids_to_delete)} vectors to delete")
+
+    if not ids_to_delete:
+        sync_client.close()
+        log("\nnothing to purge!")
+        return
+
+    if not args.apply:
+        sync_client.close()
+        log(f"\nwould delete {len(ids_to_delete)} vectors from {bad_dids} DIDs")
+        return
+
     total_deleted = 0
-    round_num = 0
-
-    while True:
-        round_num += 1
-        log(f"--- round {round_num} ---")
-        log("querying turbopuffer for platform='other'...")
-
-        rows = tpuf_query(sync_client, settings, filters)
-        log(f"  found {len(rows)} vectors")
-
-        if not rows:
-            break
-
-        # collect unique DIDs and map DID -> vector IDs
-        did_to_ids: dict[str, list[str]] = {}
-        for row in rows:
-            did_to_ids.setdefault(row["did"], []).append(row["id"])
-
-        # resolve any new DIDs
-        t0 = time.monotonic()
-        pds_cache = await resolve_new_dids(list(did_to_ids.keys()), pds_cache)
-        elapsed = time.monotonic() - t0
-        if elapsed > 0.1:
-            log(f"  resolved in {elapsed:.1f}s")
-
-        # collect vector IDs for bridgy DIDs
-        ids_to_delete = []
-        for did, ids in did_to_ids.items():
-            if pds_cache.get(did, False):
-                ids_to_delete.extend(ids)
-
-        bridgy_count = sum(1 for d in did_to_ids if pds_cache.get(d, False))
-        log(f"  {bridgy_count} bridgy DIDs, {len(ids_to_delete)} vectors to delete\n")
-
-        if not ids_to_delete:
-            break
-
-        if not args.apply:
-            total_deleted += len(ids_to_delete)
-            # dry run: single pass only (can't paginate without deleting)
-            if len(rows) == 10000:
-                log("  (tpuf capped at 10k — actual count may be higher)")
-            break
-
-        # batch delete
-        for i in range(0, len(ids_to_delete), 500):
-            batch = ids_to_delete[i : i + 500]
-            tpuf_delete(sync_client, settings, batch)
-            total_deleted += len(batch)
-            log(f"  deleted {len(batch)} vectors (total: {total_deleted})")
-
-        # if we got fewer than 10k, we've seen everything
-        if len(rows) < 10000:
-            break
+    for i in range(0, len(ids_to_delete), 500):
+        batch = ids_to_delete[i : i + 500]
+        tpuf_delete(sync_client, settings, batch)
+        total_deleted += len(batch)
+        log(f"  deleted {len(batch)} vectors (total: {total_deleted})")
 
     sync_client.close()
-
-    bridgy_total = sum(1 for v in pds_cache.values() if v)
-    if total_deleted:
-        log(
-            f"\n{'would delete' if not args.apply else 'done! deleted'} "
-            f"{total_deleted} vectors from {bridgy_total} bridgy fed DIDs"
-        )
-    else:
-        log("\nnothing to purge!")
+    log(f"\ndone! deleted {total_deleted} vectors from {bad_dids} DIDs")
 
 
 if __name__ == "__main__":
