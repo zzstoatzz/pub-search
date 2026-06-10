@@ -1,10 +1,11 @@
 name: Ingestion Watchdog
 
-# Pings @zzstoatzz.io on bsky if the tap falls behind the relay (wedged or
-# can't keep pace). Detection-only backstop so a stall can't sit unnoticed —
-# see docs/tap.md (2026-05-27 incident, ~14.5h silent stall).
+# Pings @zzstoatzz.io on bsky if ingestion freshness or serving health fails.
+# Freshness = max(indexed_at) in turso (catches the whole ingest chain dying);
+# serving = backend endpoints with bodies inspected. tap is decommissioned —
+# see docs/retro-2026-06-10-cutover-cascade.md.
 #
-# Requires repo secrets: ATPROTO_HANDLE, ATPROTO_PASSWORD (pub-search bsky app password).
+# Requires repo secrets: ATPROTO_HANDLE, ATPROTO_PASSWORD, TURSO_DB_TOKEN.
 
 on:
   schedule:
@@ -24,4 +25,5 @@ jobs:
         env:
           ATPROTO_HANDLE: ${{ secrets.ATPROTO_HANDLE }}
           ATPROTO_PASSWORD: ${{ secrets.ATPROTO_PASSWORD }}
+          TURSO_DB_TOKEN: ${{ secrets.TURSO_DB_TOKEN }}
         run: ./scripts/ingestion-watchdog

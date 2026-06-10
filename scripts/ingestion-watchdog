@@ -8,60 +8,44 @@
 #     "pydantic-settings",
 # ]
 # ///
-"""
-Watchdog: ping @zzstoatzz.io on bsky when pub-search ingestion is wedged.
+"""pub-search ingestion + serving watchdog.
 
-Checks whether the tap's firehose cursor is ADVANCING. Reads the cursor twice
-over a short window; if it doesn't move (or the stats endpoint is unreachable),
-ingestion is wedged and we post a mention from the pub-search account.
+Two independent checks, both off the serving path's failure domain:
 
-Why advancement, not "behind relay head": the old design subtracted the tap's
-cursor from a hardcoded relay's head seq. That broke every time we switched
-relays — different relays have different seq spaces, so the subtraction became
-meaningless and fired spurious "N billion seq behind" alerts (esp. when tap
-momentarily reports firehose:0 mid-reconnect). Cursor advancement is
-relay-agnostic and reconnect-tolerant, and it directly detects the real failure
-mode: a wedged tap whose cursor is frozen.
+1. FRESHNESS (turso): `max(indexed_at)` must be younger than
+   FRESHNESS_ALERT_MINUTES. Catches the whole ingest chain being dead —
+   ingester down, /channel wedged, backend worker stalled — regardless of
+   which component ate it. This is the check that correctly detected the
+   2026-06-10 seven-hour stall while latency probes were green.
+2. SERVING (backend): /stats and a real keyword search must return 200 with
+   sane bodies within 5s. Status codes alone are NOT trusted (Pages serves
+   fake 200s; see docs/retro-2026-06-10-cutover-cascade.md).
 
-Background: 2026-05-27 a relay rebuild wedged the tap and ingestion was dead for
-~14.5h before anyone noticed (cursor frozen the whole time). See docs/tap.md.
+tap is GONE (replaced by the ingester 2026-06-09; machine stopped with
+autostart disabled). The old tap-outbox/cursor checks alerted on a zombie
+machine that fly auto-started whenever this watchdog probed it.
 
-Creds: ATPROTO_HANDLE / ATPROTO_PASSWORD (from .env, or env / ENV_FILE).
+Requires: ATPROTO_HANDLE, ATPROTO_PASSWORD, TURSO_DB_TOKEN.
 
 Usage:
     ./scripts/ingestion-watchdog                 # check; post only if stalled
-    ./scripts/ingestion-watchdog --test          # post a wiring-test mention, then delete it
-    ./scripts/ingestion-watchdog --window 25     # seconds between cursor reads
+    ./scripts/ingestion-watchdog --test          # wiring test post (auto-deletes)
 """
 
 import argparse
 import datetime
 import os
 import sys
-import time
 
 import httpx
 from atproto import Client, client_utils
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-TAP_CURSORS = "https://leaflet-search-tap.fly.dev/stats/cursors"
-TAP_OUTBOX = "https://leaflet-search-tap.fly.dev/stats/outbox-buffer"
 ALERT_HANDLE = "zzstoatzz.io"
-# substring used to recognize our own prior alerts (dedup) — keep in the message
 ALERT_MARKER = "pub-search ingestion looks stalled"
-# seconds to wait between the two cursor reads. A healthy tap advances its
-# firehose cursor continuously; a wedged one stays put.
-DEFAULT_WINDOW_SECS = 25
-# tap reports firehose:0 briefly while reconnecting to the relay. Re-poll across
-# this window before treating a 0/None as real, so a reconnect blip never alerts.
-_RECONNECT_RETRY_SECS = 20
-# Outbox = events tap holds pending ACK from our backend (the /channel consumer).
-# Healthy is ~0 (backend ACKs continuously). Sustained high = backend not
-# consuming — a wedged /channel handshake or a stalled backend — which the
-# cursor-advancement check CANNOT see (tap keeps reading the relay fine while
-# nothing reaches the backend; see the 0.1.10 incident). TAP_OUTBOX_CAPACITY is
-# 10000; alert well above noise and only when it's NOT draining across the window.
-OUTBOX_ALERT_THRESHOLD = 1000
+BACKEND = "https://leaflet-search-backend.fly.dev"
+TURSO_URL = "https://leaf-zzstoatzz.aws-us-east-1.turso.io/v2/pipeline"
+FRESHNESS_ALERT_MINUTES = 60
 
 
 class Settings(BaseSettings):
@@ -70,87 +54,60 @@ class Settings(BaseSettings):
     )
     atproto_handle: str = ""
     atproto_password: str = ""
+    turso_db_token: str = ""
 
 
-def _tap_seq_raw() -> int | None:
-    r = httpx.get(TAP_CURSORS, timeout=15)
+def _max_indexed_at(token: str) -> str:
+    r = httpx.post(
+        TURSO_URL,
+        headers={"Authorization": f"Bearer {token}"},
+        json={"requests": [
+            {"type": "execute", "stmt": {"sql": "SELECT max(indexed_at) FROM documents"}},
+            {"type": "close"},
+        ]},
+        timeout=20,
+    )
     r.raise_for_status()
-    return r.json().get("firehose")
-
-
-def _tap_seq_live() -> int | None:
-    """tap firehose cursor, tolerating reconnect blips (firehose:0/None).
-
-    Re-polls for up to _RECONNECT_RETRY_SECS so a momentary reconnect (cursor
-    reads 0 until the first frame is processed) isn't mistaken for a wedge.
-    Returns a positive seq, or None if it stays 0/None for the whole window.
-    """
-    deadline = time.monotonic() + _RECONNECT_RETRY_SECS
-    while True:
-        seq = _tap_seq_raw()
-        if seq:  # nonzero, non-None
-            return seq
-        if time.monotonic() >= deadline:
-            return None
-        time.sleep(5)
-
-
-def _outbox() -> int | None:
-    """tap outbox depth (events pending ACK from the backend). None on failure —
-    treated as 'skip the outbox check', never an alert by itself."""
-    try:
-        r = httpx.get(TAP_OUTBOX, timeout=15)
-        r.raise_for_status()
-        return r.json().get("outbox_buffer")
-    except Exception:
-        return None
+    return r.json()["results"][0]["response"]["result"]["rows"][0][0]["value"]
 
 
 def check(window_secs: int) -> tuple[bool, str]:
-    # sample both links at two points across the window:
-    #   firehose cursor  → relay → tap   (must advance)
-    #   outbox depth     → tap → backend (must not be sustained-high & not draining)
-    try:
-        seq1 = _tap_seq_live()
-    except Exception as e:
-        return True, f"tap /stats/cursors unreachable: {e!r}"
-    if seq1 is None:
-        return True, "firehose cursor stuck at 0 (reconnect-looping or not processing)"
-    out1 = _outbox()
+    del window_secs  # single-shot checks; kept for CLI compat
+    problems = []
 
-    time.sleep(window_secs)
+    # 1. ingestion freshness via turso
+    settings = Settings()
+    token = getattr(settings, "turso_db_token", None)
+    if token:
+        try:
+            newest = _max_indexed_at(token)
+            age_min = (
+                datetime.datetime.now(datetime.timezone.utc)
+                - datetime.datetime.fromisoformat(newest).replace(tzinfo=datetime.timezone.utc)
+            ).total_seconds() / 60
+            if age_min > FRESHNESS_ALERT_MINUTES:
+                problems.append(f"no new docs indexed in {age_min:.0f}m (newest: {newest})")
+            else:
+                print(f"freshness ok: newest doc {age_min:.0f}m old")
+        except Exception as e:
+            problems.append(f"turso freshness check failed: {e!r}")
+    else:
+        print("TURSO_DB_TOKEN not set — skipping freshness check")
 
-    try:
-        seq2 = _tap_seq_live()
-    except Exception as e:
-        return True, f"tap /stats/cursors unreachable: {e!r}"
-    if seq2 is None:
-        return True, "firehose cursor stuck at 0 (reconnect-looping or not processing)"
-    out2 = _outbox()
+    # 2. serving health, bodies inspected
+    for path, want in [("/stats", '"documents"'), ("/search?q=atproto&mode=keyword", '"uri"')]:
+        try:
+            r = httpx.get(BACKEND + path, timeout=5)
+            if r.status_code != 200 or want not in r.text[:500]:
+                problems.append(f"{path} -> {r.status_code}, body unexpected")
+            else:
+                print(f"serving ok: {path}")
+        except Exception as e:
+            problems.append(f"{path} -> {e!r}")
 
-    # relay → tap: cursor must be moving
-    advanced = seq2 - seq1
-    if advanced <= 0:
-        return True, f"firehose cursor not advancing — frozen at {seq1:,} over {window_secs}s (wedged)"
-
-    # tap → backend: outbox sustained-high AND not draining = backend not consuming.
-    # require both reads valid + above threshold + non-decreasing, so a transient
-    # burst (that drains) doesn't fire. Independent of the cursor — this is the
-    # failure cursor-advancement is blind to.
-    if (
-        out1 is not None
-        and out2 is not None
-        and out1 >= OUTBOX_ALERT_THRESHOLD
-        and out2 >= OUTBOX_ALERT_THRESHOLD
-        and out2 >= out1
-    ):
-        return True, (
-            f"tap outbox not draining — {out1:,}→{out2:,} pending ACK over {window_secs}s "
-            f"(backend not consuming / wedged /channel)"
-        )
-
-    rate = advanced // window_secs
-    return False, f"healthy: firehose advancing (~{rate:,}/s), outbox {out2 if out2 is not None else '?'} pending"
+    if problems:
+        return True, "; ".join(problems)
+    return False, "healthy: ingestion fresh, serving green"
 
 
 def _post(client: Client, target_did: str, message: str):
@@ -188,7 +145,7 @@ def _alerted_within(client: Client, hours: int) -> bool:
 def main() -> None:
     ap = argparse.ArgumentParser(description="pub-search ingestion watchdog")
     ap.add_argument("--test", action="store_true", help="post a wiring-test mention, then delete it")
-    ap.add_argument("--window", type=int, default=DEFAULT_WINDOW_SECS, help="seconds between the two cursor reads")
+    ap.add_argument("--window", type=int, default=0, help="(unused, kept for CLI compat)")
     ap.add_argument("--dedup-hours", type=int, default=3, help="suppress repeat alerts within this window")
     args = ap.parse_args()
 
@@ -214,7 +171,7 @@ def main() -> None:
         if _alerted_within(client, args.dedup_hours):
             print(f"stalled, but already alerted within {args.dedup_hours}h — not reposting")
         else:
-            resp = _post(client, target_did, f"⚠️ {ALERT_MARKER} — {detail}. check leaflet-search-tap.fly.dev")
+            resp = _post(client, target_did, f"⚠️ {ALERT_MARKER} — {detail}. check logfire + fly logs -a leaflet-search-backend")
             print(f"ALERT posted: {resp.uri}")
         sys.exit(1)
 
