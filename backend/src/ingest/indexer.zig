@@ -61,6 +61,7 @@ pub fn insertDocument(
 
     // dedupe: if (did, rkey) exists with different uri, clean up old record first
     // this handles cross-collection duplicates (e.g., pub.leaflet.document + site.standard.document)
+    var doc_exists = false;
     if (c.query("SELECT uri FROM documents WHERE did = ? AND rkey = ?", &.{ did, rkey })) |result_val| {
         var result = result_val;
         defer result.deinit();
@@ -70,6 +71,8 @@ pub fn insertDocument(
                 c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{old_uri}) catch {};
                 c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{old_uri}) catch {};
                 c.exec("DELETE FROM documents WHERE uri = ?", &.{old_uri}) catch {};
+            } else {
+                doc_exists = true;
             }
         }
     } else |_| {}
@@ -255,8 +258,13 @@ pub fn insertDocument(
         &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "", is_bridgyfed, content_type orelse "" },
     );
 
-    // update FTS index
-    c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
+    // update FTS index. `uri` is UNINDEXED in documents_fts, so this DELETE
+    // full-scans the whole FTS table on remote turso (~16s at 42k docs) — it
+    // was silently the entire indexing budget. Only pay it when this uri
+    // actually has a row to replace; creates (the vast majority) skip it.
+    if (doc_exists) {
+        c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
+    }
     c.exec(
         "INSERT INTO documents_fts (uri, title, content) VALUES (?, ?, ?)",
         &.{ uri, title, content },
