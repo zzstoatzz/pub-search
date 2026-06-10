@@ -298,7 +298,10 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
         var cursor_at: []const u8 = std.fmt.bufPrint(&cursor_at_buf, "{s}", .{since_str}) catch since_str;
         var cursor_uri: []const u8 = "";
 
+        var page_n: usize = 0;
         while (true) {
+            page_n += 1;
+            std.debug.print("sync: fetching page {d} (cursor {s})\n", .{ page_n, cursor_at });
             var result = turso.query(
                 \\SELECT uri, did, rkey, title, content, created_at, publication_uri,
                 \\  platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at,
@@ -315,6 +318,7 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
             };
             defer result.deinit();
 
+            std.debug.print("sync: page {d} -> {d} rows\n", .{ page_n, result.rows.len });
             if (result.rows.len == 0) break;
 
             {
