@@ -1,0 +1,89 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""Purge bridgy fed content from a LOCAL replica sqlite file, offline.
+
+Same policy as purge-bridgyfed (turso) but for a downloaded local.db:
+discover distinct DIDs with platform='other', resolve their PDS, delete
+everything for brid.gy-hosted DIDs. Full-table FTS scans are fine here —
+the file is off-box, production never sees this run.
+
+Usage:
+    scripts/purge-bridgyfed-local local.db          # dry run
+    scripts/purge-bridgyfed-local local.db --apply
+"""
+
+import asyncio
+import sqlite3
+import sys
+
+import httpx
+
+
+async def resolve_pds(client: httpx.AsyncClient, did: str, sem: asyncio.Semaphore) -> str | None:
+    async with sem:
+        try:
+            if did.startswith("did:web:"):
+                url = f"https://{did[len('did:web:'):]}/.well-known/did.json"
+            else:
+                url = f"https://plc.directory/{did}"
+            resp = await client.get(url, timeout=30)
+            resp.raise_for_status()
+            for service in resp.json().get("service", []):
+                if service.get("type") == "AtprotoPersonalDataServer":
+                    return service["serviceEndpoint"]
+        except Exception as e:
+            print(f"  lookup failed for {did}: {e}", file=sys.stderr, flush=True)
+    return None
+
+
+async def main() -> None:
+    db_path = sys.argv[1]
+    apply = "--apply" in sys.argv
+
+    db = sqlite3.connect(db_path)
+    dids = [r[0] for r in db.execute("SELECT DISTINCT did FROM documents WHERE platform = 'other' OR is_bridgyfed IN ('1', 1)")]
+    print(f"{len(dids)} candidate DIDs", flush=True)
+
+    sem = asyncio.Semaphore(20)
+    async with httpx.AsyncClient() as client:
+        results = await asyncio.gather(*[resolve_pds(client, d, sem) for d in dids])
+    bridgy = [d for d, pds in zip(dids, results) if pds and "brid.gy" in pds]
+    print(f"{len(bridgy)} bridgy fed DIDs", flush=True)
+
+    if not bridgy:
+        print("nothing to purge!")
+        return
+
+    n = db.execute(
+        f"SELECT count(*) FROM documents WHERE did IN ({','.join('?' * len(bridgy))})", bridgy
+    ).fetchone()[0]
+    print(f"{n} documents to purge", flush=True)
+
+    if not apply:
+        print("pass --apply to delete")
+        return
+
+    ph = ",".join("?" * len(bridgy))
+    for sql in (
+        f"DELETE FROM document_tags WHERE document_uri IN (SELECT uri FROM documents WHERE did IN ({ph}))",
+        f"DELETE FROM documents_fts WHERE uri IN (SELECT uri FROM documents WHERE did IN ({ph}))",
+        f"DELETE FROM publications_fts WHERE uri IN (SELECT uri FROM publications WHERE did IN ({ph}))",
+        f"DELETE FROM publications WHERE did IN ({ph})",
+        f"DELETE FROM documents WHERE did IN ({ph})",
+    ):
+        cur = db.execute(sql, bridgy)
+        print(f"  {cur.rowcount:>6} rows: {sql[:60]}...", flush=True)
+    db.commit()
+
+    remaining = db.execute("SELECT count(*) FROM documents").fetchone()[0]
+    fts = db.execute("SELECT count(*) FROM documents_fts WHERE documents_fts MATCH 'the'").fetchone()[0]
+    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    db.close()
+    print(f"DONE: {remaining} documents remain, fts-match-sample={fts}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

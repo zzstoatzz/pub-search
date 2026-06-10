@@ -18,17 +18,23 @@ const CachedKey = struct {
     key_type: zat.multicodec.KeyType,
     raw: [33]u8, // compressed public key (secp256k1 or p256)
     len: u8,
+    /// PDS hosted on brid.gy. policy since 7e1f071: bridgy fed content is
+    /// never indexed — tap (indigo) rejected their non-canonical commits as
+    /// a side effect of full MST verification; our sig_only verdict admitted
+    /// them and let ~20k scraper docs/day flood the corpus (2026-06-10).
+    bridged: bool,
 };
 
 /// how a commit passed (or failed) verification.
 pub const Verdict = enum {
     /// signature + MST diff inversion both check out.
     full,
-    /// signature checks out but the MST diff math doesn't — non-canonical
-    /// repo implementations (bridgy fed) and occasional legit-PDS bursts
-    /// land here. authorship is still proven, so records are emitted; the
-    /// backend's reconciler already classifies bridgy separately.
+    /// signature checks out but the MST diff math doesn't — occasional
+    /// legit-PDS bursts land here. authorship is still proven, so records
+    /// are emitted.
     sig_only,
+    /// repo is hosted on brid.gy — dropped before verification, never emitted.
+    bridged,
     /// signature verification failed (or no key / no blocks) — never emitted.
     rejected,
 };
@@ -64,6 +70,14 @@ const ResolveTask = struct {
     }
 };
 
+fn isBridgyPds(endpoint: []const u8) bool {
+    var host = endpoint;
+    if (std.mem.indexOf(u8, host, "://")) |i| host = host[i + 3 ..];
+    if (std.mem.indexOfScalar(u8, host, '/')) |i| host = host[0..i];
+    if (std.mem.indexOfScalar(u8, host, ':')) |i| host = host[0..i];
+    return std.mem.eql(u8, host, "brid.gy") or std.mem.endsWith(u8, host, ".brid.gy");
+}
+
 /// resolve DID -> decoded signing key. fresh resolver per call: a resolver is
 /// not thread-safe and an abandoned (hung) task must not poison a shared one.
 fn resolveKey(io: Io, allocator: std.mem.Allocator, did: []const u8, out: *CachedKey) bool {
@@ -82,7 +96,8 @@ fn resolveKey(io: Io, allocator: std.mem.Allocator, did: []const u8, out: *Cache
     const public_key = zat.multicodec.parsePublicKey(key_bytes) catch return false;
     if (public_key.raw.len > 33) return false;
 
-    out.* = .{ .key_type = public_key.key_type, .raw = undefined, .len = @intCast(public_key.raw.len) };
+    const bridged = if (doc.pdsEndpoint()) |pds| isBridgyPds(pds) else false;
+    out.* = .{ .key_type = public_key.key_type, .raw = undefined, .len = @intCast(public_key.raw.len), .bridged = bridged };
     @memcpy(out.raw[0..public_key.raw.len], public_key.raw);
     return true;
 }
@@ -93,6 +108,7 @@ pub const Verifier = struct {
     cache: std.StringHashMapUnmanaged(CachedKey) = .empty,
     verified: u64 = 0,
     sig_only: u64 = 0,
+    bridged: u64 = 0,
     rejected: u64 = 0,
     unresolvable: u64 = 0,
     last_err: []const u8 = "none",
@@ -122,6 +138,11 @@ pub const Verifier = struct {
             return .rejected;
         };
 
+        if (key.bridged) {
+            self.bridged += 1;
+            return .bridged;
+        }
+
         if (self.verifyWithKey(commit, key)) |verdict| return self.count(verdict);
 
         // signature failure can mean the key rotated since we cached it:
@@ -131,6 +152,10 @@ pub const Verifier = struct {
             self.unresolvable += 1;
             return .rejected;
         };
+        if (fresh.bridged) {
+            self.bridged += 1;
+            return .bridged;
+        }
         if (self.verifyWithKey(commit, fresh)) |verdict| return self.count(verdict);
 
         self.rejected += 1;
@@ -142,7 +167,7 @@ pub const Verifier = struct {
         switch (verdict) {
             .full => self.verified += 1,
             .sig_only => self.sig_only += 1,
-            .rejected => unreachable,
+            .bridged, .rejected => unreachable,
         }
         return verdict;
     }
@@ -172,8 +197,8 @@ pub const Verifier = struct {
             return switch (err) {
                 // MST-math failures surface only after the signature already
                 // verified (step 4 precedes MST load/inversion), so authorship
-                // is proven — non-canonical repos (bridgy fed) and occasional
-                // legit-PDS bursts land here.
+                // is proven — occasional legit-PDS bursts land here (bridgy's
+                // non-canonical repos used to, but they're dropped earlier now).
                 error.PrevDataMismatch,
                 error.InversionMismatch,
                 error.MstRootMismatch,

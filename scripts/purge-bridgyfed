@@ -137,27 +137,47 @@ async def resolve_pds(client: httpx.AsyncClient, did: str, semaphore: asyncio.Se
     return None
 
 
-async def delete_did(
+async def delete_batch(
     client: httpx.AsyncClient,
     settings: Settings,
-    did: str,
+    dids: list[str],
     semaphore: asyncio.Semaphore,
 ) -> int:
-    """Delete all documents/tags/FTS for a single DID. Returns doc count deleted."""
+    """Delete all rows for a batch of DIDs. Returns doc count deleted.
+
+    Batched because the FTS tables index uri as UNINDEXED — each FTS delete
+    is a full-table scan, so one scan per batch instead of one per DID.
+    """
+    ph = ",".join("?" * len(dids))
     await turso_exec(
         client, settings,
-        "DELETE FROM document_tags WHERE document_uri IN (SELECT uri FROM documents WHERE did = ?)",
-        semaphore, [did],
+        f"DELETE FROM document_tags WHERE document_uri IN (SELECT uri FROM documents WHERE did IN ({ph}))",
+        semaphore, dids,
     )
     await turso_exec(
         client, settings,
-        "DELETE FROM documents_fts WHERE uri IN (SELECT uri FROM documents WHERE did = ?)",
-        semaphore, [did],
+        f"DELETE FROM documents_fts WHERE uri IN (SELECT uri FROM documents WHERE did IN ({ph}))",
+        semaphore, dids,
+    )
+    await turso_exec(
+        client, settings,
+        f"DELETE FROM publications_fts WHERE uri IN (SELECT uri FROM publications WHERE did IN ({ph}))",
+        semaphore, dids,
+    )
+    await turso_exec(
+        client, settings,
+        f"DELETE FROM publications WHERE did IN ({ph})",
+        semaphore, dids,
+    )
+    await turso_exec(
+        client, settings,
+        f"DELETE FROM recommends WHERE did IN ({ph})",
+        semaphore, dids,
     )
     return await turso_exec(
         client, settings,
-        "DELETE FROM documents WHERE did = ?",
-        semaphore, [did],
+        f"DELETE FROM documents WHERE did IN ({ph})",
+        semaphore, dids,
     )
 
 
@@ -181,10 +201,10 @@ async def main():
 
     async with httpx.AsyncClient() as client:
         # step 1: get distinct DIDs with platform='other'
-        log("querying distinct DIDs with platform='other'...")
+        log("querying distinct DIDs with platform='other' or flagged bridgyfed...")
         rows = await turso_query(
             client, settings,
-            "SELECT DISTINCT did FROM documents WHERE platform = 'other'",
+            "SELECT DISTINCT did FROM documents WHERE platform = 'other' OR is_bridgyfed IN ('1', 1)",
             turso_sem,
         )
         dids = [r["did"] for r in rows]
@@ -221,20 +241,17 @@ async def main():
             log("pass --apply to actually delete these documents")
             return
 
-        # step 3: delete concurrently (10 concurrent turso connections)
-        log(f"deleting {len(bridgy_dids)} bridgy fed DIDs (10 concurrent)...")
+        # step 3: delete in sequential batches — concurrency buys nothing here
+        # (the FTS scans serialize on turso's write path anyway) and sequential
+        # keeps load on turso bounded while production cache refreshers share it
+        log(f"deleting {len(bridgy_dids)} bridgy fed DIDs (batches of 50)...")
         t0 = time.monotonic()
         deleted = 0
         done = 0
 
-        async def delete_one(did: str) -> int:
-            return await delete_did(client, settings, did, turso_sem)
-
-        # process in chunks of 50 for progress reporting
         for chunk_start in range(0, len(bridgy_dids), 50):
             chunk = bridgy_dids[chunk_start : chunk_start + 50]
-            counts = await asyncio.gather(*[delete_one(d) for d in chunk])
-            deleted += sum(counts)
+            deleted += await delete_batch(client, settings, chunk, turso_sem)
             done += len(chunk)
             log(f"  [{done}/{len(bridgy_dids)}] deleted {deleted} docs so far")
 

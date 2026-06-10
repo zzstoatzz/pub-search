@@ -157,8 +157,11 @@ async def main():
     if not args.apply:
         log("=== DRY RUN (pass --apply to delete) ===\n")
 
+    # platform='other' alone (no base_path constraint — the 2026-06 scraper
+    # flood carries real base_paths); the per-DID PDS resolution below is what
+    # decides bridgy vs legit, so this filter is just a candidate pool.
     sync_client = httpx.Client()
-    filters = ["And", [["platform", "Eq", "other"], ["base_path", "Eq", ""]]]
+    filters = ["platform", "Eq", "other"]
 
     # cache: DID -> is_bridgy (persists across rounds)
     pds_cache: dict[str, bool] = {}
@@ -168,7 +171,7 @@ async def main():
     while True:
         round_num += 1
         log(f"--- round {round_num} ---")
-        log("querying turbopuffer for platform='other', base_path=''...")
+        log("querying turbopuffer for platform='other'...")
 
         rows = tpuf_query(sync_client, settings, filters)
         log(f"  found {len(rows)} vectors")

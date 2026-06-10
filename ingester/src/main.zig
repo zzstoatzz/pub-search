@@ -113,9 +113,9 @@ const Handler = struct {
                 }
                 if (tracked_ops > 0) {
                     // verify the commit before emitting any of its records.
-                    // rejected commits are still logged as captured so coverage
-                    // comparison against tap stays honest, but they never
-                    // reach /channel.
+                    // rejected/bridged commits are still logged as captured so
+                    // coverage comparison against tap stays honest, but they
+                    // never reach /channel.
                     const verdict = self.verifier.verifyCommit(commit);
                     for (commit.ops) |op| {
                         if (!isTracked(op.collection)) continue;
@@ -126,7 +126,10 @@ const Handler = struct {
                             @tagName(op.action), op.collection, commit.repo, op.rkey, commit.seq, @tagName(verdict),
                         });
 
-                        if (verdict != .rejected) self.emit(op, commit.repo, commit.seq);
+                        switch (verdict) {
+                            .full, .sig_only => self.emit(op, commit.repo, commit.seq),
+                            .bridged, .rejected => {},
+                        }
                     }
                 }
             },
@@ -142,9 +145,9 @@ const Handler = struct {
             // them from the relay; the backend's upserts absorb duplicates.
             const checkpoint = if (self.channel.pendingSeq()) |pending| pending - 1 else self.last_seq;
             persistCursor(self.cursor_path, checkpoint);
-            logfire.debug("ingester progress: events={d} matched={d} seq={d} checkpoint={d} verified={d} sig_only={d} rejected={d} unresolvable={d}", .{
+            logfire.debug("ingester progress: events={d} matched={d} seq={d} checkpoint={d} verified={d} sig_only={d} bridged={d} rejected={d} unresolvable={d}", .{
                 self.events,            self.matched,            self.last_seq,          checkpoint,
-                self.verifier.verified, self.verifier.sig_only, self.verifier.rejected, self.verifier.unresolvable,
+                self.verifier.verified, self.verifier.sig_only, self.verifier.bridged, self.verifier.rejected, self.verifier.unresolvable,
             });
         }
     }
