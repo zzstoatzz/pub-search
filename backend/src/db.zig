@@ -93,6 +93,14 @@ pub fn getLocalDbRaw() ?*LocalDb {
 
 /// Start background sync thread (call from main after db.init)
 pub fn startSync(io: Io) void {
+    // hard rule (2026-06-10): background data movement must never interrupt
+    // serving. until the snapshot-swap replica lands, in-place sync can be
+    // disabled entirely — stale-but-fast beats fresh-but-down.
+    if (std.c.getenv("SYNC_DISABLE") != null) {
+        std.debug.print("sync: DISABLED via SYNC_DISABLE — serving existing replica as-is\n", .{});
+        if (getLocalDbRaw()) |l| l.setReady(true);
+        return;
+    }
     const c = if (sync_client) |*sc| sc else {
         std.debug.print("sync: no sync client, skipping\n", .{});
         return;
