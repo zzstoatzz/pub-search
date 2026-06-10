@@ -222,6 +222,13 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
         },
         .payload = body,
         .response_writer = &response_body.writer,
+        // no pooled-connection reuse: zig's http client has no timeouts, so a
+        // request issued on a keep-alive socket that turso/LB already closed
+        // hangs FOREVER (write succeeds, response never comes). Poisoned
+        // sockets accumulated until every turso-touching handler wedged
+        // (2026-06-10 outage). Fresh connections fail fast or work; the
+        // ~100ms TLS overhead per query is nothing next to an eternal hang.
+        .keep_alive = false,
     }) catch |err| {
         logfire.err("{s} http failed: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
         span.recordError(error.HttpError);
