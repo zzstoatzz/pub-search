@@ -75,6 +75,7 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [search-architecture.md](search-architecture.md) — FTS5 details, scaling considerations, future options
 - [content-extraction.md](content-extraction.md) — how content is extracted from each platform
 - [api.md](api.md) — API endpoint reference
+- [agent-surfaces.md](agent-surfaces.md) — adopting pub-search for agents: MCP vs HTTP API, when to use which
 - [tap.md](tap.md) — firehose consumer setup, debugging, memory tuning
 - [reconciliation.md](reconciliation.md) — stale document detection and cleanup
 - [turso-hrana.md](turso-hrana.md) — Turso's HTTP protocol for database queries
