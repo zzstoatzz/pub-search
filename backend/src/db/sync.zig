@@ -8,6 +8,7 @@ const logfire = @import("logfire");
 const Allocator = std.mem.Allocator;
 const Client = @import("Client.zig");
 const LocalDb = @import("LocalDb.zig");
+const policy = @import("../policy.zig");
 
 const BATCH_SIZE = 500;
 
@@ -212,6 +213,138 @@ pub fn fullSync(turso: *Client, local: *LocalDb) !void {
 
     local.setReady(true);
     std.debug.print("sync: full sync complete - {d} docs, {d} pubs, {d} tags, {d} popular\n", .{ doc_count, pub_count, tag_count, popular_count });
+}
+
+pub const BuildCounts = struct {
+    documents: usize = 0,
+    publications: usize = 0,
+    tags: usize = 0,
+    popular: usize = 0,
+};
+
+const BUILD_PAGE_SIZE = 500;
+
+// Snapshot-build page query. Two non-negotiable filters (policy.zig): turso
+// still holds historical rows for banned DIDs and bridgy-flagged docs until
+// the paced cleanup finishes, and a snapshot must never resurrect them.
+// Keyset pagination on the uri PK keeps turso row reads linear (an OFFSET
+// walk re-scans from the start every page — the 2026-06 access-pattern
+// lesson).
+const BUILD_DOC_PAGE_SQL =
+    "SELECT uri, did, rkey, title, content, created_at, publication_uri, " ++
+    "platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at, " ++
+    "COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed, " ++
+    "COALESCE(url_dead, 0) as url_dead " ++
+    "FROM documents WHERE uri > ? " ++
+    "AND COALESCE(is_bridgyfed, 0) NOT IN (1, '1') " ++
+    "AND did NOT IN (" ++ policy.banned_dids_sql ++ ") " ++
+    "ORDER BY uri LIMIT 500";
+
+pub const BUILD_DOC_COUNT_SQL =
+    "SELECT COUNT(*) FROM documents " ++
+    "WHERE COALESCE(is_bridgyfed, 0) NOT IN (1, '1') " ++
+    "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
+
+const BUILD_PUB_SQL =
+    "SELECT uri, did, rkey, name, description, base_path, platform, indexed_at " ++
+    "FROM publications WHERE did NOT IN (" ++ policy.banned_dids_sql ++ ")";
+
+/// Offline snapshot build: populate a FRESH local db from turso. The target
+/// must never be the serving replica — the builder runs off-box (builder.zig)
+/// and pacing between pages keeps turso comfortable while production reads it
+/// (2026-06-10 wedge lesson: bulk ops own their blast radius).
+pub fn buildSnapshot(turso: *Client, local: *LocalDb) !BuildCounts {
+    const conn = local.getConn() orelse return error.LocalNotOpen;
+    var counts: BuildCounts = .{};
+
+    var cursor_buf: [512]u8 = undefined;
+    var cursor: []const u8 = "";
+    while (true) {
+        var result = turso.query(BUILD_DOC_PAGE_SQL, &.{cursor}) catch |err| {
+            logfire.err("build: turso document page failed at cursor {s}: {}", .{ cursor, err });
+            return err;
+        };
+        defer result.deinit();
+
+        if (result.rows.len == 0) break;
+
+        conn.exec("BEGIN", .{}) catch {};
+        for (result.rows) |row| {
+            try insertDocumentLocal(conn, row);
+            counts.documents += 1;
+        }
+        conn.exec("COMMIT", .{}) catch {};
+
+        const last_uri = result.rows[result.rows.len - 1].text(0);
+        if (last_uri.len >= cursor_buf.len) return error.UriTooLong;
+        @memcpy(cursor_buf[0..last_uri.len], last_uri);
+        cursor = cursor_buf[0..last_uri.len];
+
+        if (counts.documents % 5000 < BUILD_PAGE_SIZE) {
+            std.debug.print("build: {d} documents...\n", .{counts.documents});
+        }
+        if (result.rows.len < BUILD_PAGE_SIZE) break;
+
+        // pacing: the builder shares turso with production reads
+        turso.io.sleep(Io.Duration.fromMilliseconds(150), .awake) catch {};
+    }
+
+    {
+        var pub_result = turso.query(BUILD_PUB_SQL, &.{}) catch |err| {
+            logfire.err("build: turso publications query failed: {}", .{err});
+            return err;
+        };
+        defer pub_result.deinit();
+
+        conn.exec("BEGIN", .{}) catch {};
+        for (pub_result.rows) |row| {
+            try insertPublicationLocal(conn, row);
+            counts.publications += 1;
+        }
+        conn.exec("COMMIT", .{}) catch {};
+    }
+
+    {
+        var tags_result = turso.query("SELECT document_uri, tag FROM document_tags", &.{}) catch |err| {
+            logfire.err("build: turso tags query failed: {}", .{err});
+            return err;
+        };
+        defer tags_result.deinit();
+
+        conn.exec("BEGIN", .{}) catch {};
+        for (tags_result.rows) |row| {
+            conn.exec(
+                "INSERT OR IGNORE INTO document_tags (document_uri, tag) VALUES (?, ?)",
+                .{ row.text(0), row.text(1) },
+            ) catch {};
+            counts.tags += 1;
+        }
+        conn.exec("COMMIT", .{}) catch {};
+
+        // tags were copied unfiltered; drop the ones whose documents the
+        // policy filters excluded (local-side, cheap)
+        conn.exec("DELETE FROM document_tags WHERE document_uri NOT IN (SELECT uri FROM documents)", .{}) catch {};
+    }
+
+    {
+        var popular_result = turso.query("SELECT query, count FROM popular_searches", &.{}) catch |err| {
+            logfire.err("build: turso popular_searches query failed: {}", .{err});
+            return err;
+        };
+        defer popular_result.deinit();
+
+        conn.exec("BEGIN", .{}) catch {};
+        for (popular_result.rows) |row| {
+            conn.exec(
+                "INSERT OR REPLACE INTO popular_searches (query, count) VALUES (?, ?)",
+                .{ row.text(0), row.text(1) },
+            ) catch {};
+            counts.popular += 1;
+        }
+        conn.exec("COMMIT", .{}) catch {};
+    }
+
+    return counts;
 }
 
 /// Incremental sync: fetch documents created since last sync

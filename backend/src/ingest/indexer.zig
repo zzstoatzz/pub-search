@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const logfire = @import("logfire");
+const policy = @import("../policy.zig");
 const db = @import("../db.zig");
 
 fn isHttpUrl(s: []const u8) bool {
@@ -59,9 +60,9 @@ pub fn insertDocument(
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
-    // banned bulk-archive repos (purged 2026-06-10): second gate behind the
-    // ingester's ban — nothing reinserts these, not even replays or backfills.
-    if (std.mem.eql(u8, did, "did:plc:oql6ds5vnff4ugar6rruliwd")) {
+    // banned bulk-archive repos: second gate behind the ingester's ban —
+    // nothing reinserts these, not even replays or backfills (policy.zig).
+    if (policy.isBanned(did)) {
         logfire.span("tap.dropped", .{ .reason = "banned_did", .uri = uri }).end();
         return;
     }
@@ -297,9 +298,9 @@ pub fn insertPublication(
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
-    // banned bulk-archive repos (purged 2026-06-10): second gate behind the
-    // ingester's ban — nothing reinserts these, not even replays or backfills.
-    if (std.mem.eql(u8, did, "did:plc:oql6ds5vnff4ugar6rruliwd")) {
+    // banned bulk-archive repos: second gate behind the ingester's ban —
+    // nothing reinserts these, not even replays or backfills (policy.zig).
+    if (policy.isBanned(did)) {
         logfire.span("tap.dropped", .{ .reason = "banned_did", .uri = uri }).end();
         return;
     }

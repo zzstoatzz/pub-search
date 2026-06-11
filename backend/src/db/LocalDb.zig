@@ -76,10 +76,15 @@ fn unlinkPath(path: []const u8) void {
 
 pub fn open(self: *LocalDb) !void {
     const path_env = if (std.c.getenv("LOCAL_DB_PATH")) |p| std.mem.span(p) else "/data/local.db";
-    self.path = path_env;
+    try self.openAt(path_env);
+}
 
-    adoptPending(path_env);
-    try self.openDb(path_env, false);
+/// Open at an explicit path — the snapshot builder targets a scratch file,
+/// never the serving replica.
+pub fn openAt(self: *LocalDb, path: []const u8) !void {
+    self.path = path;
+    adoptPending(path);
+    try self.openDb(path, false);
 }
 
 /// Snapshot adoption: if `<path>.new` exists at boot, rename it over the live

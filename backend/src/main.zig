@@ -7,6 +7,7 @@ const tpuf = @import("tpuf.zig");
 const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
+const builder = @import("builder.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -38,6 +39,17 @@ pub fn main() !void {
     }) catch |err| {
         std.debug.print("logfire init failed: {}, continuing without observability\n", .{err});
     };
+
+    // builder mode: offline snapshot build + R2 publish, then exit.
+    // never starts the server, never touches /data — scaling-plan invariant
+    // #1 (background data movement stays off the serving box).
+    if (std.c.getenv("BUILDER_MODE") != null) {
+        builder.run(allocator, io) catch |err| {
+            logfire.err("builder failed: {}", .{err});
+            std.process.exit(1);
+        };
+        std.process.exit(0);
+    }
 
     // start http server FIRST so Fly proxy doesn't timeout
     const port: u16 = blk: {
@@ -161,6 +173,8 @@ test {
     _ = @import("db/zug_conn.zig");
     _ = @import("db/migrations.zig");
     _ = @import("ingest/extractor.zig");
+    _ = @import("ingest/tap.zig");
     _ = @import("server/search.zig");
     _ = @import("server.zig");
+    _ = @import("policy.zig");
 }
