@@ -177,7 +177,11 @@ async def main():
 
     # banned bulk-archive bots — purged unconditionally (mirrors the ingester's
     # BANNED_DIDS list)
-    banned = {"did:plc:oql6ds5vnff4ugar6rruliwd"}  # drivepatents.com
+    # registry of who/why: docs/exclusions.md (mirror of backend policy.zig)
+    banned = {
+        "did:plc:oql6ds5vnff4ugar6rruliwd",  # drivepatents.com
+        "did:plc:2s32mlusc66sjb256aenynfc",  # destinationcharged.com NHTSA recall mirror
+    }
 
     sync_client = httpx.Client()
     log("exporting full namespace (id-keyed pages)...")

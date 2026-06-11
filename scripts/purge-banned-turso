@@ -36,7 +36,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # mirrors backend/src/policy.zig BANNED_DIDS
 BANNED_DIDS = [
+    # registry of who/why: docs/exclusions.md (mirror of backend policy.zig)
     "did:plc:oql6ds5vnff4ugar6rruliwd",  # drivepatents.com patent bot
+    "did:plc:2s32mlusc66sjb256aenynfc",  # destinationcharged.com NHTSA recall mirror
 ]
 
 BATCH_SIZE = 300

@@ -33,7 +33,9 @@ const COLLECTIONS = [_][]const u8{
 // banned repos: bulk-archive bots that flooded the corpus (96k+ automotive
 // patents, ~44%+ of all docs). decision 2026-06-10: purge and ban entirely.
 const BANNED_DIDS = [_][]const u8{
+    // registry of who/why: docs/exclusions.md (mirror of backend policy.zig)
     "did:plc:oql6ds5vnff4ugar6rruliwd", // drivepatents.com
+    "did:plc:2s32mlusc66sjb256aenynfc", // destinationcharged.com NHTSA recall mirror
 };
 
 fn isBanned(did: []const u8) bool {

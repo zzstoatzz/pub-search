@@ -1,0 +1,92 @@
+# exclusions: what we keep out of the corpus, and why
+
+pub-search indexes **long-form writing by people**. some actors publish
+valid, well-signed AT Protocol records that are nonetheless not that —
+machine-generated registry mirrors, scraper bridges, bulk archives. this
+file is the registry of every manual exclusion: who, when, why, and the
+evidence. if we're going to editorialize, we explain ourselves.
+
+## what qualifies (the policy line)
+
+an author is excluded when **all** of these hold:
+
+1. **no human authorship** — the records are generated from an external
+   database/feed, not written
+2. **bulk scale** — the volume materially distorts the corpus or a topic's
+   search results (rule of thumb: would be >1% of the corpus, or owns a
+   topic's semantic results)
+3. **no curation signal lost** — nobody recommends them; excluding them
+   removes noise, not voices
+
+an author is NOT excluded for: low quality, controversial content, high
+(human) volume, or self-promotion. the line is authorship, not taste.
+
+## how exclusions are enforced (the new architecture)
+
+a ban acts at every layer, so no single bug re-admits an excluded author:
+
+| layer | mechanism | effect |
+|---|---|---|
+| ingester | `BANNED_DIDS` in `ingester/src/main.zig` | dropped at the firehose, never emitted |
+| indexer | `backend/src/policy.zig` via `isBanned` | refuses inserts (replays, backfills, the `/admin/backfill` side door) |
+| snapshot builder | `policy.banned_dids_sql` in the build query | excluded from every snapshot even while turso history still holds rows |
+| promote watcher | per-DID zero-count gate | a snapshot containing a banned row is REJECTED, never adopted |
+| bridgy fed (network-level) | PDS host check in the ingester verifier + backfill | any `*.brid.gy`-hosted repo, no list needed |
+
+cleanup after a ban (the stores that don't self-heal):
+
+| store | tool | notes |
+|---|---|---|
+| turbopuffer vectors | `scripts/purge-bridgyfed-vectors` (handles the banned set) | do this FIRST — semantic pollution is live until vectors die |
+| turso history | `scripts/purge-banned-turso` | paced + canary-gated; not urgent (builder filters every build) but keyword's turso fallback during restarts reads it |
+| atlas | trigger `rebuild-atlas` prefect flow (or wait ≤6h) | rebuilt from tpuf, so purge vectors first |
+| keyword replica | nothing — next hourly build + adopt is clean | |
+
+**operational steps for a new ban** (see also
+[snapshot-pipeline.md](snapshot-pipeline.md) playbooks):
+1. add the DID to all four lists: `ingester/src/main.zig`,
+   `backend/src/policy.zig` (+ its tests), `scripts/purge-banned-turso`,
+   `scripts/purge-bridgyfed-vectors` — and an entry HERE with evidence
+2. deploy backend (push) AND ingester (`cd ingester && fly deploy`)
+3. **recreate the `snapshot-builder-hourly` machine** — it pins its image
+   and will keep building with the old policy until you do
+4. purge vectors, trigger atlas rebuild, run the paced turso purge
+5. verify: semantic query for the author's topic, `/snapshot` after next
+   adopt, atlas point count
+
+> automation debt, acknowledged: the list lives in four places (two
+> languages) and propagation needs a deploy. if the cadence of bans picks
+> up, the next step is a single source of truth (a `banned_dids` table in
+> turso + runtime checks + builder reads it), which also makes bans a
+> data change instead of a deploy. not worth it at n=2.
+
+## the registry
+
+### did:plc:oql6ds5vnff4ugar6rruliwd — drivepatents.com
+
+- **banned**: 2026-06-10
+- **what**: automotive patent bot mirroring the patent database as
+  `site.standard.document` records (~96k docs on its PDS)
+- **evidence at ban time**: 25,111 docs indexed = **~44% of the corpus**;
+  12/12 semantic results for EV-related queries were patents; standard
+  registry boilerplate, no human authorship
+- **cleanup**: tpuf 25,096 vectors (2026-06-10), turso 25,111 docs + 1 pub
+  via paced purge (2026-06-11, 84 canary-gated batches, zero canary trips),
+  replica rebuilt clean, atlas clean
+
+### did:plc:2s32mlusc66sjb256aenynfc — destinationcharged.com
+
+- **banned**: 2026-06-11
+- **what**: EV/automotive site bulk-publishing auto-generated NHTSA
+  vehicle-recall summaries ("Nissan Leaf recall (2016179)", one doc per
+  recall record) as `site.standard.document`
+- **evidence at ban time**: 1,262 docs (~4.7% of corpus) — quiet trickle
+  since 2026-05-29, then an **819-doc burst in ~80 minutes** on 2026-06-11;
+  semantic "tesla recall" returned 5/5 destinationcharged; 443 points in
+  the atlas; hosted on a genuine bsky PDS (agaric.us-west.host.bsky.network),
+  validly signed — caught because post-watermark turso growth ran 35x the
+  day's organic rate
+- **call**: same class as drivepatents (registry mirror, zero human
+  authorship, owns a topic's semantic results). NHTSA's database is tens
+  of thousands of recalls; trajectory said drivepatents-scale within days
+- **cleanup**: this ban (see git history for execution)
