@@ -4,7 +4,7 @@ current state, rationale, and future options.
 
 ## current: SQLite FTS5
 
-keyword search uses SQLite's FTS5 on a local read replica, synced from Turso (the source of truth).
+keyword search uses SQLite's FTS5 on a local read replica built from Turso (the source of truth). the replica is an immutable snapshot, rebuilt hourly offline and adopted atomically after verification — see [snapshot-pipeline.md](snapshot-pipeline.md) for the pipeline, its scaling properties, and how production edits propagate.
 
 ### why FTS5 works for now
 
@@ -12,7 +12,7 @@ keyword search uses SQLite's FTS5 on a local read replica, synced from Turso (th
 - **latency**: keyword p50 ~9ms (local SQLite replica), semantic p50 ~345ms (voyage + turbopuffer), hybrid p50 ~360ms.
 - **cost**: $0. included with Turso free tier.
 - **ops**: zero. no separate service to run.
-- **simplicity**: Turso as source of truth, local SQLite read replica for FTS queries.
+- **simplicity**: Turso as source of truth, immutable local SQLite snapshot for FTS queries (no live writers on the serving file — ever).
 
 ### how it works
 

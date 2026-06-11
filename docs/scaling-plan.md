@@ -1,5 +1,13 @@
 # scaling plan: surviving many multiples of corpus size
 
+> **STATUS (2026-06-11): largely executed.** Sequence steps 1–2 shipped and
+> are live in production (snapshot builder → R2 → verified hourly adoption —
+> see [snapshot-pipeline.md](snapshot-pipeline.md) for the as-built system,
+> including the staleness/surgery model). Step 7 (otel error-path segfault)
+> also fixed. Still owed: live overlay (step 3), deleting in-place sync
+> (step 4), rowid-keyed FTS migration (step 5), then the big backfills
+> (step 6). This doc remains the rationale of record for the invariants.
+
 Written 2026-06-10, after the cutover cascade (`retro-2026-06-10-cutover-cascade.md`).
 The goal: a corpus 10x today's (~500k+ docs) changes build costs, never serving
 behavior. Informed by typeahead's rewrite (7M actors), adapted for the

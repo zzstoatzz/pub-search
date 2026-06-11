@@ -12,7 +12,7 @@ search ATProto publishing platforms ([leaflet](https://leaflet.pub), [pckt](http
 
 1. **ingester** (`ingester/`, our own firehose consumer) subscribes to an ATProto relay, filters to publishing collections (`pub.leaflet.*`, `site.standard.*`, `com.whtwnd.*`), cryptographically verifies each commit (signature + MST diff), and re-emits verified records over a websocket channel
 2. **backend** consumes the channel, extracts content per platform, and writes to [Turso](https://turso.tech) (source of truth); serves search with keyword (SQLite FTS5 on a local replica), semantic ([turbopuffer](https://turbopuffer.com) ANN), and hybrid modes
-3. **builder** (the same backend binary in `BUILDER_MODE`) periodically rebuilds the keyword replica offline from Turso and publishes it to R2 with a sha256 manifest — serving adopts verified snapshots instead of syncing in place (see [docs/scaling-plan.md](docs/scaling-plan.md))
+3. **builder** (the same backend binary in `BUILDER_MODE`) rebuilds the keyword replica offline from Turso every hour and publishes it to R2 with a sha256 manifest — serving adopts verified snapshots instead of syncing in place, an architecture borrowed from [typeahead](https://tangled.sh/@zzstoatzz.io/typeahead) (see [docs/snapshot-pipeline.md](docs/snapshot-pipeline.md))
 4. **site** static frontend on Cloudflare Pages
 5. **mcp** server for AI agents (Claude Code, etc.) — see [docs/agent-surfaces.md](docs/agent-surfaces.md)
 
