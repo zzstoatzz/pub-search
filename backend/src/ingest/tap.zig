@@ -503,6 +503,13 @@ pub fn backfillRepo(
     defer allocator.free(pds);
     logfire.info("backfill: {s} → pds {s}", .{ did.raw, pds });
 
+    // the side door enforces the same policy as the front door: bridgy fed
+    // never enters the corpus (the ingester drops it via the same PDS check)
+    if (isBridgyPds(pds)) {
+        logfire.warn("backfill: {s} rejected — bridgy-hosted PDS {s}", .{ did.raw, pds });
+        return error.BridgedRepo;
+    }
+
     var counts: BackfillCounts = .{};
     for (BACKFILL_COLLECTIONS) |collection| {
         if (collection_filter) |f| {
@@ -659,6 +666,25 @@ fn resolvePds(allocator: Allocator, io: Io, did: []const u8) ![]u8 {
         return allocator.dupe(u8, endpoint.string);
     }
     return error.NoPds;
+}
+
+/// Host-match a PDS endpoint against brid.gy (mirrors ingester/src/verifier.zig).
+fn isBridgyPds(endpoint: []const u8) bool {
+    var host = endpoint;
+    if (mem.indexOf(u8, host, "://")) |i| host = host[i + 3 ..];
+    if (mem.indexOfScalar(u8, host, '/')) |i| host = host[0..i];
+    if (mem.indexOfScalar(u8, host, ':')) |i| host = host[0..i];
+    return mem.eql(u8, host, "brid.gy") or mem.endsWith(u8, host, ".brid.gy");
+}
+
+test "isBridgyPds matches bridgy hosts only" {
+    try std.testing.expect(isBridgyPds("https://atproto.brid.gy"));
+    try std.testing.expect(isBridgyPds("https://atproto.brid.gy/"));
+    try std.testing.expect(isBridgyPds("https://brid.gy:443/path"));
+    try std.testing.expect(!isBridgyPds("https://bsky.social"));
+    try std.testing.expect(!isBridgyPds("https://notbrid.gy.example.com"));
+    try std.testing.expect(!isBridgyPds("https://mybrid.gy.evil/x"));
+    try std.testing.expect(!isBridgyPds("https://pds.example.com/brid.gy"));
 }
 
 /// Last path segment of an AT-URI ("at://did/collection/rkey" → "rkey").

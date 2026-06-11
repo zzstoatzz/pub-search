@@ -572,10 +572,31 @@ fn handleStats(request: *http.Server.Request) !void {
     try sendJson(request, try output.toOwnedSlice());
 }
 
+/// Only one backfill may run at a time: each one writes to turso, and N
+/// concurrent admin backfills saturating turso is a self-inflicted outage
+/// (the 2026-06-10 purge lesson). Excess requests get 409.
+var backfill_busy = std.atomic.Value(bool).init(false);
+
+fn backfillWorker(io: Io, did: []u8, collection: ?[]u8) void {
+    defer backfill_busy.store(false, .release);
+    defer std.heap.page_allocator.free(did);
+    defer if (collection) |c| std.heap.page_allocator.free(c);
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    _ = ingest.tap.backfillRepo(arena.allocator(), io, did, collection) catch |err| {
+        logfire.warn("backfill: {s} failed: {s}", .{ did, @errorName(err) });
+    };
+}
+
 /// On-demand backfill of a single repo, bypassing tap's serial resync queue.
 /// `POST /admin/backfill?did=<did>[&collection=<nsid>]`. Pulls every record of
 /// our collections straight from the author's PDS through the normal
 /// extract+index path. Guarded by BACKFILL_TOKEN (?token=) when that env is set.
+/// Responds 202 and runs in the background (fly's proxy drops long-held
+/// connections; big repos take minutes). `&sync=1` keeps the old blocking
+/// behavior and returns counts. Completion signal either way is the logfire
+/// line `backfill: <did> done`.
 fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -601,6 +622,53 @@ fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !vo
         return;
     };
     const collection: ?[]const u8 = parseQueryParam(alloc, target, "collection") catch null;
+
+    const sync_mode = blk: {
+        const v = parseQueryParam(alloc, target, "sync") catch break :blk false;
+        break :blk mem.eql(u8, v, "1");
+    };
+
+    if (!sync_mode) {
+        if (backfill_busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            try request.respond("{\"error\":\"a backfill is already running\"}", .{
+                .status = .conflict,
+                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+            });
+            return;
+        }
+
+        const did_owned = std.heap.page_allocator.dupe(u8, did) catch {
+            backfill_busy.store(false, .release);
+            return error.OutOfMemory;
+        };
+        const coll_owned: ?[]u8 = if (collection) |c|
+            std.heap.page_allocator.dupe(u8, c) catch {
+                std.heap.page_allocator.free(did_owned);
+                backfill_busy.store(false, .release);
+                return error.OutOfMemory;
+            }
+        else
+            null;
+
+        const thread = std.Thread.spawn(.{}, backfillWorker, .{ io, did_owned, coll_owned }) catch {
+            std.heap.page_allocator.free(did_owned);
+            if (coll_owned) |c| std.heap.page_allocator.free(c);
+            backfill_busy.store(false, .release);
+            try request.respond("{\"error\":\"failed to start backfill\"}", .{
+                .status = .internal_server_error,
+                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+            });
+            return;
+        };
+        thread.detach();
+
+        const body = try std.fmt.allocPrint(alloc, "{{\"did\":\"{s}\",\"status\":\"accepted\"}}", .{did});
+        try request.respond(body, .{
+            .status = .accepted,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+        return;
+    }
 
     const counts = ingest.tap.backfillRepo(alloc, io, did, collection) catch |err| {
         const body = try std.fmt.allocPrint(alloc, "{{\"error\":\"backfill failed: {s}\"}}", .{@errorName(err)});

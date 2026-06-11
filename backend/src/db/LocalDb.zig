@@ -30,10 +30,15 @@ pub fn init(allocator: Allocator, io: Io) LocalDb {
     return .{ .allocator = allocator, .io = io };
 }
 
-/// Check database integrity and return false if corrupt
+/// Check database integrity and return false if corrupt. quick_check, not
+/// integrity_check: the full check scans every index b-tree, which on a
+/// 365MB+ file on a fly volume is minutes of is_ready=false at every boot
+/// (keyword falls back to slow turso the whole time). Adopted snapshots are
+/// already sha256-gated before they become local.db, so the full scan is
+/// redundant; quick_check still catches page-level corruption in seconds.
 fn checkIntegrity(self: *LocalDb) bool {
     const c = self.conn orelse return false;
-    const row = c.row("PRAGMA integrity_check", .{}) catch return false;
+    const row = c.row("PRAGMA quick_check", .{}) catch return false;
     if (row) |r| {
         defer r.deinit();
         const result = r.text(0);

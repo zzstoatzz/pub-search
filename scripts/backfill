@@ -6,16 +6,23 @@
 """Ad-hoc backfill: pull repos straight from their PDS into the index.
 
 Wraps POST /admin/backfill (backend resolves the PDS, lists records, runs the
-normal extract+index path — banned DIDs are dropped by the indexer). Accepts
-DIDs or handles, one or many. Writes land in turso; serving picks them up at
-the next replica catchup + swap (offline-replica-catchup) until the snapshot
-builder automates that.
+normal extract+index path — banned DIDs are dropped by the indexer, bridgy-
+hosted repos are rejected at the door). Accepts DIDs or handles, one or many.
+Writes land in turso; serving picks them up at the next replica catchup + swap
+(offline-replica-catchup) until the snapshot builder automates that.
+
+The endpoint is async: it responds 202 and runs the backfill in the background
+(completion signal is the logfire line `backfill: <did> done`). The backend
+runs at most ONE backfill at a time and returns 409 while busy — this script
+waits and retries, so a list of targets is naturally paced by server-side
+completion.
 
 Usage:
     scripts/backfill did:plc:xyz...
     scripts/backfill someone.bsky.social pfrazee.com
     scripts/backfill --collection com.whtwnd.blog.entry did:plc:xyz
     scripts/backfill --from-file dids.txt
+    scripts/backfill --sync did:plc:xyz   # block and report counts
 
 BACKFILL_TOKEN is read from the environment if the endpoint is guarded.
 """
@@ -28,7 +35,8 @@ import time
 import httpx
 
 API = os.environ.get("BACKFILL_API", "https://leaflet-search-backend.fly.dev")
-PACE_SECONDS = 2.0  # gap between repos — backfill writes to turso; be gentle
+BUSY_RETRY_SECONDS = 15.0
+BUSY_MAX_WAIT_SECONDS = 1800.0
 
 
 def log(msg: str) -> None:
@@ -46,11 +54,48 @@ def resolve_handle(client: httpx.Client, handle: str) -> str | None:
     return r.json().get("did")
 
 
+def submit(client: httpx.Client, did: str, params: dict, sync: bool) -> tuple[str, str]:
+    """returns (status, detail) where status is ok|accepted|pend|fail."""
+    timeout = 900 if sync else 30
+    waited = 0.0
+    while True:
+        try:
+            r = client.post(f"{API}/admin/backfill", params=params, timeout=timeout)
+        except (httpx.TimeoutException, httpx.TransportError):
+            if sync:
+                # fly's proxy drops long-held connections even though the
+                # backfill keeps running server-side — pending, not failure
+                return "pend", f"connection dropped; confirm via logfire 'backfill: {did} done'"
+            return "fail", "request failed before the backend accepted it"
+
+        if r.status_code == 409:
+            if waited >= BUSY_MAX_WAIT_SECONDS:
+                return "fail", "backend busy with another backfill; gave up waiting"
+            time.sleep(BUSY_RETRY_SECONDS)
+            waited += BUSY_RETRY_SECONDS
+            continue
+
+        try:
+            body = r.json()
+        except ValueError:
+            return "fail", f"non-JSON response (HTTP {r.status_code})"
+
+        if r.status_code == 202:
+            return "accepted", f"running server-side; confirm via logfire 'backfill: {did} done'"
+        if r.status_code != 200 or "error" in body:
+            return "fail", str(body)
+        return "ok", (
+            f"docs={body.get('documents')} pubs={body.get('publications')} "
+            f"recs={body.get('recommends')} skipped={body.get('skipped')}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ad-hoc repo backfill")
     parser.add_argument("targets", nargs="*", help="DIDs or handles")
     parser.add_argument("--collection", help="restrict to one collection NSID")
     parser.add_argument("--from-file", help="file with one DID/handle per line")
+    parser.add_argument("--sync", action="store_true", help="block and report counts")
     args = parser.parse_args()
 
     targets = list(args.targets)
@@ -64,10 +109,7 @@ def main() -> None:
 
     ok = failed = 0
     with httpx.Client() as client:
-        for i, target in enumerate(targets):
-            if i:
-                time.sleep(PACE_SECONDS)
-
+        for target in targets:
             did = target
             if not target.startswith("did:"):
                 resolved = resolve_handle(client, target)
@@ -83,36 +125,18 @@ def main() -> None:
                 params["collection"] = args.collection
             if token:
                 params["token"] = token
+            if args.sync:
+                params["sync"] = "1"
 
-            try:
-                # synchronous endpoint: ~3s/record. fly's proxy can drop the
-                # connection on long repos even though the backfill keeps
-                # running server-side — that's "pending", not failure.
-                r = client.post(f"{API}/admin/backfill", params=params, timeout=900)
-                body = r.json()
-            except (httpx.TimeoutException, httpx.TransportError, ValueError):
-                log(
-                    f"pend {did}: connection dropped; backfill continues server-side — "
-                    f"confirm via logfire message 'backfill: {did} done'"
-                )
-                ok += 1
-                continue
-            except Exception as e:
-                log(f"FAIL {did}: {e}")
-                failed += 1
-                continue
-
-            if r.status_code != 200 or "error" in body:
-                log(f"FAIL {did}: {body}")
+            status, detail = submit(client, did, params, args.sync)
+            if status == "fail":
+                log(f"FAIL {did}: {detail}")
                 failed += 1
             else:
-                log(
-                    f"ok   {did}: docs={body.get('documents')} pubs={body.get('publications')} "
-                    f"recs={body.get('recommends')} skipped={body.get('skipped')}"
-                )
+                log(f"{status:8s} {did}: {detail}")
                 ok += 1
 
-    log(f"\n{ok} backfilled, {failed} failed out of {len(targets)}")
+    log(f"\n{ok} submitted, {failed} failed out of {len(targets)}")
     if ok:
         log("note: serving replica is frozen (SYNC_DISABLE) — run the catchup+swap to surface these in search")
     sys.exit(1 if failed else 0)
