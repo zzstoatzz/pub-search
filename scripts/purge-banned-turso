@@ -1,0 +1,183 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Paced purge of banned-DID rows from turso (drivepatents et al).
+
+These rows are invisible to serving (the snapshot builder excludes them and
+the promote watcher rejects any snapshot containing them) EXCEPT during the
+post-adoption boot window, when keyword falls back to live turso queries —
+which is why they finally need to go.
+
+PACING IS THE POINT (2026-06-10 lesson: a wedged turso IS a prod outage):
+- each batch's `DELETE FROM documents_fts WHERE uri IN (...)` is a full FTS
+  table scan turso-side (fts5 uri is unindexed) — the expensive step
+- a timed SELECT 1 canary runs before every batch; slow canary pauses,
+  repeatedly slow canary ABORTS with resume instructions
+- batches sleep BETWEEN each other; this script is meant to take ~an hour,
+  not to win a race
+- idempotent + resumable: re-running continues where it left off (the batch
+  select just finds whatever banned rows remain)
+
+Usage:
+    scripts/purge-banned-turso            # dry run: counts only
+    scripts/purge-banned-turso --apply    # actually delete, paced
+"""
+
+import argparse
+import asyncio
+import os
+import sys
+import time
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# mirrors backend/src/policy.zig BANNED_DIDS
+BANNED_DIDS = [
+    "did:plc:oql6ds5vnff4ugar6rruliwd",  # drivepatents.com patent bot
+]
+
+BATCH_SIZE = 300
+SLEEP_BETWEEN_BATCHES = 12.0
+CANARY_SLOW_SECS = 1.5
+CANARY_PAUSE_SECS = 60.0
+CANARY_ABORT_AFTER = 3  # consecutive slow canaries
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+def _make_stmt(sql: str, args: list | None = None) -> dict:
+    stmt: dict = {"sql": sql}
+    if args:
+        stmt["args"] = [{"type": "text", "value": str(a)} for a in args]
+    return stmt
+
+
+async def _execute(client: httpx.AsyncClient, settings: Settings, sql: str, args: list | None = None) -> dict:
+    response = await client.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={
+            "Authorization": f"Bearer {settings.turso_token}",
+            "Content-Type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": _make_stmt(sql, args)}, {"type": "close"}]},
+        timeout=120,
+    )
+    response.raise_for_status()
+    data = response.json()
+    result = data["results"][0]["response"]
+    if result.get("type") == "error":
+        raise RuntimeError(result["error"])
+    return result["result"]
+
+
+async def query_rows(client, settings, sql, args=None) -> list[list]:
+    result = await _execute(client, settings, sql, args)
+    return [[c.get("value") for c in row] for row in result.get("rows", [])]
+
+
+async def canary(client, settings) -> float:
+    t0 = time.monotonic()
+    await _execute(client, settings, "SELECT 1")
+    return time.monotonic() - t0
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="paced banned-DID purge from turso")
+    parser.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
+    args = parser.parse_args()
+
+    settings = Settings()  # type: ignore
+
+    async with httpx.AsyncClient() as client:
+        ph = ",".join("?" for _ in BANNED_DIDS)
+        total = int((await query_rows(
+            client, settings,
+            f"SELECT COUNT(*) FROM documents WHERE did IN ({ph})", BANNED_DIDS,
+        ))[0][0])
+        pubs = int((await query_rows(
+            client, settings,
+            f"SELECT COUNT(*) FROM publications WHERE did IN ({ph})", BANNED_DIDS,
+        ))[0][0])
+        log(f"banned rows in turso: {total} documents, {pubs} publications")
+
+        if not args.apply:
+            est_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+            log(f"DRY RUN — --apply would delete in {est_batches} batches of {BATCH_SIZE}, "
+                f"{SLEEP_BETWEEN_BATCHES}s apart (~{est_batches * (SLEEP_BETWEEN_BATCHES + 8) / 60:.0f} min)")
+            return
+
+        deleted = 0
+        slow_streak = 0
+        batch_n = 0
+        while True:
+            # canary gate before every batch — prod shares this database
+            c = await canary(client, settings)
+            if c > CANARY_SLOW_SECS:
+                slow_streak += 1
+                log(f"⚠️  canary {c:.2f}s (streak {slow_streak}/{CANARY_ABORT_AFTER}) — pausing {CANARY_PAUSE_SECS:.0f}s")
+                if slow_streak >= CANARY_ABORT_AFTER:
+                    log(f"ABORT: turso degraded. {deleted}/{total} deleted so far — "
+                        f"safe to re-run later, the script resumes automatically.")
+                    sys.exit(2)
+                await asyncio.sleep(CANARY_PAUSE_SECS)
+                continue
+            slow_streak = 0
+
+            uris = [r[0] for r in await query_rows(
+                client, settings,
+                f"SELECT uri FROM documents WHERE did IN ({ph}) LIMIT {BATCH_SIZE}", BANNED_DIDS,
+            )]
+            if not uris:
+                break
+            batch_n += 1
+
+            uph = ",".join("?" for _ in uris)
+            t0 = time.monotonic()
+            await _execute(client, settings, f"DELETE FROM document_tags WHERE document_uri IN ({uph})", uris)
+            await _execute(client, settings, f"DELETE FROM recommends WHERE document_uri IN ({uph})", uris)
+            # the FTS delete is the full-scan step — one scan per batch, by design
+            await _execute(client, settings, f"DELETE FROM documents_fts WHERE uri IN ({uph})", uris)
+            await _execute(client, settings, f"DELETE FROM documents WHERE uri IN ({uph})", uris)
+            took = time.monotonic() - t0
+
+            deleted += len(uris)
+            log(f"batch {batch_n}: {len(uris)} docs in {took:.1f}s — {deleted}/{total} ({100*deleted/total:.0f}%)")
+            await asyncio.sleep(SLEEP_BETWEEN_BATCHES)
+
+        # publications last (few rows, indexed by PK/did paths)
+        if pubs:
+            pub_uris = [r[0] for r in await query_rows(
+                client, settings,
+                f"SELECT uri FROM publications WHERE did IN ({ph})", BANNED_DIDS,
+            )]
+            uph = ",".join("?" for _ in pub_uris)
+            await _execute(client, settings, f"DELETE FROM publications_fts WHERE uri IN ({uph})", pub_uris)
+            await _execute(client, settings, f"DELETE FROM publications WHERE uri IN ({uph})", pub_uris)
+            log(f"deleted {len(pub_uris)} publications")
+
+        log(f"\ndone: {deleted} documents purged. final canary: {await canary(client, settings):.2f}s")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
