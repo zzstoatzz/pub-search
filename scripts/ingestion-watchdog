@@ -120,16 +120,26 @@ def check(window_secs: int) -> tuple[bool, str]:
     except Exception as e:
         problems.append(f"/snapshot -> {e!r}")
 
-    # 3. serving health, bodies inspected
+    # 3. serving health, bodies inspected. one retry after a pause: the
+    # promote watcher restarts the machine once an hour to adopt a snapshot
+    # (a seconds-wide window), and a single probe can race it — a real
+    # outage fails twice 30s apart, a restart blip doesn't.
     for path, want in [("/stats", '"documents"'), ("/search?q=atproto&mode=keyword", '"uri"')]:
-        try:
-            r = httpx.get(BACKEND + path, timeout=5)
-            if r.status_code != 200 or want not in r.text[:500]:
-                problems.append(f"{path} -> {r.status_code}, body unexpected")
-            else:
-                print(f"serving ok: {path}")
-        except Exception as e:
-            problems.append(f"{path} -> {e!r}")
+        last_err = None
+        for attempt in range(2):
+            try:
+                r = httpx.get(BACKEND + path, timeout=5)
+                if r.status_code == 200 and want in r.text[:500]:
+                    print(f"serving ok: {path}" + (" (after retry)" if attempt else ""))
+                    last_err = None
+                    break
+                last_err = f"{path} -> {r.status_code}, body unexpected"
+            except Exception as e:
+                last_err = f"{path} -> {e!r}"
+            if attempt == 0:
+                time.sleep(30)
+        if last_err:
+            problems.append(last_err)
 
     if problems:
         return True, "; ".join(problems)
