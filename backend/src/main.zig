@@ -8,6 +8,7 @@ const metrics = @import("metrics.zig");
 const server = @import("server.zig");
 const ingest = @import("ingest.zig");
 const builder = @import("builder.zig");
+const promote = @import("promote.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -119,6 +120,9 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     db.initLocalDb(io);
     db.startSync(io);
 
+    // snapshot promote watcher (inert unless ENABLE_SNAPSHOT_PROMOTE is set)
+    promote.start(allocator, io);
+
     // metrics.activity / metrics.buffer / metrics.timing are now initialized
     // up in main() before the listener starts so request handlers can safely
     // call record() on them.
@@ -177,4 +181,6 @@ test {
     _ = @import("server/search.zig");
     _ = @import("server.zig");
     _ = @import("policy.zig");
+    _ = @import("promote.zig");
+    _ = @import("db/LocalDb.zig");
 }

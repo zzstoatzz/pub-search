@@ -89,8 +89,10 @@ pub fn openAt(self: *LocalDb, path: []const u8) !void {
 
 /// Snapshot adoption: if `<path>.new` exists at boot, rename it over the live
 /// file (plus clear stale WAL/SHM) before opening. This is how offline-built
-/// replicas ship: upload as .new while the old process serves, restart, and
+/// replicas ship: stage as .new while the old process serves, restart, and
 /// the swap is atomic — the serving path never coexists with a bulk writer.
+/// The displaced live file is kept as `<path>.prev` (with its manifest
+/// sidecar) so rollback is `mv .prev .new` + restart, no re-download.
 fn adoptPending(path_env: []const u8) void {
     var new_buf: [256]u8 = undefined;
     const new_path = std.fmt.bufPrintZ(&new_buf, "{s}.new", .{path_env}) catch return;
@@ -106,6 +108,28 @@ fn adoptPending(path_env: []const u8) void {
         const aux = std.fmt.bufPrintZ(&aux_buf, "{s}{s}", .{ path_env, suffix }) catch return;
         _ = std.c.unlink(aux.ptr);
     }
+
+    // keep the displaced snapshot for rollback: live -> .prev (best-effort)
+    var prev_buf: [256]u8 = undefined;
+    if (std.fmt.bufPrintZ(&prev_buf, "{s}.prev", .{path_env})) |prev_path| {
+        _ = std.c.rename(cur_path.ptr, prev_path.ptr);
+    } else |_| {}
+
+    // manifest sidecars follow their snapshots (promote watcher writes them;
+    // manual swaps without sidecars are fine — these renames just fail)
+    var sc_a: [280]u8 = undefined;
+    var sc_b: [280]u8 = undefined;
+    if (std.fmt.bufPrintZ(&sc_a, "{s}.manifest.json", .{path_env})) |live_sc| {
+        if (std.fmt.bufPrintZ(&sc_b, "{s}.prev.manifest.json", .{path_env})) |prev_sc| {
+            _ = std.c.rename(live_sc.ptr, prev_sc.ptr);
+        } else |_| {}
+    } else |_| {}
+    if (std.fmt.bufPrintZ(&sc_a, "{s}.new.manifest.json", .{path_env})) |new_sc| {
+        if (std.fmt.bufPrintZ(&sc_b, "{s}.manifest.json", .{path_env})) |live_sc| {
+            _ = std.c.rename(new_sc.ptr, live_sc.ptr);
+        } else |_| {}
+    } else |_| {}
+
     if (std.c.rename(new_path.ptr, cur_path.ptr) == 0) {
         std.debug.print("local db: adopted pending snapshot {s}\n", .{new_path});
     } else {
@@ -419,4 +443,57 @@ pub fn unlock(self: *LocalDb) void {
 fn truncateSql(sql: []const u8) []const u8 {
     const max_len = 100;
     return if (sql.len > max_len) sql[0..max_len] else sql;
+}
+
+
+test "adoptPending keeps previous snapshot and moves manifest sidecars" {
+    const tio = std.Options.debug_io;
+    _ = std.c.mkdir("/tmp/leaflet-adopt-test", 0o755);
+    const base = "/tmp/leaflet-adopt-test/local.db";
+
+    const writeStr = struct {
+        fn f(io_: Io, path: []const u8, content: []const u8) !void {
+            const file = try Io.Dir.createFileAbsolute(io_, path, .{ .truncate = true });
+            defer file.close(io_);
+            var wbuf: [64]u8 = undefined;
+            var fw = Io.File.Writer.init(file, io_, &wbuf);
+            try fw.interface.writeAll(content);
+            try fw.interface.flush();
+        }
+    }.f;
+    const readStr = struct {
+        fn f(io_: Io, path: []const u8, buf: []u8) ![]const u8 {
+            const file = try Io.Dir.openFileAbsolute(io_, path, .{});
+            defer file.close(io_);
+            const n = file.readStreaming(io_, &.{buf}) catch |err| switch (err) {
+                error.EndOfStream => return buf[0..0],
+                else => return err,
+            };
+            return buf[0..n];
+        }
+    }.f;
+
+    try writeStr(tio, base, "OLD");
+    try writeStr(tio, base ++ ".manifest.json", "{\"old\":1}");
+    try writeStr(tio, base ++ ".new", "NEW");
+    try writeStr(tio, base ++ ".new.manifest.json", "{\"new\":1}");
+
+    adoptPending(base);
+
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("NEW", try readStr(tio, base, &buf));
+    try std.testing.expectEqualStrings("OLD", try readStr(tio, base ++ ".prev", &buf));
+    try std.testing.expectEqualStrings("{\"new\":1}", try readStr(tio, base ++ ".manifest.json", &buf));
+    try std.testing.expectEqualStrings("{\"old\":1}", try readStr(tio, base ++ ".prev.manifest.json", &buf));
+
+    // .new is consumed
+    const fd = std.c.open(base ++ ".new", .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    try std.testing.expect(fd < 0);
+
+    // cleanup so reruns start fresh
+    inline for (.{ base, base ++ ".prev", base ++ ".manifest.json", base ++ ".prev.manifest.json" }) |path| {
+        var zbuf: [128]u8 = undefined;
+        const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{path}) catch unreachable;
+        _ = std.c.unlink(z.ptr);
+    }
 }

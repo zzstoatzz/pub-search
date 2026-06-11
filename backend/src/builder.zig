@@ -83,7 +83,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     var local = LocalDb.init(allocator, io);
     try local.openAt(db_path);
 
-    const counts = try sync.buildSnapshot(turso, &local);
+    const counts = try sync.buildSnapshot(turso, &local, watermark);
     logfire.info("builder: built {d} docs, {d} pubs, {d} tags, {d} popular", .{
         counts.documents, counts.publications, counts.tags, counts.popular,
     });
@@ -101,12 +101,15 @@ pub fn run(allocator: Allocator, io: Io) !void {
         try conn.exec("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync', ?)", .{ts_str});
     }
 
-    // gate 1: row-count tolerance vs turso (same policy filters)
+    // gate 1: row count vs turso, both sides pinned to the watermark + the
+    // same policy filters. The set is immutable below the watermark, so any
+    // mismatch beyond deletes-during-build is a real bug; keep a small
+    // tolerance for those deletes only.
     {
-        var result = try turso.query(sync.BUILD_DOC_COUNT_SQL, &.{});
+        var result = try turso.query(sync.BUILD_DOC_COUNT_SQL, &.{watermark});
         defer result.deinit();
         const expected: usize = if (result.first()) |row| @intCast(row.int(0)) else 0;
-        const tolerance = @max(expected / 100, 50); // 1%, floor 50 — writes land mid-build
+        const tolerance = @max(expected / 1000, 10); // 0.1%, floor 10 — deletes mid-build only
         const diff = if (expected > counts.documents) expected - counts.documents else counts.documents - expected;
         if (expected == 0 or diff > tolerance) {
             logfire.err("builder: GATE FAIL doc count: built {d}, turso expects {d} (±{d})", .{ counts.documents, expected, tolerance });

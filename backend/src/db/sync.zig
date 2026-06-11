@@ -236,13 +236,15 @@ const BUILD_DOC_PAGE_SQL =
     "COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed, " ++
     "COALESCE(url_dead, 0) as url_dead " ++
     "FROM documents WHERE uri > ? " ++
+    "AND indexed_at <= ? " ++
     "AND COALESCE(is_bridgyfed, 0) NOT IN (1, '1') " ++
     "AND did NOT IN (" ++ policy.banned_dids_sql ++ ") " ++
     "ORDER BY uri LIMIT 500";
 
 pub const BUILD_DOC_COUNT_SQL =
     "SELECT COUNT(*) FROM documents " ++
-    "WHERE COALESCE(is_bridgyfed, 0) NOT IN (1, '1') " ++
+    "WHERE indexed_at <= ? " ++
+    "AND COALESCE(is_bridgyfed, 0) NOT IN (1, '1') " ++
     "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
 
 const BUILD_PUB_SQL =
@@ -253,14 +255,21 @@ const BUILD_PUB_SQL =
 /// must never be the serving replica — the builder runs off-box (builder.zig)
 /// and pacing between pages keeps turso comfortable while production reads it
 /// (2026-06-10 wedge lesson: bulk ops own their blast radius).
-pub fn buildSnapshot(turso: *Client, local: *LocalDb) !BuildCounts {
+///
+/// The build is PINNED to `indexed_at <= watermark`: docs written mid-build
+/// are excluded, so the manifest's source_watermark is an exact contract —
+/// the snapshot contains every (policy-passing) doc at or before it and
+/// nothing after. The overlay/promote side depends on this for its freshness
+/// cutoff. (Watermark semantics cover documents; publications/tags are small
+/// and copied whole.)
+pub fn buildSnapshot(turso: *Client, local: *LocalDb, watermark: []const u8) !BuildCounts {
     const conn = local.getConn() orelse return error.LocalNotOpen;
     var counts: BuildCounts = .{};
 
     var cursor_buf: [512]u8 = undefined;
     var cursor: []const u8 = "";
     while (true) {
-        var result = turso.query(BUILD_DOC_PAGE_SQL, &.{cursor}) catch |err| {
+        var result = turso.query(BUILD_DOC_PAGE_SQL, &.{ cursor, watermark }) catch |err| {
             logfire.err("build: turso document page failed at cursor {s}: {}", .{ cursor, err });
             return err;
         };
