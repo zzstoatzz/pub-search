@@ -46,6 +46,8 @@ ALERT_MARKER = "pub-search ingestion looks stalled"
 BACKEND = "https://leaflet-search-backend.fly.dev"
 TURSO_URL = "https://leaf-zzstoatzz.aws-us-east-1.turso.io/v2/pipeline"
 FRESHNESS_ALERT_MINUTES = 60
+# hourly builder + adopt; 3h = two missed cycles before we page
+SNAPSHOT_AGE_ALERT_MINUTES = 180
 
 
 class Settings(BaseSettings):
@@ -94,7 +96,31 @@ def check(window_secs: int) -> tuple[bool, str]:
     else:
         print("TURSO_DB_TOKEN not set — skipping freshness check")
 
-    # 2. serving health, bodies inspected
+    # 2. snapshot freshness: serving adopts hourly builds from R2; the
+    # /snapshot endpoint serves the live replica's manifest sidecar. A stale
+    # created_at means the builder or the promote watcher is dead even though
+    # turso ingestion looks fine.
+    try:
+        r = httpx.get(BACKEND + "/snapshot", timeout=5)
+        if r.status_code == 200:
+            created = r.json().get("created_at", 0)
+            snap_age_min = (
+                datetime.datetime.now(datetime.timezone.utc).timestamp() - created
+            ) / 60
+            if snap_age_min > SNAPSHOT_AGE_ALERT_MINUTES:
+                problems.append(
+                    f"serving snapshot is {snap_age_min:.0f}m old "
+                    f"(build {r.json().get('build_id', '?')}) — builder or promote watcher stalled"
+                )
+            else:
+                print(f"snapshot ok: {snap_age_min:.0f}m old ({r.json().get('build_id', '?')})")
+        else:
+            # 404 = pre-adoption replica; tolerated until the first adoption
+            print(f"snapshot check: /snapshot -> {r.status_code} (pre-adoption replica?)")
+    except Exception as e:
+        problems.append(f"/snapshot -> {e!r}")
+
+    # 3. serving health, bodies inspected
     for path, want in [("/stats", '"documents"'), ("/search?q=atproto&mode=keyword", '"uri"')]:
         try:
             r = httpx.get(BACKEND + path, timeout=5)

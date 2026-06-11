@@ -131,6 +131,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleActivity(request);
     } else if (mem.eql(u8, path, "/admin/backfill")) {
         try handleBackfill(request, target, io);
+    } else if (mem.eql(u8, path, "/snapshot")) {
+        try handleSnapshot(request, io);
     } else {
         try sendNotFound(request);
     }
@@ -684,6 +686,34 @@ fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !vo
         .{ did, counts.documents, counts.publications, counts.recommends, counts.skipped },
     );
     try sendJson(request, body);
+}
+
+/// Serve the live replica's manifest sidecar (build id, sha256, watermark,
+/// counts). This is the watchdog's snapshot-age signal and a human's
+/// "what is prod actually serving" answer. 404 until the first adoption.
+fn handleSnapshot(request: *http.Server.Request, io: Io) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const live = if (std.c.getenv("LOCAL_DB_PATH")) |p| std.mem.span(p) else "/data/local.db";
+    const sidecar = try std.fmt.allocPrint(alloc, "{s}.manifest.json", .{live});
+
+    const file = Io.Dir.openFileAbsolute(io, sidecar, .{}) catch {
+        try request.respond("{\"error\":\"no snapshot manifest (pre-adoption replica)\"}", .{
+            .status = .not_found,
+            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+        });
+        return;
+    };
+    defer file.close(io);
+
+    var buf: [16 * 1024]u8 = undefined;
+    const n = file.readStreaming(io, &.{&buf}) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        else => return err,
+    };
+    try sendJson(request, try alloc.dupe(u8, buf[0..n]));
 }
 
 fn sendJson(request: *http.Server.Request, body: []const u8) !void {

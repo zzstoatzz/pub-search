@@ -73,6 +73,15 @@ fn deleteDbFiles(path: []const u8) void {
     }
 }
 
+fn hasManifestSidecar(path_env: []const u8) bool {
+    var buf: [280]u8 = undefined;
+    const sidecar = std.fmt.bufPrintZ(&buf, "{s}.manifest.json", .{path_env}) catch return false;
+    const fd = std.c.open(sidecar.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    if (fd < 0) return false;
+    _ = std.c.close(fd);
+    return true;
+}
+
 /// Delete a file by path using C unlink (std.fs.cwd removed in 0.16)
 fn unlinkPath(path: []const u8) void {
     var buf: [260]u8 = undefined;
@@ -180,8 +189,16 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
     }
     self.read_conn = self.read_pool[0];
 
-    // check integrity - if corrupt, delete and recreate
-    if (!self.checkIntegrity()) {
+    // integrity: if the manifest sidecar exists, this exact file was
+    // sha256-verified + sentinel-checked at stage time and is never written
+    // between adoptions (sync disabled; adoption is an atomic rename), so a
+    // boot-time scan re-reads 350MB of cold volume for nothing — measured
+    // ~3.5-4 min of is_ready=false per adoption (2026-06-11 first prod
+    // adopt), during which keyword falls back to turso. Attested files skip
+    // it; unattested files (manual swaps, fresh creates) keep the check.
+    if (hasManifestSidecar(path_env)) {
+        std.debug.print("local db: integrity attested by manifest sidecar; skipping boot quick_check\n", .{});
+    } else if (!self.checkIntegrity()) {
         if (is_retry) {
             std.debug.print("local db: still corrupt after recreation, giving up\n", .{});
             return error.DatabaseCorrupt;
