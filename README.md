@@ -10,10 +10,11 @@ search ATProto publishing platforms ([leaflet](https://leaflet.pub), [pckt](http
 
 ## how it works
 
-1. **[tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap)** syncs content from ATProto firehose (`pub.leaflet.*`, `site.standard.*`, `com.whtwnd.*`)
-2. **backend** indexes content into SQLite FTS5 via [Turso](https://turso.tech), serves search API with keyword, semantic, and hybrid modes
-3. **site** static frontend on Cloudflare Pages
-4. **mcp** server for AI agents (Claude Code, etc.)
+1. **ingester** (`ingester/`, our own firehose consumer) subscribes to an ATProto relay, filters to publishing collections (`pub.leaflet.*`, `site.standard.*`, `com.whtwnd.*`), cryptographically verifies each commit (signature + MST diff), and re-emits verified records over a websocket channel
+2. **backend** consumes the channel, extracts content per platform, and writes to [Turso](https://turso.tech) (source of truth); serves search with keyword (SQLite FTS5 on a local replica), semantic ([turbopuffer](https://turbopuffer.com) ANN), and hybrid modes
+3. **builder** (the same backend binary in `BUILDER_MODE`) periodically rebuilds the keyword replica offline from Turso and publishes it to R2 with a sha256 manifest — serving adopts verified snapshots instead of syncing in place (see [docs/scaling-plan.md](docs/scaling-plan.md))
+4. **site** static frontend on Cloudflare Pages
+5. **mcp** server for AI agents (Claude Code, etc.) — see [docs/agent-surfaces.md](docs/agent-surfaces.md)
 
 ## MCP server
 
@@ -52,8 +53,8 @@ the backend is fully configurable via environment variables:
 |----------|---------|-------------|
 | `APP_NAME` | `leaflet-search` | name shown in startup logs |
 | `DASHBOARD_URL` | `https://pub-search.waow.tech/dashboard.html` | redirect target for `/dashboard` |
-| `TAP_HOST` | `leaflet-search-tap.fly.dev` | tap websocket host |
-| `TAP_PORT` | `443` | tap websocket port |
+| `TAP_HOST` | `leaflet-search-ingester.internal` | ingester websocket host (tap-compatible `/channel` protocol) |
+| `TAP_PORT` | `2480` | ingester websocket port |
 | `PORT` | `3000` | HTTP server port |
 | `TURSO_URL` | - | Turso database URL (required) |
 | `TURSO_TOKEN` | - | Turso auth token (required) |
@@ -71,11 +72,10 @@ built with `scripts/build-atlas` (batch job, ~20s) → `site/atlas.json` → can
 
 ## [stack](https://bsky.app/profile/zzstoatzz.io/post/3mbij5ip4ws2a)
 
-- [Fly.io](https://fly.io) hosts [Zig](https://ziglang.org) search API and content indexing
-- [Turso](https://turso.tech) cloud SQLite (source of truth) + local read replica (FTS queries)
+- [Fly.io](https://fly.io) hosts the [Zig](https://ziglang.org) search API, content indexing, and our own verified firehose ingester ([zat](https://tangled.sh/@zzstoatzz.io/zat) for AT Protocol crypto)
+- [Turso](https://turso.tech) cloud SQLite (source of truth) + local read replica (FTS queries), refreshed via sha256-verified snapshots in [R2](https://developers.cloudflare.com/r2/)
 - [turbopuffer](https://turbopuffer.com) ANN vector search
 - [Voyage AI](https://voyageai.com) embeddings (voyage-4-lite, 1024 dims)
-- [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) syncs content from ATProto firehose
 - [Cloudflare Pages](https://pages.cloudflare.com) static frontend
 
 ## embeddings

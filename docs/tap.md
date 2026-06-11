@@ -1,3 +1,10 @@
+> **HISTORICAL (since 2026-06-09):** tap was replaced by our own firehose
+> ingester (`ingester/`) — same `/channel` websocket protocol, plus
+> cryptographic verification of every commit (which is what keeps bridgy fed
+> out of the corpus). The tap fly machine is STOPPED, kept only for rollback.
+> This doc remains as reference for the protocol and for anyone running tap
+> elsewhere.
+
 # tap (firehose sync)
 
 leaflet-search uses [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) from bluesky-social/indigo to receive real-time events from the ATProto firehose.

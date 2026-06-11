@@ -8,19 +8,21 @@ a search engine for content published on the [AT Protocol](https://atproto.com) 
 
 ```
 ATProto firehose (every post, everywhere)
-     ↓ filtered by collection
-tap (firehose consumer)
-     ↓ documents + publications
+     ↓ filtered by collection, cryptographically verified
+ingester (our own firehose consumer — signature + MST diff verification)
+     ↓ documents + publications over a websocket channel
 backend (zig)
      ├── turso (cloud sqlite — source of truth)
      ├── local sqlite replica (fast keyword search via FTS5)
+     │      ↑ refreshed by the snapshot builder: offline build from turso
+     │        → sha256 manifest → R2 → verified adoption (scaling-plan.md)
      ├── voyage AI embeddings → turbopuffer (semantic search)
      └── HTTP API
            ↓
 static frontend (cloudflare pages)
 ```
 
-content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, [tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) filters for publishing-related records, and the backend indexes them. a [reconciler](reconciliation.md) periodically verifies documents still exist at their source, catching deletions missed while the tap was down.
+content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, the [ingester](../ingester/) filters for publishing-related records and verifies each commit cryptographically (it replaced bluesky's [tap](tap.md) on 2026-06-09 — non-canonical repos like bridgy fed mirrors are dropped at the door), and the backend indexes them into turso. the serving replica is rebuilt offline and adopted atomically rather than synced in place — bulk data movement never touches the serving box. a [reconciler](reconciliation.md) periodically verifies documents still exist at their source, catching missed deletions.
 
 ## how searching works
 
@@ -62,8 +64,8 @@ the backend handles all of this in the [content extraction](content-extraction.m
 |-----------|---------------|--------|
 | full-text matching | SQLite FTS5 (BM25 ranking, inverted index) | query construction, tokenization rules, recency scoring |
 | vector similarity | Voyage AI (embeddings), turbopuffer (ANN search) | hybrid fusion, result merging, snippet extraction |
-| firehose sync | tap (from bluesky-social/indigo) | content extraction per platform, deduplication |
-| data storage | Turso (cloud SQLite), local SQLite replica | schema design, sync logic, replica management |
+| firehose sync | [zat](https://tangled.sh/@zzstoatzz.io/zat) (AT Protocol crypto: signatures, MST diff verification) | the entire ingester (relay subscription, verification policy, channel protocol), content extraction per platform, deduplication |
+| data storage | Turso (cloud SQLite), local SQLite replica, R2 (snapshot artifacts) | schema design, snapshot builder + manifest gates, replica adoption |
 | schema migrations | [zug](https://tangled.sh/@zzstoatzz.io/zug) (Zig 0.16 SQLite migration runner) | migration list, bootstrap path for the existing turso DB, `MigrationConn` adapter to zug's connection trait |
 | frontend | Cloudflare Pages (hosting) | the entire UI and search experience |
 
@@ -76,7 +78,9 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [content-extraction.md](content-extraction.md) — how content is extracted from each platform
 - [api.md](api.md) — API endpoint reference
 - [agent-surfaces.md](agent-surfaces.md) — adopting pub-search for agents: MCP vs HTTP API, when to use which
-- [tap.md](tap.md) — firehose consumer setup, debugging, memory tuning
+- [scaling-plan.md](scaling-plan.md) — the plan of record: snapshot builder → R2 → verified swap → live overlay
+- [retro-2026-06-10-cutover-cascade.md](retro-2026-06-10-cutover-cascade.md) — the outage night that produced the invariants behind that plan
+- [tap.md](tap.md) — HISTORICAL: the indigo tap sidecar the ingester replaced (protocol reference)
 - [reconciliation.md](reconciliation.md) — stale document detection and cleanup
 - [turso-hrana.md](turso-hrana.md) — Turso's HTTP protocol for database queries
 - [migrations.md](migrations.md) — schema migration system (zug + adapter + bootstrap)

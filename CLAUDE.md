@@ -13,10 +13,11 @@
 - push to both: `git push origin main && git push github main`
 
 ## architecture
-- **backend** (Zig): HTTP API, FTS5 search, vector similarity
-- **tap**: firehose sync via bluesky-social/indigo tap
+- **backend** (Zig): HTTP API, FTS5 search, vector similarity; same binary runs as the snapshot builder under `BUILDER_MODE=1`
+- **ingester** (Zig): our own firehose consumer — verifies every commit (signature + MST diff via zat), drops bridgy/non-canonical repos, re-emits over a tap-compatible `/channel`
 - **site**: static frontend on Cloudflare Pages
-- **db**: Turso (source of truth) + local SQLite read replica (FTS queries)
+- **db**: Turso (source of truth) + local SQLite read replica (FTS queries; FROZEN — `SYNC_DISABLE=1` — refreshed by snapshot adoption, see docs/scaling-plan.md)
+- **R2**: `leaflet-search-index` bucket for builder snapshots (`INDEX_R2_*` secrets on the backend app)
 
 ## platforms
 - leaflet, pckt, offprint, greengale, whitewind: known platforms
@@ -28,9 +29,15 @@
 - OR between terms for recall, prefix on last word
 - unicode61 tokenizer (non-alphanumeric = separator)
 
-## tap operations
-- from `tap/` directory: `just check` (status), `just turbo` (catch-up), `just normal` (steady state)
-- see `docs/tap.md` for memory tuning and debugging
+## snapshot builder (replica freshness)
+- run as an ephemeral machine from the latest CI image:
+  `fly machine run registry.fly.io/leaflet-search-backend:deployment-<ID> -a leaflet-search-backend --rm --vm-memory 1024 --region ewr -e BUILDER_MODE=1 -e BUILDER_CHANNEL=staging --name builder-<n>`
+- channels: `staging` (default) → `staging/builds/…` + `latest.staging.json`; `prod` requires `BUILDER_ALLOW_PROD=1` and writes `builds/…` + `latest.json` (pointer uploaded LAST)
+- gates before publish: doc-count tolerance vs turso, FTS sentinel, quick_check; banned DIDs + bridgy rows excluded at build time (`policy.zig`)
+- completion signal: `builder: published <id> to <channel> channel` in logs/logfire
+
+## tap operations (HISTORICAL — tap is STOPPED, replaced by ingester 2026-06-09)
+- see `docs/tap.md` for the protocol reference; `tap/` kept only for rollback
 
 ## zig dependencies
 - update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)
