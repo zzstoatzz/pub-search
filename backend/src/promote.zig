@@ -25,11 +25,13 @@ const zqlite = @import("zqlite");
 const logfire = @import("logfire");
 const r2 = @import("r2.zig");
 const policy = @import("policy.zig");
+const LocalDb = @import("db/LocalDb.zig");
 
 pub const MANIFEST_VERSION = 1;
 
 pub const Manifest = struct {
     manifest_version: u32,
+    schema_version: u32 = 0, // 0 = legacy manifest from before the field existed
     build_id: []const u8,
     channel: []const u8,
     snapshot_key: []const u8,
@@ -171,6 +173,16 @@ fn checkOnce(allocator: Allocator, io: Io) !void {
         logfire.warn("promote: channel mismatch: manifest={s} watcher={s} — refusing", .{ m.channel, channel });
         return error.ChannelMismatch;
     }
+    // schema compatibility: a snapshot from an out-of-date builder image must
+    // stall freshness, never break serving. 0 = legacy manifest (pre-field),
+    // accepted with a warning until those age out of the channel.
+    if (m.schema_version != 0 and m.schema_version != LocalDb.SCHEMA_VERSION) {
+        logfire.warn("promote: schema mismatch: manifest v{d}, serving v{d} — refusing (recreate the builder machine)", .{ m.schema_version, LocalDb.SCHEMA_VERSION });
+        return error.SchemaMismatch;
+    }
+    if (m.schema_version == 0) {
+        logfire.warn("promote: legacy manifest without schema_version — accepting (build {s})", .{m.build_id});
+    }
 
     // 3. already current or already staged?
     const live = localDbPath();
@@ -216,6 +228,12 @@ fn checkOnce(allocator: Allocator, io: Io) !void {
         const part_z = try std.fmt.allocPrintSentinel(arena, "{s}", .{part_path}, 0);
         const new_z = try std.fmt.allocPrintSentinel(arena, "{s}.new", .{live}, 0);
         if (std.c.rename(part_z.ptr, new_z.ptr) != 0) return error.StageRenameFailed;
+    }
+    // the read-only verify left .part-wal/-shm behind; the .part is renamed
+    // away, so they're pure litter
+    inline for (.{ "-wal", "-shm" }) |suffix| {
+        const aux = try std.fmt.allocPrint(arena, "{s}{s}", .{ part_path, suffix });
+        unlinkZ(arena, aux);
     }
 
     // 8. adopt via the boot path every deploy already exercises. Requires
@@ -352,6 +370,7 @@ test "manifest parses builder output and ignores unknown fields" {
     const json =
         \\{
         \\  "manifest_version": 1,
+        \\  "schema_version": 1,
         \\  "build_id": "b1781159205-d85f",
         \\  "channel": "staging",
         \\  "snapshot_key": "staging/builds/b1781159205-d85f/replica.db",

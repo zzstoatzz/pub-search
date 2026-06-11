@@ -176,6 +176,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     const manifest = try std.fmt.allocPrint(allocator,
         \\{{
         \\  "manifest_version": {d},
+        \\  "schema_version": {d},
         \\  "build_id": "{s}",
         \\  "channel": "{s}",
         \\  "snapshot_key": "{s}",
@@ -190,9 +191,10 @@ pub fn run(allocator: Allocator, io: Io) !void {
         \\}}
         \\
     , .{
-        MANIFEST_VERSION,        build_id,           @tagName(channel), snapshot_key,
-        byte_size,               &sha_hex,           watermark,         counts.documents,
-        counts.publications,     counts.tags,        started_s,         getenv("BUILDER_VERSION") orelse "dev",
+        MANIFEST_VERSION,        LocalDb.SCHEMA_VERSION, build_id,    @tagName(channel),
+        snapshot_key,            byte_size,              &sha_hex,    watermark,
+        counts.documents,        counts.publications,    counts.tags, started_s,
+        getenv("BUILDER_VERSION") orelse "dev",
     });
 
     try writeFile(io, manifest_path, manifest);

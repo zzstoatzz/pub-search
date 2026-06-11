@@ -9,6 +9,14 @@ const logfire = @import("logfire");
 
 const LocalDb = @This();
 
+/// Local replica schema generation. Bump when createSchema changes shape
+/// (new column/table/index the serving code depends on). The builder stamps
+/// it into the manifest; the promote watcher rejects a mismatch — a snapshot
+/// built by an out-of-date builder image must stall freshness, not break
+/// serving. (Scheduled builder machines pin their creation image: recreate
+/// them after bumping this.)
+pub const SCHEMA_VERSION: u32 = 1;
+
 const READ_POOL_SIZE = 4;
 
 conn: ?zqlite.Conn = null,
