@@ -13,3 +13,4 @@ site/atlas-avatar-cache.json
 zig-pkg/
 .claude/
 .codex/
+__pycache__/

@@ -60,11 +60,12 @@
   }
 
   // --- view state ---
-  // maxZoom 60 (was 30): you don't get new data past the existing cluster /
-  // title resolution, but the experience of zooming in further is rewarding —
-  // dots breathe, titles upsize, identity is more prominent. dot sprite
-  // radius is capped (see pointR formula) so the sprite atlas stays bounded.
-  var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 60, dirty: true };
+  // maxZoom 500 (was 60): past zoom ~45 each document grows into a card
+  // (platform, wrapped title, publication avatar) that keeps upsizing as
+  // you approach — see the document-card layer in render(). the extra
+  // headroom past the card's full size (~250) is for separating docs that
+  // sit nearly on top of each other in dense clusters.
+  var view = { zoom: 1, panX: 0, panY: 0, minZoom: 0.5, maxZoom: 500, dirty: true };
 
   // --- demand-driven frame scheduling ---
   var frameRequested = false;
@@ -351,6 +352,74 @@
     return bestIdx;
   }
 
+  // --- document cards (high-zoom close-up view) ---
+  // crossfade from bare title labels into cards over CARD_START..CARD_START+CARD_RANGE;
+  // cards then keep growing ("HD") until zoom CARD_FULL.
+  var CARD_START = 45, CARD_RANGE = 20, CARD_FULL = 250;
+  var cardHitRects = null; // [{x, y, w, h, i}] rebuilt each frame, for hover/click
+
+  function findCardAt(sx, sy) {
+    if (!cardHitRects) return -1;
+    for (var k = cardHitRects.length - 1; k >= 0; k--) {
+      var r = cardHitRects[k];
+      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return r.i;
+    }
+    return -1;
+  }
+
+  function roundRectPath(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); return; }
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // monospace word-wrap: returns up to maxLines lines, ellipsis on overflow.
+  // hard-breaks long unbroken runs (URLs, CJK) so nothing escapes the card.
+  function wrapText(text, maxW, maxLines) {
+    var charW = ctx.measureText('M').width || 7;
+    var maxChars = Math.max(4, Math.floor(maxW / charW));
+    var words = text.split(/\s+/);
+    var lines = [], cur = '', truncated = false;
+    for (var w = 0; w < words.length; w++) {
+      var word = words[w];
+      while (word.length > maxChars && lines.length < maxLines) {
+        if (cur) { lines.push(cur); cur = ''; }
+        if (lines.length >= maxLines) break;
+        lines.push(word.slice(0, maxChars));
+        word = word.slice(maxChars);
+      }
+      if (lines.length >= maxLines) { truncated = true; break; }
+      var attempt = cur ? cur + ' ' + word : word;
+      if (attempt.length > maxChars) {
+        lines.push(cur);
+        cur = word;
+        if (lines.length >= maxLines) { truncated = true; break; }
+      } else {
+        cur = attempt;
+      }
+    }
+    if (cur && lines.length < maxLines) lines.push(cur);
+    else if (cur) truncated = true;
+    if (truncated && lines.length > 0) {
+      var last = lines[lines.length - 1];
+      if (last.length >= maxChars) last = last.slice(0, maxChars - 1);
+      lines[lines.length - 1] = last + '…';
+    }
+    return lines;
+  }
+
+  function truncToChars(text, maxW) {
+    var charW = ctx.measureText('M').width || 7;
+    var maxChars = Math.max(4, Math.floor(maxW / charW));
+    if (text.length <= maxChars) return text;
+    return text.slice(0, maxChars - 1) + '…';
+  }
+
   // --- label helper: strokeText outline instead of shadowBlur ---
   function drawLabel(text, x, y, dark) {
     ctx.strokeStyle = dark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.7)';
@@ -424,6 +493,8 @@
     var haloFloor = smallViewport ? 0.10 : 0.25;
     var haloShrink = smallViewport ? 0.6 : 1.0;
     var haloAlphaFactor = zoom < 2 ? 1.0 : Math.max(haloFloor, 1 - (zoom - 2) / 8);
+    // at card zoom the nebulae are just backdrop noise — fade them out
+    haloAlphaFactor *= fadeOut(zoom, 30, 20);
     if (haloAlphaFactor > 0.01) {
       var clusters = zoom < 2 ? data.clusters.coarse : data.clusters.fine;
       var baseAlpha = dark ? (zoom < 2 ? 0.06 : 0.04) : (zoom < 2 ? 0.05 : 0.03);
@@ -714,10 +785,162 @@
     // smooth label transitions:
     // coarse labels: full opacity zoom<1.7, fade out 1.7–2.3
     // fine labels: fade in 1.7–2.3, full opacity 2.3–4.5, fade out 4.5–5.5
-    // titles: fade in 4.5–5.5, full opacity 5.5+
+    // titles: fade in 4.5–5.5, full opacity 5.5 until cards take over
+    // cards: fade in over CARD_START..CARD_START+CARD_RANGE, then grow to CARD_FULL
     var coarseAlpha = fadeOut(zoom, 1.7, 0.6);
     var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 4.5, 1.0);
-    var titleAlpha = fadeIn(zoom, 4.5, 1.0);
+    var titleAlpha = fadeIn(zoom, 4.5, 1.0) * fadeOut(zoom, CARD_START, CARD_RANGE);
+    var cardAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
+
+    // --- document cards: the close-up "HD" representation ---
+    // drawn FIRST so cards win label collisions during the title crossfade.
+    cardHitRects = null;
+    if (cardAlpha > 0.01) {
+      cardHitRects = [];
+      // growth factor: cards upsize from the moment they're fully formed
+      // (CARD_START+CARD_RANGE) until CARD_FULL
+      var g = clamp01((zoom - (CARD_START + CARD_RANGE)) / (CARD_FULL - CARD_START - CARD_RANGE));
+      function grow(a, b) { return a + (b - a) * g; }
+      var cardW = small ? Math.min(W - 32, grow(160, 300)) : grow(190, 360);
+      var padC = Math.round(grow(9, 16));
+      var titleFont = Math.round(grow(11, 19));
+      var metaFont = Math.round(grow(9, 13));
+      var headFont = Math.round(grow(9, 12));
+      var logoS = Math.round(grow(13, 20));
+      var avatarS = Math.round(grow(20, 48));
+      var lineH = Math.round(titleFont * 1.35);
+      var maxTitleLines = g < 0.4 ? 2 : 3;
+      // fewer cards while they're small (dense field), more as you close in
+      var maxCards = small ? Math.round(5 + 3 * g) : Math.round(10 + 10 * g);
+      var anchorGap = Math.round(grow(12, 22));
+      var innerW = cardW - padC * 2;
+
+      // nearest-to-viewport-center docs win the card slots
+      var cands = [];
+      var vcx = W / 2, vcy = H / 2;
+      for (var i = 0; i < n; i++) {
+        var px = pointsX[i], py = pointsY[i];
+        if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
+        if (filtering && !activePlatforms.has(PLATFORMS[platformIdx[i]])) continue;
+        var sx = cx + px * scale, sy = cy + py * scale;
+        var ddx = sx - vcx, ddy = sy - vcy;
+        cands.push({ i: i, sx: sx, sy: sy, d: ddx * ddx + ddy * ddy });
+      }
+      cands.sort(function(a, b) { return a.d - b.d; });
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      var shownCards = 0;
+      for (var c = 0; c < cands.length && shownCards < maxCards; c++) {
+        var idx = cands[c].i;
+        var p = data.points[idx];
+        var sx = cands[c].sx, sy = cands[c].sy;
+        var platform = PLATFORMS[platformIdx[idx]];
+        var colors = frameColors[platform];
+        var title = p.title || '(untitled)';
+
+        ctx.font = titleFont + 'px monospace';
+        var lines = wrapText(title, innerW, maxTitleLines);
+
+        var pub = pubByBasePath ? pubByBasePath.get(p.basePath) : null;
+        var showAvatar = pub && g > 0.1;
+        var headH = showAvatar ? Math.max(logoS, avatarS) : logoS;
+        var cardH = padC + headH + 7 + lines.length * lineH + 5 + metaFont + padC;
+
+        var cardX = sx - cardW / 2;
+        var cardY = sy - anchorGap - cardH;
+        var below = false;
+        if (cardY < 8) { cardY = sy + anchorGap; below = true; }
+        // skip only when fully off-screen — a partially visible card stays
+        // anchored to its dot, so there's no label/dot disconnect
+        if (cardX > W || cardX + cardW < 0 || cardY > H || cardY + cardH < 0) continue;
+        if (!canPlace(sx, cardY + cardH / 2, cardW, cardH)) continue;
+
+        if (showAvatar) loadPubImage(pub);
+
+        // connector from card edge to the dot it describes
+        ctx.globalAlpha = cardAlpha * 0.5;
+        ctx.strokeStyle = colors.mid;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (below) { ctx.moveTo(sx, cardY); ctx.lineTo(sx, sy + 6); }
+        else { ctx.moveTo(sx, cardY + cardH); ctx.lineTo(sx, sy - 6); }
+        ctx.stroke();
+
+        // card body
+        ctx.globalAlpha = cardAlpha * 0.96;
+        roundRectPath(cardX, cardY, cardW, cardH, 8);
+        ctx.fillStyle = dark ? 'rgba(10,12,16,0.88)' : 'rgba(255,255,255,0.93)';
+        ctx.fill();
+        ctx.strokeStyle = idx === hoveredIndex ? colors.core : hexToRgba(colors.mid, 0.55);
+        ctx.lineWidth = idx === hoveredIndex ? 2 : 1.5;
+        ctx.stroke();
+
+        // header: platform logo + name (left), publication avatar (right)
+        var headCY = cardY + padC + headH / 2;
+        var logo = platformLogos[platform];
+        var hasLogo = logo && logo.complete && logo.naturalWidth > 0;
+        var tx = cardX + padC;
+        if (hasLogo) {
+          ctx.drawImage(logo, tx, headCY - logoS / 2, logoS, logoS);
+          tx += logoS + 5;
+        }
+        ctx.font = headFont + 'px monospace';
+        ctx.fillStyle = colors.core;
+        ctx.fillText(platform, tx, headCY);
+
+        if (showAvatar) {
+          var ax = cardX + cardW - padC - avatarS / 2;
+          var img = pubImages[pub.basePath];
+          if (img) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(ax, headCY, avatarS / 2, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(img, ax - avatarS / 2, headCY - avatarS / 2, avatarS, avatarS);
+            ctx.restore();
+          } else {
+            ctx.beginPath();
+            ctx.arc(ax, headCY, avatarS / 2, 0, Math.PI * 2);
+            ctx.fillStyle = colors.edge;
+            ctx.fill();
+            ctx.font = 'bold ' + Math.round(avatarS * 0.5) + 'px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = colors.core;
+            ctx.fillText(((pub.name || p.basePath || '?').charAt(0)).toUpperCase(), ax, headCY);
+            ctx.textAlign = 'left';
+          }
+          ctx.beginPath();
+          ctx.arc(ax, headCY, avatarS / 2, 0, Math.PI * 2);
+          ctx.strokeStyle = hexToRgba(colors.mid, 0.6);
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+
+        // title lines
+        ctx.font = titleFont + 'px monospace';
+        ctx.fillStyle = dark ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.85)';
+        var ty = cardY + padC + headH + 7 + lineH / 2;
+        for (var l = 0; l < lines.length; l++) {
+          ctx.fillText(lines[l], cardX + padC, ty);
+          ty += lineH;
+        }
+
+        // meta: where it lives
+        var meta = p.basePath || (p.uri.split('/')[2] || '');
+        if (meta) {
+          ctx.font = metaFont + 'px monospace';
+          ctx.fillStyle = dark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)';
+          ctx.fillText(truncToChars(meta, innerW), cardX + padC, ty - lineH / 2 + 5 + metaFont / 2);
+        }
+
+        cardHitRects.push({ x: cardX, y: cardY, w: cardW, h: cardH, i: idx });
+        shownCards++;
+      }
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+    }
 
     // CULLING RULE: labels stay anchored above their dot/cluster. If the
     // label would extend past the viewport edge, we CULL it rather than
@@ -947,7 +1170,20 @@
       return;
     }
     cacheTransform();
-    // check publications first (rendered on top of points)
+    // document cards are topmost — they show everything the tooltip would,
+    // so hovering one just highlights it and arms the click
+    var cardIdx = findCardAt(mouseX, mouseY);
+    if (cardIdx >= 0) {
+      if (hoveredIndex !== cardIdx || hoveredPub !== -1) {
+        hoveredPub = -1;
+        hoveredIndex = cardIdx;
+        tooltip.style.display = 'none';
+        markDirty();
+      }
+      canvas.style.cursor = 'pointer';
+      return;
+    }
+    // check publications next (rendered on top of points)
     var pi = findNearestPub(mouseX, mouseY);
     if (pi >= 0) {
       if (hoveredPub !== pi) {
@@ -1059,7 +1295,25 @@
           Math.abs(endedTouches[0].clientY - dragStartY) < 10)) {
         var tx = endedTouches[0].clientX, ty = endedTouches[0].clientY;
         cacheTransform();
-        // check publications first
+        // document cards are topmost: first tap selects (highlight border),
+        // second tap opens — same pattern as dots, minus the redundant tooltip
+        var cardIdx = findCardAt(tx, ty);
+        if (cardIdx >= 0) {
+          if (cardIdx === selectedIndex) {
+            var cp = data.points[cardIdx];
+            var cu = atUriToUrl(cp.uri, cp.basePath, cp.platform, cp.path);
+            if (cu) window.open(cu, '_blank');
+            selectedIndex = -1;
+            hideTooltip();
+          } else {
+            selectedIndex = cardIdx;
+            hoveredIndex = cardIdx;
+            tooltip.style.display = 'none';
+            markDirty();
+          }
+          return;
+        }
+        // check publications next
         var pi = findNearestPub(tx, ty);
         if (pi >= 0) {
           var url = pubUrl(pubData[pi]);
@@ -1299,15 +1553,17 @@
             searchCenter = { x: pointsX[idx], y: pointsY[idx] };
             searchQuery = d.points[idx].title || '';
             setSearchStatus('1 document');
-            animateTo(searchCenter.x, searchCenter.y, 12);
-            // show tooltip after animation
+            animateTo(searchCenter.x, searchCenter.y, pendingZoom || 12);
+            // show tooltip after animation — unless we land at card zoom,
+            // where the document card already shows everything
             setTimeout(function() {
               cacheTransform();
               var sx = cx + pointsX[idx] * scale;
               var sy = cy + pointsY[idx] * scale;
               hoveredIndex = idx;
               selectedIndex = idx;
-              showTooltip(idx, sx, sy);
+              if (view.zoom < CARD_START) showTooltip(idx, sx, sy);
+              else markDirty();
             }, ANIM_DURATION + 50);
           }
           pendingUri = null;
@@ -1345,6 +1601,7 @@
   var pendingSearchResults = null; // promise for prefetched search results
   var pendingUri = null; // URI to jump to after data loads (from "view on atlas" links)
   var pendingPub = null; // basePath to jump to (from "view publication on atlas" links)
+  var pendingZoom = null; // ?z= zoom override for uri deep-links
 
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
@@ -1353,6 +1610,9 @@
   var urlUri = urlParams.get('uri');
   var urlPub = urlParams.get('pub');
   var urlQ = urlParams.get('q');
+  // optional zoom override for ?uri= deep-links (also handy for debugging)
+  var urlZ = parseFloat(urlParams.get('z'));
+  if (urlZ > 0) pendingZoom = Math.max(view.minZoom, Math.min(view.maxZoom, urlZ));
   if (urlUri) {
     pendingUri = urlUri;
   } else if (urlPub) {
