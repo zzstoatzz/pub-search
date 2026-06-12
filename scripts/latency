@@ -20,9 +20,9 @@ Usage:
     scripts/latency --plain                  # no ANSI (pipe/paste friendly)
     scripts/latency --backend http://...     # point elsewhere
 
-Note: lifetime /stats percentiles persist across restarts and still carry
-the 2026-06-10 outage tail (p99 in MINUTES); the hourly series is the
-honest view of now.
+Note: lifetime /stats percentiles persist across restarts (reset
+2026-06-12 when the endpoint registry grew); the hourly series is the
+view of "now", the summary is the long arc.
 """
 
 import argparse
@@ -129,11 +129,11 @@ def plot_summary(backend: str, plain: bool = False) -> None:
     def ms(v: float) -> str:
         return f"{v:,.0f}ms"
 
-    print(f"{'endpoint':<18}{'count':>8}{'p50':>10}{'p95':>12}{'p99':>14}{'max':>14}")
+    print(f"{'endpoint':<26}{'count':>8}{'p50':>10}{'p95':>12}{'p99':>14}{'max':>14}")
     for n in names:
         t = timing[n]
-        print(f"{n:<18}{t['count']:>8}{ms(t['p50_ms']):>10}{ms(t['p95_ms']):>12}{ms(t['p99_ms']):>14}{ms(t['max_ms']):>14}")
-    print("\n(lifetime, persisted across restarts — includes 2026-06-10 outage tail)")
+        print(f"{n:<26}{t['count']:>8}{ms(t['p50_ms']):>10}{ms(t['p95_ms']):>12}{ms(t['p99_ms']):>14}{ms(t['max_ms']):>14}")
+    print("\n(lifetime since 2026-06-12 — percentile history reset when the endpoint registry grew)")
 
     plt.clear_figure()
     plt.theme("pro")
