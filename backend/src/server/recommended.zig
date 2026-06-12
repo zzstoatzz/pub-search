@@ -17,6 +17,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const json = std.json;
 const zql = @import("zql");
+const logfire = @import("logfire");
 
 const db = @import("../db.zig");
 const search = @import("search.zig");
@@ -404,6 +405,69 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort, filter: Filter) ![]co
 /// this a handful of times per cycle, so a cache slot per (pool, window)
 /// pair would balloon for no real win.
 pub fn fetchTopAuthorCascade(alloc: Allocator, window: Window, pool_size: i64) ![]const u8 {
+    // local-first: the cascade walks every recommend + a documents join —
+    // ~30k rows read per request against turso, and perpetually cold because
+    // this endpoint is rarely hit. Against the replica it's single-digit ms
+    // for ANY pool x window combo, no cache slots, no turso reads
+    // (scaling-plan invariant #2: no request does corpus-proportional remote
+    // work). Falls back to turso until the first schema-v2 snapshot lands.
+    if (db.getLocalDb()) |local| {
+        if (fetchTopAuthorCascadeLocal(alloc, local, window, pool_size)) |body| {
+            return body;
+        } else |err| {
+            logfire.warn("recommended.cascade local failed, turso fallback: {s}", .{@errorName(err)});
+        }
+    }
+    return fetchTopAuthorCascadeTurso(alloc, window, pool_size);
+}
+
+fn fetchTopAuthorCascadeLocal(alloc: Allocator, local: *db.LocalDb, window: Window, pool_size: i64) ![]const u8 {
+    // pre-v2 snapshots have an empty (boot-created) recommends table
+    {
+        var check = try local.query("SELECT COUNT(*) FROM recommends", .{});
+        defer check.deinit();
+        const row = check.next() orelse return error.NoLocalRecommends;
+        if (row.int(0) == 0) return error.NoLocalRecommends;
+    }
+
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    errdefer output.deinit();
+
+    var rows = try local.query(RecommendedByTopAuthorsQuery.positional, .{ window.dateModifier(), pool_size });
+    defer rows.deinit();
+
+    var jw: json.Stringify = .{ .writer = &output.writer };
+    try jw.beginArray();
+    while (rows.next()) |row| {
+        const has_publication = row.int(8) != 0;
+        const doc_type: []const u8 = if (has_publication) "article" else "looseleaf";
+        const platform = row.text(6);
+        const base_path = row.text(5);
+        const path = row.text(7);
+        const rkey = row.text(4);
+        const did = row.text(1);
+        try jw.write(JsonRow{
+            .type = doc_type,
+            .uri = row.text(0),
+            .did = did,
+            .title = row.text(2),
+            .createdAt = row.text(3),
+            .rkey = rkey,
+            .basePath = base_path,
+            .platform = platform,
+            .path = path,
+            .publicationName = row.text(9),
+            .url = search.buildDocUrl(alloc, doc_type, platform, base_path, path, rkey, did),
+            .recommendCount = row.int(10),
+            .totalCount = row.int(11),
+        });
+    }
+    if (rows.err()) |e| return e;
+    try jw.endArray();
+    return try output.toOwnedSlice();
+}
+
+fn fetchTopAuthorCascadeTurso(alloc: Allocator, window: Window, pool_size: i64) ![]const u8 {
     const c = db.getClient() orelse return error.NotInitialized;
 
     var output: std.Io.Writer.Allocating = .init(alloc);

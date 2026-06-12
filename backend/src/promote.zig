@@ -41,6 +41,7 @@ pub const Manifest = struct {
     doc_count: u64 = 0,
     pub_count: u64 = 0,
     tag_count: u64 = 0,
+    rec_count: u64 = 0,
     created_at: i64 = 0,
     builder_version: []const u8 = "dev",
 };
@@ -273,6 +274,20 @@ fn verifySnapshot(arena: Allocator, path: []const u8, m: Manifest) !void {
             const got: u64 = @intCast(r.int(0));
             if (got != m.doc_count) {
                 logfire.err("promote: GATE FAIL doc count: snapshot has {d}, manifest says {d}", .{ got, m.doc_count });
+                return error.CountGate;
+            }
+        } else return error.CountGate;
+    }
+
+    // recommends count must match when the manifest claims one (v2+ builds;
+    // 0 = pre-recommends manifest, nothing to check)
+    if (m.rec_count > 0) {
+        const row = conn.row("SELECT COUNT(*) FROM recommends", .{}) catch return error.CountGate;
+        if (row) |r| {
+            defer r.deinit();
+            const got: u64 = @intCast(r.int(0));
+            if (got != m.rec_count) {
+                logfire.err("promote: GATE FAIL rec count: snapshot has {d}, manifest says {d}", .{ got, m.rec_count });
                 return error.CountGate;
             }
         } else return error.CountGate;

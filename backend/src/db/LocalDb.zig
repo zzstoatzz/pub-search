@@ -15,7 +15,7 @@ const LocalDb = @This();
 /// built by an out-of-date builder image must stall freshness, not break
 /// serving. (Scheduled builder machines pin their creation image: recreate
 /// them after bumping this.)
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2; // v2: recommends table (top-author cascade served locally)
 
 const READ_POOL_SIZE = 4;
 
@@ -350,6 +350,24 @@ fn createSchema(self: *LocalDb) !void {
         \\  count INTEGER DEFAULT 1
         \\)
     , .{}) catch {};
+
+    // recommends (schema v2): lets the top-author cascade and (eventually)
+    // the recommended/curators cache refreshes run against the replica
+    // instead of walking ~30k turso rows per request
+    c.exec(
+        \\CREATE TABLE IF NOT EXISTS recommends (
+        \\  uri TEXT PRIMARY KEY,
+        \\  did TEXT NOT NULL,
+        \\  rkey TEXT NOT NULL,
+        \\  document_uri TEXT NOT NULL,
+        \\  created_at TEXT,
+        \\  indexed_at TEXT
+        \\)
+    , .{}) catch |err| {
+        std.debug.print("local db: failed to create recommends table: {}\n", .{err});
+    };
+    c.exec("CREATE INDEX IF NOT EXISTS idx_recommends_document_uri ON recommends(document_uri)", .{}) catch {};
+    c.exec("CREATE INDEX IF NOT EXISTS idx_recommends_did ON recommends(did)", .{}) catch {};
 
     // Idempotent column-add for existing local DBs. SQLite returns an error
     // when the column already exists ("duplicate column name"), which is

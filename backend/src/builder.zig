@@ -84,8 +84,8 @@ pub fn run(allocator: Allocator, io: Io) !void {
     try local.openAt(db_path);
 
     const counts = try sync.buildSnapshot(turso, &local, watermark);
-    logfire.info("builder: built {d} docs, {d} pubs, {d} tags, {d} popular", .{
-        counts.documents, counts.publications, counts.tags, counts.popular,
+    logfire.info("builder: built {d} docs, {d} pubs, {d} tags, {d} popular, {d} recommends", .{
+        counts.documents, counts.publications, counts.tags, counts.popular, counts.recommends,
     });
 
     // ------------------------------------------------------------------
@@ -186,6 +186,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
         \\  "doc_count": {d},
         \\  "pub_count": {d},
         \\  "tag_count": {d},
+        \\  "rec_count": {d},
         \\  "created_at": {d},
         \\  "builder_version": "{s}"
         \\}}
@@ -193,8 +194,8 @@ pub fn run(allocator: Allocator, io: Io) !void {
     , .{
         MANIFEST_VERSION,        LocalDb.SCHEMA_VERSION, build_id,    @tagName(channel),
         snapshot_key,            byte_size,              &sha_hex,    watermark,
-        counts.documents,        counts.publications,    counts.tags, started_s,
-        getenv("BUILDER_VERSION") orelse "dev",
+        counts.documents,        counts.publications,    counts.tags, counts.recommends,
+        started_s,               getenv("BUILDER_VERSION") orelse "dev",
     });
 
     try writeFile(io, manifest_path, manifest);

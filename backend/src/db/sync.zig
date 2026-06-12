@@ -220,6 +220,7 @@ pub const BuildCounts = struct {
     publications: usize = 0,
     tags: usize = 0,
     popular: usize = 0,
+    recommends: usize = 0,
 };
 
 const BUILD_PAGE_SIZE = 500;
@@ -250,6 +251,16 @@ pub const BUILD_DOC_COUNT_SQL =
 const BUILD_PUB_SQL =
     "SELECT uri, did, rkey, name, description, base_path, platform, indexed_at " ++
     "FROM publications WHERE did NOT IN (" ++ policy.banned_dids_sql ++ ")";
+
+// watermark-pinned like documents (NULL indexed_at sorts as old → included)
+const BUILD_REC_SQL =
+    "SELECT uri, did, rkey, document_uri, COALESCE(created_at, ''), COALESCE(indexed_at, '') " ++
+    "FROM recommends WHERE COALESCE(indexed_at, '') <= ? " ++
+    "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
+
+pub const BUILD_REC_COUNT_SQL =
+    "SELECT COUNT(*) FROM recommends WHERE COALESCE(indexed_at, '') <= ? " ++
+    "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
 
 /// Offline snapshot build: populate a FRESH local db from turso. The target
 /// must never be the serving replica — the builder runs off-box (builder.zig)
@@ -333,6 +344,24 @@ pub fn buildSnapshot(turso: *Client, local: *LocalDb, watermark: []const u8) !Bu
         // tags were copied unfiltered; drop the ones whose documents the
         // policy filters excluded (local-side, cheap)
         conn.exec("DELETE FROM document_tags WHERE document_uri NOT IN (SELECT uri FROM documents)", .{}) catch {};
+    }
+
+    {
+        var rec_result = turso.query(BUILD_REC_SQL, &.{watermark}) catch |err| {
+            logfire.err("build: turso recommends query failed: {}", .{err});
+            return err;
+        };
+        defer rec_result.deinit();
+
+        conn.exec("BEGIN", .{}) catch {};
+        for (rec_result.rows) |row| {
+            conn.exec(
+                "INSERT OR REPLACE INTO recommends (uri, did, rkey, document_uri, created_at, indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                .{ row.text(0), row.text(1), row.text(2), row.text(3), row.text(4), row.text(5) },
+            ) catch {};
+            counts.recommends += 1;
+        }
+        conn.exec("COMMIT", .{}) catch {};
     }
 
     {
