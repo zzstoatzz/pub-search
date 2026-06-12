@@ -545,8 +545,8 @@
     g.textAlign = 'left';
     // title marquee — tile period must divide texW exactly or the wrap seam jumps
     var title = p.title || '(untitled)';
-    if (title.length > 36) title = title.slice(0, 35) + '…';
-    g.font = 'bold 46px monospace';
+    if (title.length > 41) title = title.slice(0, 40) + '…';
+    g.font = 'bold 40px monospace';
     var tw = g.measureText(title).width;
     var m = Math.max(1, Math.floor(PLANET_TEX_W / (tw + 100)));
     var period = PLANET_TEX_W / m;
@@ -566,15 +566,15 @@
     // meta band near the south pole
     var meta = p.basePath || (p.uri.split('/')[2] || '');
     if (meta) {
-      if (meta.length > 42) meta = meta.slice(0, 41) + '…';
-      g.font = '24px monospace';
+      if (meta.length > 46) meta = meta.slice(0, 45) + '…';
+      g.font = '21px monospace';
       var mw = g.measureText(meta).width;
       var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 80)));
       var period2 = PLANET_TEX_W / m2;
       if (accent) g.fillStyle = accentCss(accent, frameDark ? 0.70 : 0.30);
       else g.fillStyle = frameDark ? hexToRgba(c.core, 0.9) : 'rgba(0,0,0,0.6)';
       for (var k2 = 0; k2 * period2 < cv.width; k2++) {
-        g.fillText(meta, k2 * period2, 86);
+        g.fillText(meta, k2 * period2, 79);
       }
     }
     e = {
