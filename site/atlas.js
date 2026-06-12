@@ -156,6 +156,97 @@
     img.src = url;
   }
 
+  // --- publication accent colors, sampled from avatar art ---
+  // a publication's visual identity comes from its art; we distill it into
+  // an accent hue used to style that pub's planets and cards (platform color
+  // stays present in rings/rims/beacons). needs a CORS-mode image load so
+  // getImageData works — tainted/grayscale/missing art falls back to null.
+  var pubAccents = {}; // basePath -> {h, s, key} | null
+  var pubAccentLoading = {};
+
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    var h = 0, s = 0, l = (mx + mn) / 2;
+    if (mx !== mn) {
+      var d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+
+  function hslToRgb(h, s, l) {
+    if (s === 0) { var v = Math.round(l * 255); return [v, v, v]; }
+    function f(p, q, t) {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    var p = 2 * l - q;
+    return [Math.round(f(p, q, h + 1 / 3) * 255), Math.round(f(p, q, h) * 255), Math.round(f(p, q, h - 1 / 3) * 255)];
+  }
+
+  function accentCss(accent, l) {
+    var rgb = hslToRgb(accent.h, accent.s, l);
+    return 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
+  }
+
+  function extractPubAccent(pub) {
+    var key = pub && pub.basePath;
+    if (!key || pubAccents[key] !== undefined || pubAccentLoading[key]) return;
+    var url = pubImageUrl(pub);
+    if (!url) { pubAccents[key] = null; return; }
+    pubAccentLoading[key] = true;
+    var img = new Image();
+    // bsky CDN art goes through our same-origin /img-proxy (the CDN sends no
+    // CORS headers, which would taint the canvas); other hosts get a direct
+    // CORS attempt and fall back to no accent
+    if (url.indexOf('https://cdn.bsky.app/') === 0) {
+      url = '/img-proxy?u=' + encodeURIComponent(url);
+    } else {
+      img.crossOrigin = 'anonymous';
+    }
+    img.onload = function() {
+      delete pubAccentLoading[key];
+      try {
+        var s = 12;
+        var cv = document.createElement('canvas');
+        cv.width = s; cv.height = s;
+        var c = cv.getContext('2d');
+        c.drawImage(img, 0, 0, s, s);
+        var px = c.getImageData(0, 0, s, s).data;
+        var r = 0, g = 0, b = 0, wsum = 0;
+        for (var i = 0; i < px.length; i += 4) {
+          if (px[i + 3] < 200) continue;
+          var mx = Math.max(px[i], px[i + 1], px[i + 2]);
+          var mn = Math.min(px[i], px[i + 1], px[i + 2]);
+          var sat = mx === 0 ? 0 : (mx - mn) / mx;
+          var w = 0.05 + sat * sat; // favor the saturated pixels — that's the "theme"
+          r += px[i] * w; g += px[i + 1] * w; b += px[i + 2] * w; wsum += w;
+        }
+        if (!wsum) { pubAccents[key] = null; return; }
+        var hsl = rgbToHsl(r / wsum, g / wsum, b / wsum);
+        if (hsl[1] < 0.15) { pubAccents[key] = null; return; } // grayscale art — no accent
+        var sat2 = Math.min(0.85, Math.max(0.45, hsl[1]));
+        pubAccents[key] = { h: hsl[0], s: sat2, key: Math.round(hsl[0] * 360) + ',' + Math.round(sat2 * 100) };
+        markDirty();
+      } catch (err) {
+        pubAccents[key] = null; // tainted canvas — host without CORS
+      }
+    };
+    img.onerror = function() {
+      delete pubAccentLoading[key];
+      pubAccents[key] = null;
+    };
+    img.src = url;
+  }
+
   // --- search state ---
   var searchMatches = null; // Set of point indices matching current search
   var searchCenter = null; // {x, y} weighted centroid of matches
@@ -376,18 +467,26 @@
 
   function getPlanetTexture(i) {
     var theme = frameDark ? 'dark' : 'light';
-    var e = planetTex.get(i);
-    if (e && e.theme === theme) return e;
-    if (planetTex.size > 96) planetTex.delete(planetTex.keys().next().value);
     var p = data.points[i];
+    var pub = pubByBasePath && p.basePath ? pubByBasePath.get(p.basePath) : null;
+    if (pub) extractPubAccent(pub);
+    var accent = p.basePath ? pubAccents[p.basePath] : null;
+    var accentKey = accent ? accent.key : 'none';
+    var e = planetTex.get(i);
+    if (e && e.theme === theme && e.accentKey === accentKey) return e;
+    if (planetTex.size > 96) planetTex.delete(planetTex.keys().next().value);
     var platform = PLATFORMS[platformIdx[i]];
     var c = frameColors[platform];
     var cv = document.createElement('canvas');
     cv.width = PLANET_TEX_W + PLANET_TEX_BLEED;
     cv.height = PLANET_TEX_H;
     var g = cv.getContext('2d');
-    var rgb = parseHex(c.edge);
-    if (frameDark) {
+    // surface base: the publication's accent hue when we have it,
+    // otherwise a deep tint of the platform color
+    if (accent) {
+      g.fillStyle = accentCss(accent, frameDark ? 0.20 : 0.86);
+    } else if (frameDark) {
+      var rgb = parseHex(c.edge);
       g.fillStyle = 'rgb(' + Math.round(rgb[0] * 0.65) + ',' + Math.round(rgb[1] * 0.65) + ',' + Math.round(rgb[2] * 0.65) + ')';
     } else {
       g.fillStyle = c.edge; // light-theme edge colors are pastels — good surface
@@ -427,7 +526,8 @@
       var mw = g.measureText(meta).width;
       var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 80)));
       var period2 = PLANET_TEX_W / m2;
-      g.fillStyle = frameDark ? hexToRgba(c.core, 0.85) : 'rgba(0,0,0,0.6)';
+      if (accent) g.fillStyle = accentCss(accent, frameDark ? 0.68 : 0.30);
+      else g.fillStyle = frameDark ? hexToRgba(c.core, 0.85) : 'rgba(0,0,0,0.6)';
       for (var k2 = 0; k2 * period2 < cv.width; k2++) {
         g.fillText(meta, k2 * period2, 91);
       }
@@ -435,6 +535,7 @@
     e = {
       canvas: cv,
       theme: theme,
+      accentKey: accentKey,
       speed: 0.18 + (i % 7) * 0.02,
       phase: (i % 31) * 0.45,
     };
@@ -482,6 +583,11 @@
     ctx.beginPath();
     ctx.arc(sx, sy, R, 0, TWO_PI);
     ctx.clip();
+    // TILT: we view each planet from slightly north of its equator, so the
+    // text rows dip at the center of the face and curl up toward the limb —
+    // approximated by stretching each strip downward in proportion to its
+    // chord height (max at center, zero at the edges).
+    var TILT = 0.22;
     var step = R > 50 ? 3 : 2;
     var prevLam = -Math.PI / 2;
     for (var x = -R; x < R; x += step) {
@@ -492,7 +598,12 @@
       var du = Math.max(0.5, (lam2 - prevLam) / TWO_PI * texW);
       var midx = (x + x2) / 2;
       var h = Math.sqrt(Math.max(1, R * R - midx * midx));
-      ctx.drawImage(tex.canvas, u0, 0, du, texH, sx + x, sy - h, x2 - x, h * 2);
+      var dip = TILT * h;
+      // strips overlap by ~0.7px (with matching source widening) to kill
+      // the vertical seam striping that fractional-width strips produce
+      var destW = (x2 - x) + 0.7;
+      var srcW = du * destW / (x2 - x);
+      ctx.drawImage(tex.canvas, u0, 0, srcW, texH, sx + x, sy - h, destW, h * 2 + dip);
       prevLam = lam2;
     }
     var shade = getPlanetShade(R);
@@ -1026,6 +1137,8 @@
         var lines = wrapText(title, innerW, maxTitleLines);
 
         var pub = pubByBasePath ? pubByBasePath.get(p.basePath) : null;
+        if (pub) extractPubAccent(pub);
+        var cardAccent = p.basePath ? pubAccents[p.basePath] : null;
         var showAvatar = !!pub;
         var headH = showAvatar ? Math.max(logoS, avatarS) : logoS;
         var cardH = padC + headH + 7 + lines.length * lineH + 5 + metaFont + padC;
@@ -1096,8 +1209,8 @@
           }
           ctx.beginPath();
           ctx.arc(ax, headCY, avatarS / 2, 0, Math.PI * 2);
-          ctx.strokeStyle = hexToRgba(colors.mid, 0.6);
-          ctx.lineWidth = 1;
+          ctx.strokeStyle = cardAccent ? accentCss(cardAccent, dark ? 0.62 : 0.38) : hexToRgba(colors.mid, 0.6);
+          ctx.lineWidth = cardAccent ? 1.5 : 1;
           ctx.stroke();
         }
 
@@ -1114,7 +1227,8 @@
         var meta = p.basePath || (p.uri.split('/')[2] || '');
         if (meta) {
           ctx.font = metaFont + 'px monospace';
-          ctx.fillStyle = dark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)';
+          ctx.fillStyle = cardAccent ? accentCss(cardAccent, dark ? 0.66 : 0.34)
+            : (dark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)');
           ctx.fillText(truncToChars(meta, innerW), cardX + padC, ty - lineH / 2 + 5 + metaFont / 2);
         }
 
