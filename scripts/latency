@@ -1,0 +1,137 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "plotext"]
+# ///
+"""prod latency, in your terminal.
+
+Plots hourly avg/max latency per endpoint from the backend's /api/latency
+buckets, plus a lifetime percentile summary from /stats. Zero-count hours
+are gaps, not zeros.
+
+Usage:
+    scripts/latency                          # 24h, search endpoints
+    scripts/latency --range 7d               # the week
+    scripts/latency -e similar -e tags       # pick endpoints
+    scripts/latency --max                    # plot max instead of avg
+    scripts/latency --summary                # lifetime p50/p95/p99 table + bars
+    scripts/latency --backend http://...     # point elsewhere
+
+Note: lifetime /stats percentiles persist across restarts and still carry
+the 2026-06-10 outage tail (p99 in MINUTES); the hourly series is the
+honest view of now.
+"""
+
+import argparse
+import datetime
+import sys
+
+import httpx
+import plotext as plt
+
+DEFAULT_BACKEND = "https://leaflet-search-backend.fly.dev"
+DEFAULT_ENDPOINTS = ["search_keyword", "search_semantic", "search_hybrid"]
+
+
+def fetch(backend: str, path: str) -> dict:
+    r = httpx.get(backend + path, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def plot_series(backend: str, range_: str, endpoints: list[str], use_max: bool, log: bool = False) -> None:
+    data = fetch(backend, f"/api/latency?range={range_}")
+    series = data["endpoints"]
+    unknown = [e for e in endpoints if e not in series]
+    if unknown:
+        sys.exit(f"unknown endpoint(s): {unknown} — have: {list(series)}")
+
+    metric = "max_ms" if use_max else "avg_ms"
+    plt.clear_figure()
+    plt.theme("pro")
+    plt.date_form("d/m H:M")
+    if log:
+        plt.yscale("log")
+    plt.title(f"{metric} by hour ({data['range']})")
+    plt.xlabel("UTC hour")
+    plt.ylabel("ms")
+
+    any_points = False
+    for name in endpoints:
+        xs, ys = [], []
+        for bucket in series[name]:
+            if bucket["count"] == 0:
+                continue  # no traffic ≠ zero latency
+            t = datetime.datetime.fromtimestamp(bucket["hour"], datetime.timezone.utc)
+            xs.append(t.strftime("%d/%m %H:%M"))
+            ys.append(round(bucket[metric], 1))
+        if xs:
+            any_points = True
+            plt.plot(xs, ys, label=f"{name} ({len(xs)}h)", marker="braille")
+
+    if not any_points:
+        sys.exit("no traffic in this window for the chosen endpoints")
+    plt.canvas_color("default")
+    plt.axes_color("default")
+    plt.show()
+
+    # per-endpoint window roll-up under the chart
+    print()
+    for name in endpoints:
+        buckets = [b for b in series[name] if b["count"]]
+        if not buckets:
+            print(f"  {name:<16} no traffic")
+            continue
+        n = sum(b["count"] for b in buckets)
+        w_avg = sum(b["avg_ms"] * b["count"] for b in buckets) / n
+        worst = max(b["max_ms"] for b in buckets)
+        print(f"  {name:<16} {n:>6} reqs   avg {w_avg:>8.1f}ms   worst {worst:>10.1f}ms")
+
+
+def plot_summary(backend: str) -> None:
+    timing = fetch(backend, "/stats")["timing"]
+    names = sorted(timing, key=lambda n: -timing[n]["count"])
+
+    def ms(v: float) -> str:
+        return f"{v:,.0f}ms"
+
+    print(f"{'endpoint':<18}{'count':>8}{'p50':>10}{'p95':>12}{'p99':>14}{'max':>14}")
+    for n in names:
+        t = timing[n]
+        print(f"{n:<18}{t['count']:>8}{ms(t['p50_ms']):>10}{ms(t['p95_ms']):>12}{ms(t['p99_ms']):>14}{ms(t['max_ms']):>14}")
+    print("\n(lifetime, persisted across restarts — includes 2026-06-10 outage tail)")
+
+    plt.clear_figure()
+    plt.theme("pro")
+    plt.title("p50 / p95 by endpoint (lifetime, ms)")
+    plt.multiple_bar(
+        names,
+        [[timing[n]["p50_ms"] for n in names], [timing[n]["p95_ms"] for n in names]],
+        labels=["p50", "p95"],
+    )
+    plt.canvas_color("default")
+    plt.axes_color("default")
+    plt.show()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="prod latency in the terminal")
+    ap.add_argument("--range", default="24h", choices=["1h", "24h", "7d"],
+                    help="window for the hourly series (default 24h)")
+    ap.add_argument("-e", "--endpoint", action="append", dest="endpoints",
+                    help="endpoint to plot (repeatable); default: the three search modes")
+    ap.add_argument("--max", action="store_true", help="plot hourly max instead of avg")
+    ap.add_argument("--log", action="store_true", help="log-scale y axis (spikes vs steady state)")
+    ap.add_argument("--summary", action="store_true",
+                    help="lifetime percentile table + bars instead of the series")
+    ap.add_argument("--backend", default=DEFAULT_BACKEND)
+    args = ap.parse_args()
+
+    if args.summary:
+        plot_summary(args.backend)
+    else:
+        plot_series(args.backend, args.range, args.endpoints or DEFAULT_ENDPOINTS, args.max, args.log)
+
+
+if __name__ == "__main__":
+    main()
