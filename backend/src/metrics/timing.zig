@@ -9,6 +9,12 @@ pub const Endpoint = enum {
     similar,
     tags,
     popular,
+    recommended,
+    recommended_top_authors,
+    curators,
+    dashboard,
+    timeline,
+    activity,
 
     pub fn name(self: Endpoint) []const u8 {
         return @tagName(self);

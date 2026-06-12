@@ -114,21 +114,21 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     } else if (mem.eql(u8, path, "/dashboard")) {
         try handleDashboard(request);
     } else if (mem.eql(u8, path, "/api/dashboard")) {
-        try handleDashboardApi(request);
+        try handleDashboardApi(request, io);
     } else if (mem.eql(u8, path, "/api/timeline")) {
-        try handleTimelineApi(request, target);
+        try handleTimelineApi(request, target, io);
     } else if (mem.eql(u8, path, "/api/latency")) {
         try handleLatencyApi(request, target);
     } else if (mem.eql(u8, path, "/recommended")) {
         try handleRecommended(request, target, io);
     } else if (mem.eql(u8, path, "/recommended-by-top-authors")) {
-        try handleRecommendedByTopAuthors(request, target);
+        try handleRecommendedByTopAuthors(request, target, io);
     } else if (mem.eql(u8, path, "/curators")) {
-        try handleCurators(request, target);
+        try handleCurators(request, target, io);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
-        try handleActivity(request);
+        try handleActivity(request, io);
     } else if (mem.eql(u8, path, "/admin/backfill")) {
         try handleBackfill(request, target, io);
     } else if (mem.eql(u8, path, "/snapshot")) {
@@ -371,6 +371,9 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    const start_time = microTimestamp(io);
+    defer metrics.timing.record(.recommended, start_time);
+
     const span = logfire.span("http.recommended", .{});
     defer span.end();
 
@@ -435,7 +438,10 @@ fn handleRecommended(request: *http.Server.Request, target: []const u8, io: Io) 
 /// A transitive-taste signal distinct from raw popularity. Tunable resolution
 /// via `pool=` (how many authors form the taste-pool — small = sharp focal,
 /// large = broader consensus) and `since=` (day/week/month/year/all).
-fn handleRecommendedByTopAuthors(request: *http.Server.Request, target: []const u8) !void {
+fn handleRecommendedByTopAuthors(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = microTimestamp(io);
+    defer metrics.timing.record(.recommended_top_authors, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -465,7 +471,10 @@ fn handleRecommendedByTopAuthors(request: *http.Server.Request, target: []const 
 /// /curators — leaderboard of recommenders (DIDs), windowed by `since=`.
 /// Same cache + slice + cold-fallback shape as /recommended, minus the
 /// sort + author dimensions (curators has one natural metric).
-fn handleCurators(request: *http.Server.Request, target: []const u8) !void {
+fn handleCurators(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = microTimestamp(io);
+    defer metrics.timing.record(.curators, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -750,7 +759,10 @@ fn sendNotFound(request: *http.Server.Request) !void {
     });
 }
 
-fn handleDashboardApi(request: *http.Server.Request) !void {
+fn handleDashboardApi(request: *http.Server.Request, io: Io) !void {
+    const start_time = microTimestamp(io);
+    defer metrics.timing.record(.dashboard, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -775,7 +787,10 @@ fn handleDashboardApi(request: *http.Server.Request) !void {
     try sendJson(request, json_response);
 }
 
-fn handleTimelineApi(request: *http.Server.Request, target: []const u8) !void {
+fn handleTimelineApi(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    const start_time = microTimestamp(io);
+    defer metrics.timing.record(.timeline, start_time);
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -1046,7 +1061,10 @@ test "didFromDohBody errors when no TXT answer present" {
     try std.testing.expectError(error.NoDnsRecords, didFromDohBody(std.testing.allocator, body));
 }
 
-fn handleActivity(request: *http.Server.Request) !void {
+fn handleActivity(request: *http.Server.Request, io: Io) !void {
+    const start_time = microTimestamp(io);
+    defer metrics.timing.record(.activity, start_time);
+
     const counts = metrics.activity.getCounts();
 
     // format as JSON array manually into buffer
