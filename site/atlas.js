@@ -352,11 +352,162 @@
     return bestIdx;
   }
 
-  // --- document cards (high-zoom close-up view) ---
-  // crossfade from bare title labels into cards over CARD_START..CARD_START+CARD_RANGE;
-  // cards then keep growing ("HD") until zoom CARD_FULL.
+  // --- document planets + hover cards (high-zoom close-up view) ---
+  // past CARD_START each doc's dot grows into a rotating planet with the
+  // document's info projected onto its surface (vegas-sphere style); hovering
+  // (or tapping, on mobile) unfurls a flat card. CARD_FULL bounds the card's
+  // size growth.
   var CARD_START = 45, CARD_RANGE = 20, CARD_FULL = 250;
   var cardHitRects = null; // [{x, y, w, h, i}] rebuilt each frame, for hover/click
+  var planetsActive = false; // true while planets render → continuous frames
+  var unfurlFor = -1, unfurlStart = 0; // hover-card unfurl animation
+
+  function planetRadiusFor(z) {
+    var rmax = W < 600 ? 56 : 84;
+    return Math.max(4, Math.min(rmax, 7 + (z - CARD_START) * 0.3));
+  }
+
+  // --- planet surface textures ---
+  // one offscreen canvas per doc: title marquee + basePath, tiled so the
+  // wrap at texW is seamless, plus a bleed strip past texW because edge
+  // strips sample up to ~6% of the wrap width past their u origin.
+  var PLANET_TEX_W = 1024, PLANET_TEX_BLEED = 256, PLANET_TEX_H = 112;
+  var planetTex = new Map(); // point index -> {canvas, theme, speed, phase}
+
+  function getPlanetTexture(i) {
+    var theme = frameDark ? 'dark' : 'light';
+    var e = planetTex.get(i);
+    if (e && e.theme === theme) return e;
+    if (planetTex.size > 96) planetTex.delete(planetTex.keys().next().value);
+    var p = data.points[i];
+    var platform = PLATFORMS[platformIdx[i]];
+    var c = frameColors[platform];
+    var cv = document.createElement('canvas');
+    cv.width = PLANET_TEX_W + PLANET_TEX_BLEED;
+    cv.height = PLANET_TEX_H;
+    var g = cv.getContext('2d');
+    var rgb = parseHex(c.edge);
+    if (frameDark) {
+      g.fillStyle = 'rgb(' + Math.round(rgb[0] * 0.65) + ',' + Math.round(rgb[1] * 0.65) + ',' + Math.round(rgb[2] * 0.65) + ')';
+    } else {
+      g.fillStyle = c.edge; // light-theme edge colors are pastels — good surface
+    }
+    g.fillRect(0, 0, cv.width, cv.height);
+    // faint latitude rings
+    g.fillStyle = hexToRgba(c.mid, 0.35);
+    g.fillRect(0, 10, cv.width, 2);
+    g.fillRect(0, PLANET_TEX_H - 12, cv.width, 2);
+    g.textBaseline = 'middle';
+    g.textAlign = 'left';
+    // title marquee — tile period must divide texW exactly or the wrap seam jumps
+    var title = p.title || '(untitled)';
+    if (title.length > 36) title = title.slice(0, 35) + '…';
+    g.font = 'bold 46px monospace';
+    var tw = g.measureText(title).width;
+    var m = Math.max(1, Math.floor(PLANET_TEX_W / (tw + 100)));
+    var period = PLANET_TEX_W / m;
+    g.fillStyle = frameDark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)';
+    for (var k = 0; k * period < cv.width; k++) {
+      g.fillText(title, k * period, 46);
+      // platform-colored beacon in the gap between copies
+      if (period - tw > 40) {
+        g.save();
+        g.fillStyle = c.core;
+        g.beginPath();
+        g.arc(k * period + tw + (period - tw) / 2, 46, 7, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
+      }
+    }
+    // meta band near the south pole
+    var meta = p.basePath || (p.uri.split('/')[2] || '');
+    if (meta) {
+      if (meta.length > 42) meta = meta.slice(0, 41) + '…';
+      g.font = '22px monospace';
+      var mw = g.measureText(meta).width;
+      var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 80)));
+      var period2 = PLANET_TEX_W / m2;
+      g.fillStyle = frameDark ? hexToRgba(c.core, 0.85) : 'rgba(0,0,0,0.6)';
+      for (var k2 = 0; k2 * period2 < cv.width; k2++) {
+        g.fillText(meta, k2 * period2, 91);
+      }
+    }
+    e = {
+      canvas: cv,
+      theme: theme,
+      speed: 0.18 + (i % 7) * 0.02,
+      phase: (i % 31) * 0.45,
+    };
+    planetTex.set(i, e);
+    return e;
+  }
+
+  // shading overlay (highlight upper-left, darkened limb) per radius bucket
+  var planetShadeCache = {};
+
+  function getPlanetShade(R) {
+    var bucket = Math.max(8, Math.round(R / 8) * 8);
+    if (planetShadeCache[bucket]) return planetShadeCache[bucket];
+    var size = bucket * 2;
+    var cv = document.createElement('canvas');
+    cv.width = size; cv.height = size;
+    var g = cv.getContext('2d');
+    var hl = g.createRadialGradient(size * 0.35, size * 0.32, bucket * 0.1, size * 0.35, size * 0.32, bucket * 1.1);
+    hl.addColorStop(0, 'rgba(255,255,255,0.30)');
+    hl.addColorStop(0.4, 'rgba(255,255,255,0.06)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = hl;
+    g.fillRect(0, 0, size, size);
+    var rim = g.createRadialGradient(bucket, bucket, bucket * 0.6, bucket, bucket, bucket);
+    rim.addColorStop(0, 'rgba(0,0,0,0)');
+    rim.addColorStop(0.85, 'rgba(0,0,0,0.2)');
+    rim.addColorStop(1, 'rgba(0,0,0,0.5)');
+    g.fillStyle = rim;
+    g.fillRect(0, 0, size, size);
+    planetShadeCache[bucket] = cv;
+    return cv;
+  }
+
+  // sphere projection: vertical strips, longitude per column via asin,
+  // column height from the circle chord — a wrapped cylinder squashed into
+  // the silhouette, which reads as a rotating globe.
+  function drawPlanet(i, sx, sy, R, alpha, tSec) {
+    var tex = getPlanetTexture(i);
+    var rot = tSec * tex.speed + tex.phase;
+    var TWO_PI = Math.PI * 2;
+    rot = ((rot % TWO_PI) + TWO_PI) % TWO_PI;
+    var texW = PLANET_TEX_W, texH = PLANET_TEX_H;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(sx, sy, R, 0, TWO_PI);
+    ctx.clip();
+    var step = R > 50 ? 3 : 2;
+    var prevLam = -Math.PI / 2;
+    for (var x = -R; x < R; x += step) {
+      var x2 = Math.min(R, x + step);
+      var s2 = Math.max(-1, Math.min(1, x2 / R));
+      var lam2 = Math.asin(s2);
+      var u0 = ((rot + prevLam) % TWO_PI + TWO_PI) % TWO_PI / TWO_PI * texW;
+      var du = Math.max(0.5, (lam2 - prevLam) / TWO_PI * texW);
+      var midx = (x + x2) / 2;
+      var h = Math.sqrt(Math.max(1, R * R - midx * midx));
+      ctx.drawImage(tex.canvas, u0, 0, du, texH, sx + x, sy - h, x2 - x, h * 2);
+      prevLam = lam2;
+    }
+    var shade = getPlanetShade(R);
+    ctx.drawImage(shade, sx - R, sy - R, R * 2, R * 2);
+    ctx.restore();
+    // rim
+    var platform = PLATFORMS[platformIdx[i]];
+    ctx.globalAlpha = alpha * (i === hoveredIndex || i === selectedIndex ? 0.95 : 0.5);
+    ctx.beginPath();
+    ctx.arc(sx, sy, R, 0, TWO_PI);
+    ctx.strokeStyle = frameColors[platform].core;
+    ctx.lineWidth = i === hoveredIndex || i === selectedIndex ? 2 : 1.25;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 
   function findCardAt(sx, sy) {
     if (!cardHitRects) return -1;
@@ -725,8 +876,9 @@
         }
       });
 
-      // draw search centroid marker
-      if (searchCenter) {
+      // draw search centroid marker — not at planet zoom, where the matches
+      // themselves are unmistakable
+      if (searchCenter && fadeIn(zoom, CARD_START, CARD_RANGE) < 0.5) {
         var mx = cx + searchCenter.x * scale, my = cy + searchCenter.y * scale;
         var accent = dark ? 'rgba(250,200,80,' : 'rgba(200,120,0,';
         // outer ring — pulsing glow
@@ -785,18 +937,65 @@
     // smooth label transitions:
     // coarse labels: full opacity zoom<1.7, fade out 1.7–2.3
     // fine labels: fade in 1.7–2.3, full opacity 2.3–4.5, fade out 4.5–5.5
-    // titles: fade in 4.5–5.5, full opacity 5.5 until cards take over
-    // cards: fade in over CARD_START..CARD_START+CARD_RANGE, then grow to CARD_FULL
+    // titles: fade in 4.5–5.5, hold until planet surface text is readable
+    // planets: fade in over CARD_START..CARD_START+CARD_RANGE, keep growing
+    // cards: hover/selection only — unfurl next to the planet
     var coarseAlpha = fadeOut(zoom, 1.7, 0.6);
     var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 4.5, 1.0);
-    var titleAlpha = fadeIn(zoom, 4.5, 1.0) * fadeOut(zoom, CARD_START, CARD_RANGE);
-    var cardAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
+    var titleAlpha = fadeIn(zoom, 4.5, 1.0) * fadeOut(zoom, 110, 40);
+    var planetAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
+    var cardAlpha = planetAlpha;
 
-    // --- document cards: the close-up "HD" representation ---
-    // drawn FIRST so cards win label collisions during the title crossfade.
+    // --- document planets: info projected onto rotating orbs ---
+    planetsActive = false;
+    var planetR = 0;
+    if (planetAlpha > 0.01) {
+      planetR = planetRadiusFor(zoom);
+      var tSec = performance.now() / 1000;
+      // nearest-to-viewport-center docs win the planet slots
+      var maxPlanets = small ? 20 : 36;
+      var cands = [];
+      var vcx = W / 2, vcy = H / 2;
+      for (var i = 0; i < n; i++) {
+        var px = pointsX[i], py = pointsY[i];
+        if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
+        if (filtering && !activePlatforms.has(PLATFORMS[platformIdx[i]])) continue;
+        // while searching, only matches become planets — the rest stay dimmed dots
+        if (searchMatches && searchMatches.size > 0 && !searchMatches.has(i)) continue;
+        var sx = cx + px * scale, sy = cy + py * scale;
+        if (sx + planetR < 0 || sx - planetR > W || sy + planetR < 0 || sy - planetR > H) continue;
+        var ddx = sx - vcx, ddy = sy - vcy;
+        cands.push({ i: i, sx: sx, sy: sy, d: ddx * ddx + ddy * ddy });
+      }
+      cands.sort(function(a, b) { return a.d - b.d; });
+      if (cands.length > maxPlanets) cands.length = maxPlanets;
+      // adaptive radius: shrink to local spacing so dense clusters read as
+      // distinct globes instead of overlapping mud
+      var rMin = Math.min(9, planetR);
+      for (var c = 0; c < cands.length; c++) {
+        var best = Infinity;
+        for (var c2 = 0; c2 < cands.length; c2++) {
+          if (c2 === c) continue;
+          var dx2 = cands[c].sx - cands[c2].sx, dy2 = cands[c].sy - cands[c2].sy;
+          var dd = dx2 * dx2 + dy2 * dy2;
+          if (dd < best) best = dd;
+        }
+        cands[c].r = best === Infinity ? planetR
+          : Math.max(rMin, Math.min(planetR, Math.sqrt(best) * 0.52));
+      }
+      for (var c = 0; c < cands.length; c++) {
+        drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, planetAlpha, tSec);
+      }
+      planetsActive = cands.length > 0;
+    }
+
+    // --- hover/selection card: unfurled flat view of one document ---
     cardHitRects = null;
-    if (cardAlpha > 0.01) {
+    var focusIdx = hoveredIndex >= 0 ? hoveredIndex : selectedIndex;
+    if (cardAlpha > 0.01 && focusIdx >= 0 && focusIdx < n) {
       cardHitRects = [];
+      if (focusIdx !== unfurlFor) { unfurlFor = focusIdx; unfurlStart = performance.now(); }
+      var unfurl = planetsActive ? easeOutCubic(clamp01((performance.now() - unfurlStart) / 180)) : 1;
       // growth factor: cards upsize from the moment they're fully formed
       // (CARD_START+CARD_RANGE) until CARD_FULL
       var g = clamp01((zoom - (CARD_START + CARD_RANGE)) / (CARD_FULL - CARD_START - CARD_RANGE));
@@ -810,31 +1009,15 @@
       var avatarS = Math.round(grow(20, 48));
       var lineH = Math.round(titleFont * 1.35);
       var maxTitleLines = g < 0.4 ? 2 : 3;
-      // fewer cards while they're small (dense field), more as you close in
-      var maxCards = small ? Math.round(5 + 3 * g) : Math.round(10 + 10 * g);
-      var anchorGap = Math.round(grow(12, 22));
+      var anchorGap = Math.round(planetR + 10);
       var innerW = cardW - padC * 2;
-
-      // nearest-to-viewport-center docs win the card slots
-      var cands = [];
-      var vcx = W / 2, vcy = H / 2;
-      for (var i = 0; i < n; i++) {
-        var px = pointsX[i], py = pointsY[i];
-        if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
-        if (filtering && !activePlatforms.has(PLATFORMS[platformIdx[i]])) continue;
-        var sx = cx + px * scale, sy = cy + py * scale;
-        var ddx = sx - vcx, ddy = sy - vcy;
-        cands.push({ i: i, sx: sx, sy: sy, d: ddx * ddx + ddy * ddy });
-      }
-      cands.sort(function(a, b) { return a.d - b.d; });
 
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      var shownCards = 0;
-      for (var c = 0; c < cands.length && shownCards < maxCards; c++) {
-        var idx = cands[c].i;
+      (function() {
+        var idx = focusIdx;
         var p = data.points[idx];
-        var sx = cands[c].sx, sy = cands[c].sy;
+        var sx = cx + pointsX[idx] * scale, sy = cy + pointsY[idx] * scale;
         var platform = PLATFORMS[platformIdx[idx]];
         var colors = frameColors[platform];
         var title = p.title || '(untitled)';
@@ -843,32 +1026,33 @@
         var lines = wrapText(title, innerW, maxTitleLines);
 
         var pub = pubByBasePath ? pubByBasePath.get(p.basePath) : null;
-        var showAvatar = pub && g > 0.1;
+        var showAvatar = !!pub;
         var headH = showAvatar ? Math.max(logoS, avatarS) : logoS;
         var cardH = padC + headH + 7 + lines.length * lineH + 5 + metaFont + padC;
 
         var cardX = sx - cardW / 2;
-        var cardY = sy - anchorGap - cardH;
+        var cardY = sy - anchorGap - cardH - (1 - unfurl) * 10;
         var below = false;
-        if (cardY < 8) { cardY = sy + anchorGap; below = true; }
-        // skip only when fully off-screen — a partially visible card stays
-        // anchored to its dot, so there's no label/dot disconnect
-        if (cardX > W || cardX + cardW < 0 || cardY > H || cardY + cardH < 0) continue;
-        if (!canPlace(sx, cardY + cardH / 2, cardW, cardH)) continue;
+        if (cardY < 8) { cardY = sy + anchorGap + (1 - unfurl) * 10; below = true; }
+        if (cardX > W || cardX + cardW < 0 || cardY > H || cardY + cardH < 0) return;
+        canPlace(sx, cardY + cardH / 2, cardW, cardH); // reserve so labels avoid the card
 
         if (showAvatar) loadPubImage(pub);
 
-        // connector from card edge to the dot it describes
-        ctx.globalAlpha = cardAlpha * 0.5;
+        var cardAlphaNow = cardAlpha * unfurl;
+
+        // connector from card edge to the planet it describes
+        var dotEdge = Math.max(6, planetR);
+        ctx.globalAlpha = cardAlphaNow * 0.5;
         ctx.strokeStyle = colors.mid;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        if (below) { ctx.moveTo(sx, cardY); ctx.lineTo(sx, sy + 6); }
-        else { ctx.moveTo(sx, cardY + cardH); ctx.lineTo(sx, sy - 6); }
+        if (below) { ctx.moveTo(sx, cardY); ctx.lineTo(sx, sy + dotEdge); }
+        else { ctx.moveTo(sx, cardY + cardH); ctx.lineTo(sx, sy - dotEdge); }
         ctx.stroke();
 
         // card body
-        ctx.globalAlpha = cardAlpha * 0.96;
+        ctx.globalAlpha = cardAlphaNow * 0.96;
         roundRectPath(cardX, cardY, cardW, cardH, 8);
         ctx.fillStyle = dark ? 'rgba(10,12,16,0.88)' : 'rgba(255,255,255,0.93)';
         ctx.fill();
@@ -935,11 +1119,12 @@
         }
 
         cardHitRects.push({ x: cardX, y: cardY, w: cardW, h: cardH, i: idx });
-        shownCards++;
-      }
+      })();
       ctx.globalAlpha = 1;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+    } else {
+      unfurlFor = -1;
     }
 
     // CULLING RULE: labels stay anchored above their dot/cluster. If the
@@ -1008,7 +1193,7 @@
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
         var title = data.points[i].title;
         if (!title) continue;
-        var sx = cx + px * scale, sy = cy + py * scale - 10;
+        var sx = cx + px * scale, sy = cy + py * scale - (planetR > 0 ? planetR + 8 : 10);
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         if (title.length > truncLen) title = title.substring(0, truncLen - 2) + '\u2026';
         var tw = ctx.measureText(title).width;
@@ -1070,8 +1255,11 @@
     frameRequested = false;
     tickAnimation();
     render();
-    // keep looping only while animating
+    // keep looping while animating, or while rotating planets are on screen
     if (animating) {
+      scheduleFrame();
+    } else if (planetsActive) {
+      view.dirty = true;
       scheduleFrame();
     }
   }
@@ -1183,6 +1371,21 @@
       canvas.style.cursor = 'pointer';
       return;
     }
+    // planets render above publication circles, so they get the next hit check;
+    // hovering one unfurls its card (no tooltip — the card shows everything)
+    if (planetsActive) {
+      var plIdx = findNearest(mouseX, mouseY, Math.max(HIT_RADIUS, planetRadiusFor(view.zoom) + 4));
+      if (plIdx >= 0) {
+        if (hoveredIndex !== plIdx || hoveredPub !== -1) {
+          hoveredPub = -1;
+          hoveredIndex = plIdx;
+          tooltip.style.display = 'none';
+          markDirty();
+        }
+        canvas.style.cursor = 'pointer';
+        return;
+      }
+    }
     // check publications next (rendered on top of points)
     var pi = findNearestPub(mouseX, mouseY);
     if (pi >= 0) {
@@ -1199,7 +1402,8 @@
     if (idx !== hoveredIndex) {
       hoveredIndex = idx;
       markDirty();
-      if (idx >= 0) showTooltip(idx, mouseX, mouseY);
+      if (idx >= 0 && !planetsActive) showTooltip(idx, mouseX, mouseY);
+      else if (idx >= 0) { tooltip.style.display = 'none'; canvas.style.cursor = 'pointer'; }
       else hideTooltip();
     }
   });
@@ -1215,6 +1419,10 @@
           var p = data.points[hoveredIndex];
           var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
           if (url) window.open(url, '_blank');
+        } else if (selectedIndex >= 0) {
+          // clicked empty space — dismiss a deep-link-selected card
+          selectedIndex = -1;
+          markDirty();
         }
       }
       dragging = false;
@@ -1312,6 +1520,26 @@
             markDirty();
           }
           return;
+        }
+        // planets win over publication circles (they render above them):
+        // first tap selects + unfurls the card, second tap opens
+        if (planetsActive) {
+          var plIdx = findNearest(tx, ty, Math.max(HIT_RADIUS, planetRadiusFor(view.zoom) + 4));
+          if (plIdx >= 0) {
+            if (plIdx === selectedIndex) {
+              var pp = data.points[plIdx];
+              var pu = atUriToUrl(pp.uri, pp.basePath, pp.platform, pp.path);
+              if (pu) window.open(pu, '_blank');
+              selectedIndex = -1;
+              hideTooltip();
+            } else {
+              selectedIndex = plIdx;
+              hoveredIndex = plIdx;
+              tooltip.style.display = 'none';
+              markDirty();
+            }
+            return;
+          }
         }
         // check publications next
         var pi = findNearestPub(tx, ty);
@@ -1553,16 +1781,17 @@
             searchCenter = { x: pointsX[idx], y: pointsY[idx] };
             searchQuery = d.points[idx].title || '';
             setSearchStatus('1 document');
-            animateTo(searchCenter.x, searchCenter.y, pendingZoom || 12);
+            var targetZ = pendingZoom || 12;
+            animateTo(searchCenter.x, searchCenter.y, targetZ);
             // show tooltip after animation — unless we land at card zoom,
-            // where the document card already shows everything
+            // where the unfurled card already shows everything
             setTimeout(function() {
               cacheTransform();
               var sx = cx + pointsX[idx] * scale;
               var sy = cy + pointsY[idx] * scale;
               hoveredIndex = idx;
               selectedIndex = idx;
-              if (view.zoom < CARD_START) showTooltip(idx, sx, sy);
+              if (targetZ < CARD_START) showTooltip(idx, sx, sy);
               else markDirty();
             }, ANIM_DURATION + 50);
           }
@@ -1578,6 +1807,12 @@
             setSearchStatus('publication not on atlas');
           }
           pendingPub = null;
+        }
+        // bare ?x=&y=&z= — jump straight to a spot (debug / sharing)
+        else if (pendingZoom) {
+          var pjx = parseFloat(urlParams.get('x')) || 0;
+          var pjy = parseFloat(urlParams.get('y')) || 0;
+          animateTo(pjx, pjy, pendingZoom);
         }
         // apply prefetched search results (fired in parallel with atlas.json)
         else if (pendingSearchResults) {
@@ -1794,6 +2029,13 @@
       haloSprites = null;
       renderLegend();
       markDirty();
+    },
+    _debug: function() {
+      return {
+        zoom: view.zoom, panX: view.panX, panY: view.panY,
+        animating: animating, planetsActive: planetsActive,
+        hovered: hoveredIndex, selected: selectedIndex,
+      };
     }
   };
 })();
