@@ -15,6 +15,9 @@ Usage:
     scripts/latency -e similar -e tags       # pick endpoints
     scripts/latency --max                    # plot max instead of avg
     scripts/latency --summary                # lifetime p50/p95/p99 table + bars
+    scripts/latency --probe                  # live-time EVERY surface right now
+    scripts/latency --probe -n 5             # more samples per endpoint
+    scripts/latency --plain                  # no ANSI (pipe/paste friendly)
     scripts/latency --backend http://...     # point elsewhere
 
 Note: lifetime /stats percentiles persist across restarts and still carry
@@ -24,13 +27,44 @@ honest view of now.
 
 import argparse
 import datetime
+import re
+import statistics
 import sys
+import time
 
 import httpx
 import plotext as plt
 
 DEFAULT_BACKEND = "https://leaflet-search-backend.fly.dev"
+SITE = "https://pub-search.waow.tech"
 DEFAULT_ENDPOINTS = ["search_keyword", "search_semantic", "search_hybrid"]
+
+# every user-facing surface, not just what the backend's timing module records
+PROBE_TARGETS = [
+    ("keyword",        "{b}/search?q=atproto&mode=keyword&format=v2"),
+    ("semantic",       "{b}/search?q=atproto&mode=semantic&format=v2"),
+    ("hybrid",         "{b}/search?q=atproto&mode=hybrid&format=v2"),
+    ("similar",        None),  # resolved from a live search result uri
+    ("tags",           "{b}/tags?format=v2"),
+    ("popular",        "{b}/popular?format=v2"),
+    ("recommended",    "{b}/recommended?since=week&sort=trending"),
+    ("rec-top-authors","{b}/recommended-by-top-authors?pool=10&since=month"),
+    ("curators",       "{b}/curators"),
+    ("dashboard",      "{b}/api/dashboard"),
+    ("timeline",       "{b}/api/timeline?range=30d"),
+    ("activity",       "{b}/activity"),
+    ("stats",          "{b}/stats"),
+    ("snapshot",       "{b}/snapshot"),
+    ("atlas.json",     SITE + "/atlas.json"),
+    ("homepage",       SITE + "/"),
+]
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def render(plain: bool) -> None:
+    out = plt.build()
+    print(ANSI.sub("", out) if plain else out)
 
 
 def fetch(backend: str, path: str) -> dict:
@@ -39,7 +73,7 @@ def fetch(backend: str, path: str) -> dict:
     return r.json()
 
 
-def plot_series(backend: str, range_: str, endpoints: list[str], use_max: bool, log: bool = False) -> None:
+def plot_series(backend: str, range_: str, endpoints: list[str], use_max: bool, log: bool = False, plain: bool = False) -> None:
     data = fetch(backend, f"/api/latency?range={range_}")
     series = data["endpoints"]
     unknown = [e for e in endpoints if e not in series]
@@ -73,7 +107,7 @@ def plot_series(backend: str, range_: str, endpoints: list[str], use_max: bool, 
         sys.exit("no traffic in this window for the chosen endpoints")
     plt.canvas_color("default")
     plt.axes_color("default")
-    plt.show()
+    render(plain)
 
     # per-endpoint window roll-up under the chart
     print()
@@ -88,7 +122,7 @@ def plot_series(backend: str, range_: str, endpoints: list[str], use_max: bool, 
         print(f"  {name:<16} {n:>6} reqs   avg {w_avg:>8.1f}ms   worst {worst:>10.1f}ms")
 
 
-def plot_summary(backend: str) -> None:
+def plot_summary(backend: str, plain: bool = False) -> None:
     timing = fetch(backend, "/stats")["timing"]
     names = sorted(timing, key=lambda n: -timing[n]["count"])
 
@@ -111,7 +145,52 @@ def plot_summary(backend: str) -> None:
     )
     plt.canvas_color("default")
     plt.axes_color("default")
-    plt.show()
+    render(plain)
+
+
+def probe(backend: str, samples: int, plain: bool) -> None:
+    """time real requests against every surface, sequentially and gently."""
+    results: list[tuple[str, list[float], str]] = []
+    with httpx.Client(timeout=15) as client:
+        # resolve a real uri for /similar
+        similar_url = None
+        try:
+            r = client.get(backend + "/search?q=atproto&mode=keyword&format=v2&limit=1")
+            uri = r.json()["results"][0]["uri"]
+            similar_url = f"{backend}/similar?uri={uri}&format=v2"
+        except Exception:
+            pass
+
+        for name, tmpl in PROBE_TARGETS:
+            url = similar_url if name == "similar" else (tmpl.format(b=backend) if tmpl else None)
+            if not url:
+                results.append((name, [], "skipped"))
+                continue
+            times, note = [], "ok"
+            for _ in range(samples):
+                t0 = time.monotonic()
+                try:
+                    r = client.get(url)
+                    ms_ = (time.monotonic() - t0) * 1000
+                    if r.status_code != 200:
+                        note = f"HTTP {r.status_code}"
+                    times.append(ms_)
+                except Exception as e:
+                    note = type(e).__name__
+                time.sleep(0.15)
+            results.append((name, times, note))
+            med = statistics.median(times) if times else float("nan")
+            print(f"  {name:<16} {med:>8.0f}ms median of {len(times)}  {'' if note == 'ok' else '⚠️ ' + note}", flush=True)
+
+    ok = [(n, statistics.median(t)) for n, t, note in results if t and note == "ok"]
+    if not ok:
+        sys.exit("no successful probes")
+    plt.clear_figure()
+    plt.theme("pro")
+    names = [n for n, _ in ok][::-1]
+    meds = [round(m, 1) for _, m in ok][::-1]
+    plt.simple_bar(names, meds, title=f"median latency, {samples} live samples (ms)")
+    render(plain)
 
 
 def main() -> None:
@@ -124,13 +203,19 @@ def main() -> None:
     ap.add_argument("--log", action="store_true", help="log-scale y axis (spikes vs steady state)")
     ap.add_argument("--summary", action="store_true",
                     help="lifetime percentile table + bars instead of the series")
+    ap.add_argument("--probe", action="store_true",
+                    help="live-time every surface right now (incl. recommended, curators, dashboard, atlas, homepage)")
+    ap.add_argument("-n", "--samples", type=int, default=3, help="probe samples per endpoint (default 3)")
+    ap.add_argument("--plain", action="store_true", help="strip ANSI colors (pipe/paste friendly)")
     ap.add_argument("--backend", default=DEFAULT_BACKEND)
     args = ap.parse_args()
 
-    if args.summary:
-        plot_summary(args.backend)
+    if args.probe:
+        probe(args.backend, args.samples, args.plain)
+    elif args.summary:
+        plot_summary(args.backend, args.plain)
     else:
-        plot_series(args.backend, args.range, args.endpoints or DEFAULT_ENDPOINTS, args.max, args.log)
+        plot_series(args.backend, args.range, args.endpoints or DEFAULT_ENDPOINTS, args.max, args.log, args.plain)
 
 
 if __name__ == "__main__":
