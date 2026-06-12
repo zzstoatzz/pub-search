@@ -197,6 +197,28 @@
     return 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
   }
 
+  // prefer the publication's own theme colors (baked into atlas.json from
+  // pub.leaflet.publication records) — that's the author's actual palette;
+  // avatar sampling is the fallback for pubs without one.
+  function resolvePubAccent(pub) {
+    var key = pub && pub.basePath;
+    if (!key || pubAccents[key] !== undefined) return;
+    if (pub.themeAccent) {
+      var rgb = parseHex(pub.themeAccent);
+      var hsl = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      var bg = pub.themeBg ? parseHex(pub.themeBg) : null;
+      pubAccents[key] = {
+        h: hsl[0],
+        s: Math.max(0.08, Math.min(0.85, hsl[1])),
+        key: 'theme' + pub.themeAccent,
+        rgb: [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255],
+        bgRgb: bg ? [bg[0] / 255, bg[1] / 255, bg[2] / 255] : null,
+      };
+      return;
+    }
+    extractPubAccent(pub);
+  }
+
   function extractPubAccent(pub) {
     var key = pub && pub.basePath;
     if (!key || pubAccents[key] !== undefined || pubAccentLoading[key]) return;
@@ -484,7 +506,7 @@
     var theme = frameDark ? 'dark' : 'light';
     var p = data.points[i];
     var pub = pubByBasePath && p.basePath ? pubByBasePath.get(p.basePath) : null;
-    if (pub) extractPubAccent(pub);
+    if (pub) resolvePubAccent(pub);
     var accent = p.basePath ? pubAccents[p.basePath] : null;
     var accentKey = accent ? accent.key : 'none';
     var e = planetTex.get(i);
@@ -502,7 +524,13 @@
     // base surface: the publication's accent hue when we have it,
     // otherwise a tint of the platform color
     var baseRGB, accentRGB;
-    if (accent) {
+    if (accent && accent.rgb) {
+      // literal author theme colors, exactly as they styled their publication
+      baseRGB = accent.bgRgb
+        ? [Math.round(accent.bgRgb[0] * 255), Math.round(accent.bgRgb[1] * 255), Math.round(accent.bgRgb[2] * 255)]
+        : hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
+      accentRGB = [Math.round(accent.rgb[0] * 255), Math.round(accent.rgb[1] * 255), Math.round(accent.rgb[2] * 255)];
+    } else if (accent) {
       baseRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
       accentRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.55 : 0.45);
     } else {
@@ -539,14 +567,14 @@
     var meta = p.basePath || (p.uri.split('/')[2] || '');
     if (meta) {
       if (meta.length > 42) meta = meta.slice(0, 41) + '…';
-      g.font = '22px monospace';
+      g.font = '24px monospace';
       var mw = g.measureText(meta).width;
       var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 80)));
       var period2 = PLANET_TEX_W / m2;
-      if (accent) g.fillStyle = accentCss(accent, frameDark ? 0.68 : 0.30);
-      else g.fillStyle = frameDark ? hexToRgba(c.core, 0.85) : 'rgba(0,0,0,0.6)';
+      if (accent) g.fillStyle = accentCss(accent, frameDark ? 0.70 : 0.30);
+      else g.fillStyle = frameDark ? hexToRgba(c.core, 0.9) : 'rgba(0,0,0,0.6)';
       for (var k2 = 0; k2 * period2 < cv.width; k2++) {
-        g.fillText(meta, k2 * period2, 91);
+        g.fillText(meta, k2 * period2, 86);
       }
     }
     e = {
@@ -1185,7 +1213,7 @@
         var lines = wrapText(title, innerW, maxTitleLines);
 
         var pub = pubByBasePath ? pubByBasePath.get(p.basePath) : null;
-        if (pub) extractPubAccent(pub);
+        if (pub) resolvePubAccent(pub);
         var cardAccent = p.basePath ? pubAccents[p.basePath] : null;
         var showAvatar = !!pub;
         var headH = showAvatar ? Math.max(logoS, avatarS) : logoS;

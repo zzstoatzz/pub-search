@@ -39,6 +39,11 @@ AVATAR_CACHE_PATH = Path(__file__).resolve().parent.parent / "site" / "atlas-ava
 AVATAR_CACHE_REMOTE = "https://pub-search.waow.tech/atlas-avatar-cache.json"
 AVATAR_CACHE_TTL_SECONDS = 7 * 86400  # refresh entries weekly so changed avatars trickle in
 
+# theme cache: persists basePath → leaflet publication theme colors.
+# same deployment-roundtrip pattern as the avatar cache above.
+THEME_CACHE_PATH = Path(__file__).resolve().parent.parent / "site" / "atlas-theme-cache.json"
+THEME_CACHE_REMOTE = "https://pub-search.waow.tech/atlas-theme-cache.json"
+
 
 def log(msg: str) -> None:
     print(msg, flush=True)
@@ -390,6 +395,88 @@ async def resolve_avatars_async(
     return fresh
 
 
+def _theme_color_hex(color: dict | None) -> str:
+    """pub.leaflet.theme.color#rgb{a} object → #rrggbb, or '' if absent."""
+    if not isinstance(color, dict):
+        return ""
+    try:
+        return "#%02x%02x%02x" % (int(color["r"]), int(color["g"]), int(color["b"]))
+    except (KeyError, ValueError, TypeError):
+        return ""
+
+
+async def resolve_themes_async(
+    pubs: list[dict], cache: dict[str, dict], concurrency: int = 16
+) -> dict[str, dict]:
+    """Resolve leaflet publication theme colors from their PDS records.
+
+    pub.leaflet.publication records carry the author's actual palette
+    (backgroundColor / accentBackground); the atlas uses it to paint that
+    pub's planets. One listRecords per DID covers all of its publications.
+    Empty results are cached too. Returns {basePath: {bg, accent, ts}} for
+    exactly the leaflet pubs passed in."""
+    now = time.time()
+    cutoff = now - AVATAR_CACHE_TTL_SECONDS
+
+    targets = [p for p in pubs if p.get("platform") == "leaflet" and str(p.get("did", "")).startswith("did:plc:")]
+    fresh: dict[str, dict] = {}
+    by_did: dict[str, list[str]] = {}
+    for p in targets:
+        entry = cache.get(p["basePath"])
+        if isinstance(entry, dict) and float(entry.get("ts", 0)) > cutoff:
+            fresh[p["basePath"]] = entry
+        else:
+            by_did.setdefault(p["did"], []).append(p["basePath"])
+
+    log(f"  theme cache: {len(fresh)} hits, {len(by_did)} DIDs to fetch")
+    if not by_did:
+        return fresh
+
+    sem = asyncio.Semaphore(concurrency)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0),
+        limits=httpx.Limits(
+            max_connections=concurrency,
+            max_keepalive_connections=concurrency,
+        ),
+    ) as client:
+        async def fetch_did(did: str, base_paths: list[str]) -> dict[str, dict]:
+            out = {bp: {"bg": "", "accent": "", "ts": now} for bp in base_paths}
+            async with sem:
+                try:
+                    doc = (await client.get(f"https://plc.directory/{did}")).json()
+                    pds = next(
+                        s["serviceEndpoint"] for s in doc.get("service", [])
+                        if s.get("id") == "#atproto_pds"
+                    )
+                    r = await client.get(
+                        f"{pds}/xrpc/com.atproto.repo.listRecords",
+                        params={"repo": did, "collection": "pub.leaflet.publication", "limit": 50},
+                    )
+                    if r.status_code != 200:
+                        return out
+                    for rec in r.json().get("records", []):
+                        value = rec.get("value", {})
+                        bp = value.get("base_path", "")
+                        if bp not in out:
+                            continue
+                        theme = value.get("theme") or {}
+                        out[bp] = {
+                            "bg": _theme_color_hex(theme.get("backgroundColor") or theme.get("pageBackground")),
+                            "accent": _theme_color_hex(theme.get("accentBackground") or theme.get("primary")),
+                            "ts": now,
+                        }
+                except Exception:
+                    pass
+            return out
+
+        results = await asyncio.gather(*(fetch_did(d, bps) for d, bps in by_did.items()))
+
+    for chunk in results:
+        fresh.update(chunk)
+    return fresh
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build atlas.json")
     parser.add_argument(
@@ -620,6 +707,22 @@ def main():
     # attach avatar URLs to publications
     for pub in publications:
         pub["avatar"] = did_avatars.get(pub["did"], "")
+
+    # fetch leaflet publication theme colors — the author's actual palette,
+    # used by the atlas to paint that publication's planets
+    log("  resolving leaflet publication themes...")
+    theme_cache = load_avatar_cache(THEME_CACHE_PATH, THEME_CACHE_REMOTE)
+    theme_entries = asyncio.run(resolve_themes_async(publications, theme_cache))
+    save_avatar_cache(THEME_CACHE_PATH, theme_entries)
+    themed = 0
+    for pub in publications:
+        t = theme_entries.get(pub["basePath"]) or {}
+        if t.get("accent"):
+            pub["themeAccent"] = t["accent"]
+            if t.get("bg"):
+                pub["themeBg"] = t["bg"]
+            themed += 1
+    log(f"  {themed} publications have theme colors")
 
     # --- step 6: build output ---
     log("building output...")

@@ -14,3 +14,4 @@ zig-pkg/
 .claude/
 .codex/
 __pycache__/
+site/atlas-theme-cache.json

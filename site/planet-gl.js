@@ -37,7 +37,7 @@
     '#endif',
     'varying vec2 vP;',
     'uniform sampler2D uTex;',
-    'uniform float uRot, uTilt, uAlpha, uSeed, uTexSpan, uHover, uDark, uPx, uMargin;',
+    'uniform float uRot, uTilt, uAlpha, uSeed, uTexSpan, uHover, uDark, uPx, uMargin, uLift;',
     'uniform vec3 uBase, uAccent;',
 
     'float hash3(vec3 p) {',
@@ -65,16 +65,26 @@
     'void main() {',
     '  float r = length(vP);',
     '  vec4 outc = vec4(0.0);',
+    '  float ct = cos(uTilt), st = sin(uTilt);',
+    // the info shell: billboards in orbit, a few percent above the surface —
+    // they float over the terrain and hang past the limb into space
+    '  vec4 em = vec4(0.0);',
+    '  if (r < uLift) {',
+    '    float zt = sqrt(uLift * uLift - r * r);',
+    '    vec3 Nb = vec3(vP, zt) / uLift;',
+    '    vec3 Nbt = vec3(Nb.x, Nb.y * ct + Nb.z * st, -Nb.y * st + Nb.z * ct);',
+    '    float latB = asin(clamp(Nbt.y, -1.0, 1.0));',
+    '    float lonB = atan(Nbt.x, Nbt.z) + uRot;',
+    '    em = texture2D(uTex, vec2(fract(lonB * 0.15915494) * uTexSpan, clamp(0.5 - latB * 0.31830988, 0.0, 1.0)));',
+    '    em.a *= smoothstep(uLift, uLift - 6.0 * uPx, r);',
+    '  }',
     '  if (r < 1.0) {',
     '    float z = sqrt(1.0 - r * r);',
     '    vec3 N = vec3(vP, z);',
     // tilt: we orbit slightly north of the equator, so the equator dips
-    '    float ct = cos(uTilt), st = sin(uTilt);',
     '    vec3 Nt = vec3(N.x, N.y * ct + N.z * st, -N.y * st + N.z * ct);',
     '    float lat = asin(clamp(Nt.y, -1.0, 1.0));',
     '    float lon = atan(Nt.x, Nt.z) + uRot;',
-    '    vec2 tuv = vec2(fract(lon * 0.15915494) * uTexSpan, clamp(0.5 - lat * 0.31830988, 0.0, 1.0));',
-    '    vec4 em = texture2D(uTex, tuv);',
     // terrain in the planet-fixed frame so it spins with the surface
     '    vec3 P = vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));',
     '    float terr = fbm(P * 2.8);',
@@ -91,20 +101,25 @@
     '    vec3 surf = land * (ambient + (1.0 - ambient) * max(ndl, 0.0));',
     '    vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));',
     '    surf += uAccent * pow(max(dot(N, H), 0.0), 70.0) * 0.4 * day;',
-    // the document's info: emissive city lights, brightest after dark
-    '    float emBoost = mix(1.0, mix(1.65, 1.05, day), uDark);',
-    '    surf = mix(surf, em.rgb * emBoost, em.a * 0.95);',
-    '    surf += em.rgb * em.a * 0.4 * (1.0 - day) * uDark;',
     // atmosphere hugging the limb
     '    float fres = pow(1.0 - z, 2.2);',
     '    surf += uAccent * fres * (0.55 + uHover * 0.5);',
+    // the orbital billboards over the surface: emissive, brightest at night
+    '    float emBoost = mix(1.0, mix(1.7, 1.1, day), uDark);',
+    '    surf = mix(surf, em.rgb * emBoost, em.a * 0.95);',
+    '    surf += em.rgb * em.a * 0.4 * (1.0 - day) * uDark;',
     '    float edge = smoothstep(1.0, 1.0 - 3.0 * uPx, r);',
     '    outc = vec4(surf, edge);',
     '  } else {',
-    // atmosphere halo past the limb
+    // past the limb: atmosphere halo, with billboards hanging into space
     '    float d = (r - 1.0) / (uMargin - 1.0);',
     '    float glow = pow(max(1.0 - d, 0.0), 2.6);',
-    '    outc = vec4(uAccent * (0.8 + 0.4 * glow), glow * (0.32 + uHover * 0.28));',
+    '    vec3 col = uAccent * (0.8 + 0.4 * glow);',
+    '    float a = glow * (0.32 + uHover * 0.28);',
+    '    float billBoost = mix(1.0, 1.45, uDark);',
+    '    col = mix(col, em.rgb * billBoost, em.a);',
+    '    a = max(a, em.a * 0.95);',
+    '    outc = vec4(col, a);',
     '  }',
     '  gl_FragColor = vec4(outc.rgb, outc.a * uAlpha);',
     '}',
@@ -142,7 +157,7 @@
 
         var U = {};
         ['uRes', 'uCenter', 'uRadius', 'uMargin', 'uTex', 'uRot', 'uTilt', 'uAlpha',
-         'uSeed', 'uTexSpan', 'uHover', 'uDark', 'uPx', 'uBase', 'uAccent'].forEach(function(n) {
+         'uSeed', 'uTexSpan', 'uHover', 'uDark', 'uPx', 'uBase', 'uAccent', 'uLift'].forEach(function(n) {
           U[n] = gl.getUniformLocation(prog, n);
         });
         var aPos = gl.getAttribLocation(prog, 'aPos');
@@ -190,6 +205,7 @@
             gl.uniform1f(U.uDark, dark ? 1 : 0);
             gl.uniform1f(U.uMargin, MARGIN);
             gl.uniform1f(U.uTilt, 0.35);
+            gl.uniform1f(U.uLift, 1.08);
           },
           // opts: {base:[r,g,b 0-1], accent:[r,g,b 0-1], seed, texSpan, hover, dpr}
           draw: function(texCanvas, sx, sy, R, alpha, rot, opts) {
