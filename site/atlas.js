@@ -294,58 +294,86 @@
   var sprites = null;
   var spriteSize = 0;
   var spriteTheme = null;
+  var spriteStarness = -1;
 
-  function buildSprites(radius) {
-    // quantize radius to 0.5px steps to avoid rebuilding during smooth zoom
+  function mixHex(hex, target, t) {
+    var a = parseHex(hex), b = parseHex(target);
+    return 'rgb(' + Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
+      Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
+      Math.round(a[2] + (b[2] - a[2]) * t) + ')';
+  }
+
+  function buildSprites(radius, starness) {
+    // quantize radius (0.5px) and starness (0.25) to avoid rebuilding
+    // during smooth zoom
     radius = Math.round(radius * 2) / 2;
+    starness = Math.round(starness * 4) / 4;
     var size = Math.ceil(radius * 2.8 * dpr) + 2;
     if (size < 4) size = 4;
     var theme = frameDark ? 'dark' : 'light';
-    if (sprites && spriteSize === size && spriteTheme === theme) return;
+    if (sprites && spriteSize === size && spriteTheme === theme && spriteStarness === starness) return;
     spriteSize = size;
     spriteTheme = theme;
+    spriteStarness = starness;
     sprites = [];
     for (var p = 0; p < PLATFORMS.length; p++) {
       var c = frameColors[PLATFORMS[p]];
       sprites.push({
-        normal: makeSprite(size, radius * dpr, c, 0.95, false),
-        hover:  makeSprite(Math.ceil(size * 1.5), radius * dpr * 1.3, c, 1.0, true),
+        normal: makeSprite(size, radius * dpr, c, 0.95, false, starness),
+        hover:  makeSprite(Math.ceil(size * 1.5), radius * dpr * 1.3, c, 1.0, true, starness * 0.5),
       });
     }
   }
 
-  // shaded mini-sphere — a tiny version of the WebGL planets (same light
-  // from the upper-left, limb darkening, faint atmosphere ring) so the far
-  // view shrinks continuously into the close one instead of swapping from
-  // a glow-orb sprite to a planet.
-  function makeSprite(size, r, colors, alpha, emphasized) {
+  // progressive disclosure of a world: at distance a document is a point of
+  // starlight (hot pinpoint, tight falloff, translucent), resolving into a
+  // shaded mini-sphere (same upper-left light + limb treatment as the WebGL
+  // planets) as zoom rises. starness 1 = star, 0 = sphere.
+  function makeSprite(size, r, colors, alpha, emphasized, starness) {
     var cv = document.createElement('canvas');
     cv.width = size; cv.height = size;
     var c = cv.getContext('2d');
     var half = size / 2;
-    c.globalAlpha = alpha;
-    var grad = c.createRadialGradient(half - r * 0.35, half - r * 0.38, r * 0.1, half, half, r);
-    grad.addColorStop(0, colors.core);
-    grad.addColorStop(0.55, colors.mid);
-    grad.addColorStop(1, colors.edge);
-    c.fillStyle = grad;
-    c.beginPath();
-    c.arc(half, half, r, 0, Math.PI * 2);
-    c.fill();
-    var rim = c.createRadialGradient(half, half, r * 0.6, half, half, r);
-    rim.addColorStop(0, 'rgba(0,0,0,0)');
-    rim.addColorStop(0.85, 'rgba(0,0,0,0.25)');
-    rim.addColorStop(1, 'rgba(0,0,0,0.55)');
-    c.fillStyle = rim;
-    c.beginPath();
-    c.arc(half, half, r, 0, Math.PI * 2);
-    c.fill();
-    // atmosphere ring
-    c.strokeStyle = hexToRgba(colors.core, emphasized ? 0.8 : 0.35);
-    c.lineWidth = Math.max(1, r * 0.06);
-    c.beginPath();
-    c.arc(half, half, r - c.lineWidth / 2, 0, Math.PI * 2);
-    c.stroke();
+    // sphere body — ephemeral at distance
+    var sphereAlpha = alpha * (1 - starness * 0.55);
+    if (sphereAlpha > 0.02) {
+      c.globalAlpha = sphereAlpha;
+      var grad = c.createRadialGradient(half - r * 0.35, half - r * 0.38, r * 0.1, half, half, r);
+      grad.addColorStop(0, colors.core);
+      grad.addColorStop(0.55, colors.mid);
+      grad.addColorStop(1, colors.edge);
+      c.fillStyle = grad;
+      c.beginPath();
+      c.arc(half, half, r, 0, Math.PI * 2);
+      c.fill();
+      var rim = c.createRadialGradient(half, half, r * 0.6, half, half, r);
+      rim.addColorStop(0, 'rgba(0,0,0,0)');
+      rim.addColorStop(0.85, 'rgba(0,0,0,0.25)');
+      rim.addColorStop(1, 'rgba(0,0,0,0.55)');
+      c.fillStyle = rim;
+      c.beginPath();
+      c.arc(half, half, r, 0, Math.PI * 2);
+      c.fill();
+      // atmosphere ring — the "ball outline" reads stodgy at star distance
+      c.strokeStyle = hexToRgba(colors.core, (emphasized ? 0.8 : 0.35) * (1 - starness));
+      c.lineWidth = Math.max(1, r * 0.06);
+      c.beginPath();
+      c.arc(half, half, r - c.lineWidth / 2, 0, Math.PI * 2);
+      c.stroke();
+    }
+    // starlight core — a pinpoint, not the old wide glow-orb halo
+    if (starness > 0.01) {
+      var coreCol = frameDark ? mixHex(colors.core, '#ffffff', 0.7) : colors.mid;
+      var sg = c.createRadialGradient(half, half, 0, half, half, r * 1.4);
+      sg.addColorStop(0, coreCol);
+      sg.addColorStop(0.3, hexToRgba(colors.core, 0.55));
+      sg.addColorStop(1, hexToRgba(colors.core, 0));
+      c.globalAlpha = alpha * starness * 0.9;
+      c.fillStyle = sg;
+      c.beginPath();
+      c.arc(half, half, r * 1.4, 0, Math.PI * 2);
+      c.fill();
+    }
     return cv;
   }
 
@@ -353,19 +381,27 @@
   var dotTheme = null;
 
   function buildDotSprites() {
+    // the whole-map view: each document is a faint star, not a solid disc
     var theme = frameDark ? 'dark' : 'light';
     if (dotSprites && dotTheme === theme) return;
     dotTheme = theme;
     dotSprites = [];
-    var s = Math.max(4, Math.ceil(3 * dpr));
+    var s = Math.max(4, Math.ceil(2.6 * dpr));
     for (var p = 0; p < PLATFORMS.length; p++) {
+      var colors = frameColors[PLATFORMS[p]];
       var cv = document.createElement('canvas');
       cv.width = s; cv.height = s;
       var c = cv.getContext('2d');
-      c.fillStyle = frameColors[PLATFORMS[p]].mid;
-      c.globalAlpha = 0.7;
+      var half = s / 2;
+      var coreCol = frameDark ? mixHex(colors.core, '#ffffff', 0.6) : colors.mid;
+      var sg = c.createRadialGradient(half, half, 0, half, half, half);
+      sg.addColorStop(0, coreCol);
+      sg.addColorStop(0.4, hexToRgba(colors.mid, 0.5));
+      sg.addColorStop(1, hexToRgba(colors.mid, 0));
+      c.globalAlpha = 0.6;
+      c.fillStyle = sg;
       c.beginPath();
-      c.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2);
+      c.arc(half, half, half, 0, Math.PI * 2);
       c.fill();
       dotSprites.push(cv);
     }
@@ -984,11 +1020,13 @@
     ctx.globalAlpha = 1;
     var useGlow = zoom >= 2;
     if (useGlow) {
-      // dot radius grows with zoom but caps at 7px so the sprite atlas
-      // doesn't balloon when zoom passes ~25. Past the cap, dots stay
-      // legible without becoming the focus — titles / icons take over.
-      var pointR = zoom < 5 ? 1.5 + zoom * 0.3 : Math.min(7, 2 + zoom * 0.2);
-      buildSprites(pointR);
+      // gentle size curve: starlight points stay small through the
+      // midrange, reaching 7px right where the planets take over (the
+      // planet radius starts at 7 at CARD_START, so the handoff is smooth)
+      var pointR = Math.min(7, 1.0 + zoom * 0.135);
+      // starness: pure starlight below zoom ~8, fully a sphere by ~22
+      var starness = fadeOut(zoom, 8, 14);
+      buildSprites(pointR, starness);
     } else {
       buildDotSprites();
     }
