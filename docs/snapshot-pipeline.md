@@ -123,6 +123,7 @@ propagation times:
 | semantic ranking (tpuf vector) | only on re-embed | until you act (see below) |
 | semantic *display* fields (title/url) | read from the replica at query time | same as keyword |
 | recommended / curators | turso queried via background caches | minutes |
+| recommended-by-top-authors | replica (recommends ship in the snapshot, schema v2) | one snapshot (~75min) |
 | tags / dashboard / timeline | replica + 60s–5min caches | one snapshot + one cache tick |
 | atlas | prefect rebuild every 6h from tpuf | ≤6h, or trigger the flow |
 
