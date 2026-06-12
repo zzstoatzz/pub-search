@@ -640,46 +640,52 @@
     ctx.closePath();
   }
 
-  // monospace word-wrap: returns up to maxLines lines, ellipsis on overflow.
-  // hard-breaks long unbroken runs (URLs, CJK) so nothing escapes the card.
+  // measurement-based word-wrap: returns up to maxLines lines, ellipsis on
+  // overflow. char-count heuristics break on CJK — those glyphs render ~2x
+  // the width of a latin monospace cell — so every line is fit by actual
+  // measured pixel width. hard-breaks unbroken runs (URLs, CJK) too.
   function wrapText(text, maxW, maxLines) {
-    var charW = ctx.measureText('M').width || 7;
-    var maxChars = Math.max(4, Math.floor(maxW / charW));
-    var words = text.split(/\s+/);
     var lines = [], cur = '', truncated = false;
-    for (var w = 0; w < words.length; w++) {
+    var words = text.split(/\s+/);
+    for (var w = 0; w < words.length && !truncated; w++) {
       var word = words[w];
-      while (word.length > maxChars && lines.length < maxLines) {
-        if (cur) { lines.push(cur); cur = ''; }
-        if (lines.length >= maxLines) break;
-        lines.push(word.slice(0, maxChars));
-        word = word.slice(maxChars);
-      }
-      if (lines.length >= maxLines) { truncated = true; break; }
+      if (!word) continue;
       var attempt = cur ? cur + ' ' + word : word;
-      if (attempt.length > maxChars) {
+      if (ctx.measureText(attempt).width <= maxW) { cur = attempt; continue; }
+      if (cur) {
         lines.push(cur);
-        cur = word;
+        cur = '';
         if (lines.length >= maxLines) { truncated = true; break; }
-      } else {
-        cur = attempt;
       }
+      // a single word wider than the line — break it by measured fit
+      while (ctx.measureText(word).width > maxW) {
+        var k = word.length - 1;
+        while (k > 1 && ctx.measureText(word.slice(0, k)).width > maxW) k--;
+        lines.push(word.slice(0, k));
+        word = word.slice(k);
+        if (lines.length >= maxLines) { truncated = true; break; }
+      }
+      if (!truncated) cur = word;
     }
-    if (cur && lines.length < maxLines) lines.push(cur);
-    else if (cur) truncated = true;
+    if (!truncated && cur) {
+      if (lines.length < maxLines) lines.push(cur);
+      else truncated = true;
+    }
     if (truncated && lines.length > 0) {
-      var last = lines[lines.length - 1];
-      if (last.length >= maxChars) last = last.slice(0, maxChars - 1);
-      lines[lines.length - 1] = last + '…';
+      var last = lines[lines.length - 1] + '…';
+      while (last.length > 2 && ctx.measureText(last).width > maxW) {
+        last = last.slice(0, -2) + '…';
+      }
+      lines[lines.length - 1] = last;
     }
     return lines;
   }
 
   function truncToChars(text, maxW) {
-    var charW = ctx.measureText('M').width || 7;
-    var maxChars = Math.max(4, Math.floor(maxW / charW));
-    if (text.length <= maxChars) return text;
-    return text.slice(0, maxChars - 1) + '…';
+    if (ctx.measureText(text).width <= maxW) return text;
+    var t = text;
+    while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+    return t + '…';
   }
 
   // --- label helper: strokeText outline instead of shadowBlur ---
