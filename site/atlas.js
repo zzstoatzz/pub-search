@@ -265,6 +265,9 @@
   var dpr = window.devicePixelRatio || 1;
   var W, H;
 
+  // WebGL planet renderer (planet-gl.js) — null falls back to 2D strips
+  var planetGL = window.PlanetGL ? window.PlanetGL.create() : null;
+
   // --- sprite cache ---
   var sprites = null;
   var spriteSize = 0;
@@ -273,7 +276,7 @@
   function buildSprites(radius) {
     // quantize radius to 0.5px steps to avoid rebuilding during smooth zoom
     radius = Math.round(radius * 2) / 2;
-    var size = Math.ceil(radius * 6 * dpr) + 2;
+    var size = Math.ceil(radius * 2.8 * dpr) + 2;
     if (size < 4) size = 4;
     var theme = frameDark ? 'dark' : 'light';
     if (sprites && spriteSize === size && spriteTheme === theme) return;
@@ -283,32 +286,44 @@
     for (var p = 0; p < PLATFORMS.length; p++) {
       var c = frameColors[PLATFORMS[p]];
       sprites.push({
-        normal: makeSprite(size, radius * dpr, c, 0.7),
-        hover:  makeSprite(size * 2, radius * dpr * 2, c, 1.0),
+        normal: makeSprite(size, radius * dpr, c, 0.95, false),
+        hover:  makeSprite(Math.ceil(size * 1.5), radius * dpr * 1.3, c, 1.0, true),
       });
     }
   }
 
-  function makeSprite(size, r, colors, alpha) {
+  // shaded mini-sphere — a tiny version of the WebGL planets (same light
+  // from the upper-left, limb darkening, faint atmosphere ring) so the far
+  // view shrinks continuously into the close one instead of swapping from
+  // a glow-orb sprite to a planet.
+  function makeSprite(size, r, colors, alpha, emphasized) {
     var cv = document.createElement('canvas');
     cv.width = size; cv.height = size;
     var c = cv.getContext('2d');
     var half = size / 2;
-    var grad = c.createRadialGradient(half, half, 0, half, half, r * 2.5);
-    grad.addColorStop(0, colors.core);
-    grad.addColorStop(0.3, colors.mid);
-    grad.addColorStop(0.7, colors.edge);
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
     c.globalAlpha = alpha;
+    var grad = c.createRadialGradient(half - r * 0.35, half - r * 0.38, r * 0.1, half, half, r);
+    grad.addColorStop(0, colors.core);
+    grad.addColorStop(0.55, colors.mid);
+    grad.addColorStop(1, colors.edge);
     c.fillStyle = grad;
     c.beginPath();
-    c.arc(half, half, r * 2.5, 0, Math.PI * 2);
+    c.arc(half, half, r, 0, Math.PI * 2);
     c.fill();
-    c.globalAlpha = alpha * 0.9;
-    c.fillStyle = colors.core;
+    var rim = c.createRadialGradient(half, half, r * 0.6, half, half, r);
+    rim.addColorStop(0, 'rgba(0,0,0,0)');
+    rim.addColorStop(0.85, 'rgba(0,0,0,0.25)');
+    rim.addColorStop(1, 'rgba(0,0,0,0.55)');
+    c.fillStyle = rim;
     c.beginPath();
-    c.arc(half, half, r * 0.5, 0, Math.PI * 2);
+    c.arc(half, half, r, 0, Math.PI * 2);
     c.fill();
+    // atmosphere ring
+    c.strokeStyle = hexToRgba(colors.core, emphasized ? 0.8 : 0.35);
+    c.lineWidth = Math.max(1, r * 0.06);
+    c.beginPath();
+    c.arc(half, half, r - c.lineWidth / 2, 0, Math.PI * 2);
+    c.stroke();
     return cv;
   }
 
@@ -481,17 +496,19 @@
     cv.width = PLANET_TEX_W + PLANET_TEX_BLEED;
     cv.height = PLANET_TEX_H;
     var g = cv.getContext('2d');
-    // surface base: the publication's accent hue when we have it,
-    // otherwise a deep tint of the platform color
+    // the texture is emissive-only (info on transparent): the WebGL path
+    // shades the surface itself from baseRGB/accentRGB, and the 2D fallback
+    // fills the disc with baseColor before stamping the strips.
+    // base surface: the publication's accent hue when we have it,
+    // otherwise a tint of the platform color
+    var baseRGB, accentRGB;
     if (accent) {
-      g.fillStyle = accentCss(accent, frameDark ? 0.20 : 0.86);
-    } else if (frameDark) {
-      var rgb = parseHex(c.edge);
-      g.fillStyle = 'rgb(' + Math.round(rgb[0] * 0.65) + ',' + Math.round(rgb[1] * 0.65) + ',' + Math.round(rgb[2] * 0.65) + ')';
+      baseRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
+      accentRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.55 : 0.45);
     } else {
-      g.fillStyle = c.edge; // light-theme edge colors are pastels — good surface
+      baseRGB = parseHex(c.edge);
+      accentRGB = parseHex(c.mid);
     }
-    g.fillRect(0, 0, cv.width, cv.height);
     // faint latitude rings
     g.fillStyle = hexToRgba(c.mid, 0.35);
     g.fillRect(0, 10, cv.width, 2);
@@ -538,6 +555,9 @@
       accentKey: accentKey,
       speed: 0.18 + (i % 7) * 0.02,
       phase: (i % 31) * 0.45,
+      baseColor: 'rgb(' + baseRGB[0] + ',' + baseRGB[1] + ',' + baseRGB[2] + ')',
+      baseRGB: [baseRGB[0] / 255, baseRGB[1] / 255, baseRGB[2] / 255],
+      accentRGB: [accentRGB[0] / 255, accentRGB[1] / 255, accentRGB[2] / 255],
     };
     planetTex.set(i, e);
     return e;
@@ -583,6 +603,9 @@
     ctx.beginPath();
     ctx.arc(sx, sy, R, 0, TWO_PI);
     ctx.clip();
+    // the texture is emissive-only (transparent bg) — lay down the surface
+    ctx.fillStyle = tex.baseColor;
+    ctx.fillRect(sx - R, sy - R, R * 2, R * 2);
     // TILT: we view each planet from slightly north of its equator, so the
     // text rows dip at the center of the face and curl up toward the limb —
     // approximated by stretching each strip downward in proportion to its
@@ -1100,8 +1123,27 @@
         cands[c].r = best === Infinity ? planetR
           : Math.max(rMin, Math.min(planetR, Math.sqrt(best) * 0.52));
       }
-      for (var c = 0; c < cands.length; c++) {
-        drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, planetAlpha, tSec);
+      if (planetGL) {
+        planetGL.begin(W, H, dpr, dark);
+        var texSpan = PLANET_TEX_W / (PLANET_TEX_W + PLANET_TEX_BLEED);
+        for (var c = 0; c < cands.length; c++) {
+          var pcI = cands[c].i;
+          var pcT = getPlanetTexture(pcI);
+          var pcRot = (tSec * pcT.speed + pcT.phase) % (Math.PI * 2);
+          planetGL.draw(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, planetAlpha, pcRot, {
+            base: pcT.baseRGB,
+            accent: pcT.accentRGB,
+            seed: (pcI % 97) * 1.3,
+            texSpan: texSpan,
+            hover: pcI === hoveredIndex || pcI === selectedIndex,
+            dpr: dpr,
+          });
+        }
+        if (cands.length > 0) ctx.drawImage(planetGL.canvas, 0, 0, W, H);
+      } else {
+        for (var c = 0; c < cands.length; c++) {
+          drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, planetAlpha, tSec);
+        }
       }
       planetsActive = cands.length > 0;
     }
