@@ -247,6 +247,7 @@ a.pub-name:hover { color: #2a9d5c; }
 .latency-cell-max {
   margin-left: auto;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 .latency-cell-empty {
   height: 40px;

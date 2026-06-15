@@ -245,16 +245,17 @@ function renderLatencyChart(timing) {
     const history = timing[name]?.history || [];
     const color = ENDPOINT_COLORS[name];
 
-    // scale to the peak hourly max so tail spikes are visible (plotting only
-    // the average flattens the bimodal tail we know exists). track the most
-    // recent avg and the peak max for the cell label.
+    // scale the sparkline to the avg series so its trend stays readable;
+    // surface the worst single-hour peak as a number (the tail) rather than
+    // letting it dominate the y-axis and squash the line flat.
     let maxVal = 0;
     let lastAvg = 0;
+    let peakMax = 0;
     history.forEach(p => {
-      if (p.max_ms > maxVal) maxVal = p.max_ms;
+      if (p.avg_ms > maxVal) maxVal = p.avg_ms;
+      if (p.max_ms > peakMax) peakMax = p.max_ms;
       if (p.count > 0) lastAvg = p.avg_ms;
     });
-    const peakMax = maxVal;
     if (maxVal === 0) maxVal = 100;
 
     const cell = document.createElement('div');
@@ -263,11 +264,11 @@ function renderLatencyChart(timing) {
     const friendlyName = ENDPOINT_LABELS[name] || name;
     const label = document.createElement('div');
     label.className = 'latency-cell-label';
-    // "<avg now> avg · <peak> peak" — the solid line is typical, the faint
-    // envelope behind it is the tail.
+    // compact "<avg now> / <peak>" — hover spells out avg vs peak. kept on one
+    // line (see .latency-cell-max white-space:nowrap) so it never reflows.
     const numbers = lastAvg > 0
-      ? formatMs(lastAvg) + ' <span class="dim">avg · ' + formatMs(peakMax) + ' peak</span>'
-      : '<span class="dim">' + formatMs(peakMax) + ' peak</span>';
+      ? formatMs(lastAvg) + ' <span class="dim">/ ' + formatMs(peakMax) + '</span>'
+      : '<span class="dim">/ ' + formatMs(peakMax) + '</span>';
     label.innerHTML = '<span class="dot" style="background:' + color + '"></span>' + friendlyName +
       '<span class="latency-cell-max">' + numbers + '</span>';
     cell.appendChild(label);
@@ -309,26 +310,16 @@ function renderLatencyChart(timing) {
       const xOf = i => padding.left + (i / Math.max(history.length - 1, 1)) * chartW;
       const yOf = v => padding.top + chartH - (Math.min(v, maxVal) / maxVal) * chartH;
 
-      // tail envelope: faint filled area up to the hourly max
+      // filled area under the avg line
       ctx.beginPath();
       ctx.moveTo(xOf(0), padding.top + chartH);
-      history.forEach((p, i) => ctx.lineTo(xOf(i), yOf(p.max_ms)));
+      history.forEach((p, i) => ctx.lineTo(xOf(i), yOf(p.avg_ms)));
       ctx.lineTo(xOf(history.length - 1), padding.top + chartH);
       ctx.closePath();
-      ctx.fillStyle = color + '1a';
+      ctx.fillStyle = color + '20';
       ctx.fill();
 
-      // max line (faint) — the tail
-      ctx.beginPath();
-      history.forEach((p, i) => {
-        const x = xOf(i), y = yOf(p.max_ms);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
-      ctx.strokeStyle = color + '66';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // avg line (solid) — the typical case
+      // avg line
       ctx.beginPath();
       history.forEach((p, i) => {
         const x = xOf(i), y = yOf(p.avg_ms);
