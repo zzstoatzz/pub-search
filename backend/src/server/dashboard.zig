@@ -17,7 +17,27 @@ const ApiSlot = enum { main };
 fn refreshApi(slot: ApiSlot, alloc: Allocator) anyerror![]const u8 {
     _ = slot;
     const data = try fetch(alloc);
+    // emit a point-in-time ops snapshot so Logfire can TREND + ALERT on the
+    // pipeline signals span data can't otherwise see (embedding backlog,
+    // ingestion freshness). rides the cache's 60s background tick, so it's a
+    // steady ~1/min series regardless of request traffic.
+    emitOpsSnapshot(data);
     return try toJson(alloc, data);
+}
+
+/// One `ops.snapshot` span per refresh. Attributes are typed (int) so they're
+/// queryable: `SELECT attributes->>'embed_backlog' ... WHERE span_name='ops.snapshot'`.
+/// `last_indexed_at` is epoch seconds (turso-sourced); freshness age is derived
+/// at query time as `now - last_indexed_at` so the emit needs no clock.
+fn emitOpsSnapshot(data: Data) void {
+    const backlog = if (data.documents > data.embeddings) data.documents - data.embeddings else 0;
+    logfire.span("ops.snapshot", .{
+        .documents = data.documents,
+        .embeddings = data.embeddings,
+        .embed_backlog = backlog,
+        .publications = data.publications,
+        .last_indexed_at = data.last_indexed_at,
+    }).end();
 }
 
 pub const ApiCache = cache.WindowedJsonCache(ApiSlot, .{
