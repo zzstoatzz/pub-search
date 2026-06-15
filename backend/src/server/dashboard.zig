@@ -186,6 +186,10 @@ pub const Data = struct {
     documents: i64,
     embeddings: i64,
     bridgyfed_documents: i64,
+    /// epoch seconds of the most recently ingested document (MAX(indexed_at)).
+    /// 0 when empty. The stats page renders this as "last indexed N ago" — the
+    /// cheapest is-ingestion-alive signal, which span telemetry can't show.
+    last_indexed_at: i64,
     relay_url: []const u8,
     tags_json: []const u8,
     timeline_json: []const u8,
@@ -208,7 +212,8 @@ const STATS_SQL =
     \\  (SELECT total_errors FROM stats WHERE id = 1) as errors,
     \\  (SELECT service_started_at FROM stats WHERE id = 1) as started_at,
     \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
-    \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed
+    \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed,
+    \\  (SELECT COALESCE(CAST(strftime('%s', MAX(indexed_at)) AS INTEGER), 0) FROM documents) as last_indexed
 ;
 
 const PLATFORMS_SQL =
@@ -263,6 +268,7 @@ const StatsRow = struct {
     started_at: i64,
     embeddings: i64,
     bridgyfed: i64,
+    last_indexed: i64,
 };
 const PlatformsRow = struct { platform: []const u8, count: i64 };
 const TagsRow = struct { tag: []const u8, count: i64 };
@@ -299,7 +305,7 @@ pub fn fetch(alloc: Allocator) !Data {
     }
     const s: StatsRow = if (stats_row) |r| StatsQuery.fromRow(StatsRow, r) else .{
         .docs = 0, .pubs = 0, .searches = 0, .errors = 0,
-        .started_at = 0, .embeddings = 0, .bridgyfed = 0,
+        .started_at = 0, .embeddings = 0, .bridgyfed = 0, .last_indexed = 0,
     };
     const started_at = s.started_at;
     const searches = s.searches;
@@ -315,6 +321,7 @@ pub fn fetch(alloc: Allocator) !Data {
         .documents = documents,
         .embeddings = embeddings,
         .bridgyfed_documents = bridgyfed_documents,
+        .last_indexed_at = s.last_indexed,
         .relay_url = getRelayUrl(),
         .tags_json = try formatTagsJson(alloc, batch.get(2)),
         .timeline_json = try formatTimelineJson(alloc, batch.get(3)),
@@ -350,9 +357,10 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
         \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
-        \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed
+        \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed,
+        \\  (SELECT COALESCE(CAST(strftime('%s', MAX(indexed_at)) AS INTEGER), 0) FROM documents) as last_indexed
     );
-    const LocalCountsRow = struct { docs: i64, pubs: i64, embeddings: i64, bridgyfed: i64 };
+    const LocalCountsRow = struct { docs: i64, pubs: i64, embeddings: i64, bridgyfed: i64, last_indexed: i64 };
 
     var counts_rows = try local.query(LocalCountsQuery.positional, .{});
     defer counts_rows.deinit();
@@ -362,6 +370,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const publications = counts.pubs;
     const embeddings = counts.embeddings;
     const bridgyfed_documents = counts.bridgyfed;
+    const last_indexed_at = counts.last_indexed;
 
     // platforms query
     var platforms_rows = try local.query(PLATFORMS_SQL, .{});
@@ -390,6 +399,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         .documents = documents,
         .embeddings = embeddings,
         .bridgyfed_documents = bridgyfed_documents,
+        .last_indexed_at = last_indexed_at,
         .relay_url = getRelayUrl(),
         .tags_json = tags_json,
         .timeline_json = timeline_json,
@@ -677,6 +687,9 @@ pub fn toJson(alloc: Allocator, data: Data) ![]const u8 {
 
     try jw.objectField("bridgyfedDocuments");
     try jw.write(data.bridgyfed_documents);
+
+    try jw.objectField("lastIndexedAt");
+    try jw.write(data.last_indexed_at);
 
     try jw.objectField("relayUrl");
     try jw.write(data.relay_url);

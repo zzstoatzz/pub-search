@@ -1,6 +1,7 @@
 const API_BASE = 'https://leaflet-search-backend.fly.dev';
 
 let startedAt = 0;
+let lastIndexedAt = 0;
 
 // loading state handler
 const loader = createLoader({
@@ -23,6 +24,31 @@ function updateAge() {
   if (startedAt > 0) {
     document.getElementById('age').textContent = formatAge(Date.now() - startedAt);
   }
+}
+
+// compact "N ago" for the freshness metric
+function formatAgo(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+// "last indexed" is the cheapest is-ingestion-alive signal. recompute on the
+// same 1s tick as uptime so the page feels live; amber past 15m of silence,
+// which on a normally-busy firehose means ingestion has likely stalled.
+const FRESHNESS_WARN_MS = 15 * 60 * 1000;
+function updateFreshness() {
+  if (lastIndexedAt <= 0) return;
+  const age = Date.now() - lastIndexedAt;
+  const el = document.getElementById('freshness');
+  el.textContent = formatAgo(age);
+  el.classList.toggle('warn', age > FRESHNESS_WARN_MS);
+  document.getElementById('freshness-sub').textContent =
+    new Date(lastIndexedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 // each chart's range buttons own the title-of-truth, so we don't duplicate
@@ -218,13 +244,16 @@ function renderLatencyChart(timing) {
     const history = timing[name]?.history || [];
     const color = ENDPOINT_COLORS[name];
 
-    // find max + most recent non-zero avg for this endpoint
+    // scale to the peak hourly max so tail spikes are visible (plotting only
+    // the average flattens the bimodal tail we know exists). track the most
+    // recent avg and the peak max for the cell label.
     let maxVal = 0;
     let lastAvg = 0;
     history.forEach(p => {
-      if (p.avg_ms > maxVal) maxVal = p.avg_ms;
+      if (p.max_ms > maxVal) maxVal = p.max_ms;
       if (p.count > 0) lastAvg = p.avg_ms;
     });
+    const peakMax = maxVal;
     if (maxVal === 0) maxVal = 100;
 
     const cell = document.createElement('div');
@@ -233,10 +262,11 @@ function renderLatencyChart(timing) {
     const friendlyName = ENDPOINT_LABELS[name] || name;
     const label = document.createElement('div');
     label.className = 'latency-cell-label';
-    // show "current / max" so a flat-looking sparkline still tells you the absolute number.
+    // "<avg now> avg · <peak> peak" — the solid line is typical, the faint
+    // envelope behind it is the tail.
     const numbers = lastAvg > 0
-      ? formatMs(lastAvg) + ' <span class="dim">/ ' + formatMs(maxVal) + '</span>'
-      : '<span class="dim">' + formatMs(maxVal) + '</span>';
+      ? formatMs(lastAvg) + ' <span class="dim">avg · ' + formatMs(peakMax) + ' peak</span>'
+      : '<span class="dim">' + formatMs(peakMax) + ' peak</span>';
     label.innerHTML = '<span class="dot" style="background:' + color + '"></span>' + friendlyName +
       '<span class="latency-cell-max">' + numbers + '</span>';
     cell.appendChild(label);
@@ -275,31 +305,39 @@ function renderLatencyChart(timing) {
       const chartW = w - padding.left - padding.right;
       const chartH = h - padding.top - padding.bottom;
 
-      const points = history.map((p, i) => ({
-        x: padding.left + (i / Math.max(history.length - 1, 1)) * chartW,
-        y: padding.top + chartH - (p.avg_ms / maxVal) * chartH
-      }));
+      const xOf = i => padding.left + (i / Math.max(history.length - 1, 1)) * chartW;
+      const yOf = v => padding.top + chartH - (Math.min(v, maxVal) / maxVal) * chartH;
 
-      // draw filled area
+      // tail envelope: faint filled area up to the hourly max
       ctx.beginPath();
-      ctx.moveTo(points[0].x, padding.top + chartH);
-      points.forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
+      ctx.moveTo(xOf(0), padding.top + chartH);
+      history.forEach((p, i) => ctx.lineTo(xOf(i), yOf(p.max_ms)));
+      ctx.lineTo(xOf(history.length - 1), padding.top + chartH);
       ctx.closePath();
-      ctx.fillStyle = color + '20';
+      ctx.fillStyle = color + '1a';
       ctx.fill();
 
-      // draw line
+      // max line (faint) — the tail
       ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].x, points[i].y);
-      }
+      history.forEach((p, i) => {
+        const x = xOf(i), y = yOf(p.max_ms);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color + '66';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // avg line (solid) — the typical case
+      ctx.beginPath();
+      history.forEach((p, i) => {
+        const x = xOf(i), y = yOf(p.avg_ms);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // hover interaction
+      // hover interaction — show both typical and tail
       canvas.addEventListener('mousemove', e => {
         const canvasRect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - canvasRect.left;
@@ -308,7 +346,9 @@ function renderLatencyChart(timing) {
         const point = history[clampedIdx];
         if (point) {
           const time = formatTimestamp(point.hour);
-          tooltip.textContent = time + ' · ' + formatMs(point.avg_ms);
+          tooltip.textContent = point.count > 0
+            ? time + ' · ' + formatMs(point.avg_ms) + ' avg · ' + formatMs(point.max_ms) + ' peak'
+            : time + ' · no traffic';
           tooltip.style.opacity = '1';
         }
       });
@@ -482,6 +522,20 @@ async function fetchDashboard() {
     document.getElementById('publications').textContent = data.publications;
     document.getElementById('embeddings').textContent = data.embeddings ?? '--';
 
+    // embedding coverage + backlog, derived from the counts we already have.
+    // backlog = docs the embedder hasn't reached yet; coverage is the headline.
+    if (typeof data.embeddings === 'number' && data.documents > 0) {
+      const pending = Math.max(0, data.documents - data.embeddings);
+      const pct = (data.embeddings / data.documents) * 100;
+      const sub = document.getElementById('embeddings-sub');
+      sub.textContent = pct.toFixed(1) + '% covered' +
+        (pending > 0 ? ' · ' + pending.toLocaleString() + ' pending' : '');
+    }
+
+    // freshness: last-indexed time drives a live "N ago" readout
+    lastIndexedAt = (data.lastIndexedAt || 0) * 1000;
+    updateFreshness();
+
 
     if (data.relayUrl) {
       const relayEl = document.getElementById('relay');
@@ -525,5 +579,6 @@ async function pollLive() {
 // init
 fetchDashboard();
 setInterval(updateAge, 1000);
+setInterval(updateFreshness, 1000);
 pollLive();
 setInterval(pollLive, 1000);

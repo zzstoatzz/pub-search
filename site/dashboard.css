@@ -84,6 +84,16 @@ section { margin-bottom: 2rem; }
   letter-spacing: 0.5px;
 }
 
+/* small qualifier under a metric value (coverage %, freshness age) */
+.metric-sub {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  min-height: 12px;
+}
+.metric-sub .warn { color: #f59e0b; }
+.metric-value.warn { color: #f59e0b; }
+
 .chart-box {
   background: var(--bg-subtle);
   border: 1px solid var(--border);
