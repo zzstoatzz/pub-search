@@ -37,10 +37,11 @@ function formatAgo(ms) {
   return Math.floor(h / 24) + 'd ago';
 }
 
-// "last indexed" is the cheapest is-ingestion-alive signal. recompute on the
-// same 1s tick as uptime so the page feels live; amber past 15m of silence,
-// which on a normally-busy firehose means ingestion has likely stalled.
-const FRESHNESS_WARN_MS = 15 * 60 * 1000;
+// "last indexed" is the cheapest is-ingestion-alive signal (turso-sourced).
+// recompute on the same 1s tick as uptime so the page feels live; amber past
+// 20m of silence — longer than the firehose's natural quiet lulls, so amber
+// means ingestion has likely actually stalled.
+const FRESHNESS_WARN_MS = 20 * 60 * 1000;
 function updateFreshness() {
   if (lastIndexedAt <= 0) return;
   const age = Date.now() - lastIndexedAt;

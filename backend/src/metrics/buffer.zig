@@ -21,6 +21,10 @@ var cached_base_errors: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var cached_base_cache_hits: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var cached_base_cache_misses: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var cached_started_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+// epoch secs of MAX(indexed_at) — ingestion freshness, sourced from turso (the
+// source of truth). NOT from the local replica, which is snapshot-frozen and
+// would report stale freshness even while ingestion is healthy.
+var cached_last_indexed: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var cache_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 // popular searches ring buffer
@@ -129,6 +133,7 @@ pub const CachedStats = struct {
     cache_hits: i64,
     cache_misses: i64,
     started_at: i64,
+    last_indexed_at: i64,
 };
 
 pub fn getCachedStats() ?CachedStats {
@@ -139,6 +144,7 @@ pub fn getCachedStats() ?CachedStats {
         .cache_hits = cached_base_cache_hits.load(.acquire) + delta_cache_hits.load(.acquire),
         .cache_misses = cached_base_cache_misses.load(.acquire) + delta_cache_misses.load(.acquire),
         .started_at = cached_started_at.load(.acquire),
+        .last_indexed_at = cached_last_indexed.load(.acquire),
     };
 }
 
@@ -172,9 +178,13 @@ fn syncToTurso() void {
 }
 
 fn refreshCachedStats(c: *db.Client) void {
+    // MAX(indexed_at) rides along on this existing 5s poll — it's an O(1)
+    // covering-index lookup (idx_documents_indexed_at_uri), so freshness is
+    // turso-sourced for free rather than needing its own query.
     var res = c.query(
         \\SELECT total_searches, total_errors, service_started_at,
-        \\       COALESCE(cache_hits, 0), COALESCE(cache_misses, 0)
+        \\       COALESCE(cache_hits, 0), COALESCE(cache_misses, 0),
+        \\       (SELECT COALESCE(CAST(strftime('%s', MAX(indexed_at)) AS INTEGER), 0) FROM documents)
         \\FROM stats WHERE id = 1
     , &.{}) catch |err| {
         logfire.warn("stats_buffer: refresh query failed: {}", .{err});
@@ -194,6 +204,7 @@ fn refreshCachedStats(c: *db.Client) void {
     cached_started_at.store(started, .release);
     cached_base_cache_hits.store(row.int(3), .release);
     cached_base_cache_misses.store(row.int(4), .release);
+    cached_last_indexed.store(row.int(5), .release);
 
     if (!cache_initialized.load(.acquire)) {
         logfire.info("stats_buffer: cache initialized (searches={d}, started_at={d})", .{ searches, started });

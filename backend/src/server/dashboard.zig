@@ -346,6 +346,11 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const cached = stats_buffer.getCachedStats();
     const searches = if (cached) |c| c.searches else 0;
     const started_at = if (cached) |c| c.started_at else 0;
+    // freshness is turso-sourced via the stats cache. The local replica is
+    // snapshot-frozen (SYNC_DISABLE=1), so its MAX(indexed_at) reports the
+    // snapshot's age — stale by however long since the last adoption — and
+    // would show "last indexed" as long-ago even while ingestion is healthy.
+    const last_indexed_at = if (cached) |c| c.last_indexed_at else 0;
 
     // get document/publication/embedding counts from local (fast)
     // Local counts query is a strict subset of STATS_SQL (no searches/errors/
@@ -357,10 +362,9 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
         \\  (SELECT COUNT(*) FROM documents) as docs,
         \\  (SELECT COUNT(*) FROM publications) as pubs,
         \\  (SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL) as embeddings,
-        \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed,
-        \\  (SELECT COALESCE(CAST(strftime('%s', MAX(indexed_at)) AS INTEGER), 0) FROM documents) as last_indexed
+        \\  (SELECT COUNT(*) FROM documents WHERE COALESCE(is_bridgyfed, 0) = 1) as bridgyfed
     );
-    const LocalCountsRow = struct { docs: i64, pubs: i64, embeddings: i64, bridgyfed: i64, last_indexed: i64 };
+    const LocalCountsRow = struct { docs: i64, pubs: i64, embeddings: i64, bridgyfed: i64 };
 
     var counts_rows = try local.query(LocalCountsQuery.positional, .{});
     defer counts_rows.deinit();
@@ -370,7 +374,6 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const publications = counts.pubs;
     const embeddings = counts.embeddings;
     const bridgyfed_documents = counts.bridgyfed;
-    const last_indexed_at = counts.last_indexed;
 
     // platforms query
     var platforms_rows = try local.query(PLATFORMS_SQL, .{});
