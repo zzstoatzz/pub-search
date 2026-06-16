@@ -300,6 +300,19 @@ pub const migrations = [_]zug.Migration{
         \\CREATE INDEX IF NOT EXISTS idx_documents_embedded_at ON documents(embedded_at);
         ,
     },
+    .{
+        .id = "016_index_documents_publication_uri",
+        .name = "index documents.publication_uri for the base_path backfill",
+        // insertPublication runs
+        //   UPDATE documents SET base_path = ?, indexed_at = ..., embedded_at = NULL
+        //   WHERE publication_uri = ? AND (...)
+        // on every publication upsert. publication_uri was unindexed, so each
+        // call full-scanned ~30k rows on remote turso — observed at avg ~3s,
+        // max 48s, ~467s of turso query time over a 9h window (2026-06-16),
+        // tail-latency that bled into search via shared-instance contention.
+        // A plain btree turns the scan into a seek.
+        .sql = "CREATE INDEX IF NOT EXISTS idx_documents_publication_uri ON documents(publication_uri)",
+    },
 };
 
 // --- tests ---
