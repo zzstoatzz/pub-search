@@ -1,0 +1,143 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Rebuild documents_fts so each FTS row's rowid == documents.rowid.
+
+The indexer/sync now delete FTS rows by rowid (an O(1) drop) instead of
+`WHERE uri = ?` (a full scan, since uri is UNINDEXED). For that to find
+pre-existing rows, every FTS row's rowid must equal its documents.rowid.
+This one-time rebuild aligns them. Read path is unaffected (the `uri`
+column is retained and joins still use it); turso's documents_fts is only
+read in the degraded replica-down fallback.
+
+Run deliberately, NOT as a startup migration — DROP+CREATE+INSERT...SELECT
+runs server-side on turso. Watch the SELECT 1 canary output.
+
+Usage:
+    ./scripts/rebuild-fts
+"""
+
+import os
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        if url.startswith("libsql://"):
+            url = url[len("libsql://") :]
+        return url
+
+
+settings = Settings()  # type: ignore
+
+
+def cell(rows):
+    if not rows:
+        return None
+    c = rows[0][0]
+    return c.get("value", c) if isinstance(c, dict) else c
+
+
+# canary BEFORE: prove turso is responsive and grab the current doc count
+before = httpx.post(
+    f"https://{settings.turso_host}/v2/pipeline",
+    headers={
+        "Authorization": f"Bearer {settings.turso_token}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "requests": [
+            {"type": "execute", "stmt": {"sql": "SELECT 1"}},
+            {"type": "execute", "stmt": {"sql": "SELECT COUNT(*) FROM documents"}},
+            {"type": "close"},
+        ]
+    },
+    timeout=10,
+)
+before.raise_for_status()
+doc_count = cell(before.json()["results"][1]["response"]["result"].get("rows", []))
+print(f"canary ok — {doc_count} documents")
+
+print("rebuilding documents_fts (rowid = documents.rowid)...")
+response = httpx.post(
+    f"https://{settings.turso_host}/v2/pipeline",
+    headers={
+        "Authorization": f"Bearer {settings.turso_token}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "requests": [
+            {"type": "execute", "stmt": {"sql": "DROP TABLE IF EXISTS documents_fts"}},
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": """
+                CREATE VIRTUAL TABLE documents_fts USING fts5(
+                    uri UNINDEXED,
+                    title,
+                    content
+                )
+            """
+                },
+            },
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": """
+                INSERT INTO documents_fts (rowid, uri, title, content)
+                SELECT rowid, uri, title, content FROM documents
+            """
+                },
+            },
+            {"type": "execute", "stmt": {"sql": "SELECT COUNT(*) FROM documents_fts"}},
+            {"type": "close"},
+        ]
+    },
+    timeout=180,
+)
+response.raise_for_status()
+data = response.json()
+
+for i, result in enumerate(data["results"][:-1]):  # skip close
+    if result["type"] == "error":
+        print(f"step {i} error: {result['error']}")
+        raise SystemExit(1)
+
+fts_count = cell(data["results"][3]["response"]["result"].get("rows", []))
+print(f"rebuilt documents_fts with {fts_count} rows")
+
+# canary AFTER: confirm a rowid-keyed lookup matches and turso still serves
+after = httpx.post(
+    f"https://{settings.turso_host}/v2/pipeline",
+    headers={
+        "Authorization": f"Bearer {settings.turso_token}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "requests": [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": "SELECT (SELECT rowid FROM documents WHERE uri = f.uri) = f.rowid FROM documents_fts f LIMIT 1"
+                },
+            },
+            {"type": "close"},
+        ]
+    },
+    timeout=10,
+)
+after.raise_for_status()
+aligned = cell(after.json()["results"][0]["response"]["result"].get("rows", []))
+print(f"rowid alignment check (1 = ok): {aligned}")
+print("done!")

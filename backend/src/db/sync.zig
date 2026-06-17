@@ -572,8 +572,9 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
                 const uri = row.text(0);
                 const record_type = row.text(1);
                 if (std.mem.eql(u8, record_type, "document")) {
+                    // FTS keyed by documents.rowid — drop it before the row
+                    conn.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", .{uri}) catch {};
                     conn.exec("DELETE FROM documents WHERE uri = ?", .{uri}) catch {};
-                    conn.exec("DELETE FROM documents_fts WHERE uri = ?", .{uri}) catch {};
                     conn.exec("DELETE FROM document_tags WHERE document_uri = ?", .{uri}) catch {};
                 } else if (std.mem.eql(u8, record_type, "publication")) {
                     conn.exec("DELETE FROM publications WHERE uri = ?", .{uri}) catch {};
@@ -599,16 +600,20 @@ pub fn incrementalSync(turso: *Client, local: *LocalDb) !void {
 }
 
 fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
-    // FTS delete-by-uri full-scans documents_fts (uri is UNINDEXED — same
-    // pathology as the turso-side indexer fix). Most incremental rows are NEW
-    // docs, so check the PK first (sub-ms) and only pay the scan on real
-    // replacements. Unchecked, a busy cycle held the local write lock for
-    // 300s+ and wedged everything sharing it (2026-06-10 stats/dashboard
-    // outage).
-    var fts_stale = false;
-    if (conn.row("SELECT 1 FROM documents WHERE uri = ?", .{row.text(0)}) catch null) |r| {
-        defer r.deinit();
-        fts_stale = true;
+    // FTS is keyed to documents.rowid so deletes are an O(1) rowid drop rather
+    // than a uri-UNINDEXED full-scan (same pathology fixed turso-side in the
+    // indexer; unchecked, a busy cycle held the local write lock for 300s+ and
+    // wedged everything sharing it — 2026-06-10 stats/dashboard outage).
+    // INSERT OR REPLACE below assigns a FRESH rowid, so the stale FTS row must
+    // be dropped by its CURRENT rowid now, before the replace. New docs (the
+    // majority) have no row and skip this entirely.
+    var old_rowid: ?i64 = null;
+    if (conn.row("SELECT rowid FROM documents WHERE uri = ?", .{row.text(0)}) catch null) |r| {
+        old_rowid = r.int(0);
+        r.deinit();
+    }
+    if (old_rowid) |rid| {
+        conn.exec("DELETE FROM documents_fts WHERE rowid = ?", .{rid}) catch {};
     }
 
     // insert into main table
@@ -639,14 +644,12 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
         return err;
     };
 
-    // update FTS (scan-on-replace only — see fts_stale above)
+    // re-insert FTS keyed to the new documents.rowid (stale row already
+    // dropped above, before the replace reassigned the rowid)
     const uri = row.text(0);
-    if (fts_stale) {
-        conn.exec("DELETE FROM documents_fts WHERE uri = ?", .{uri}) catch {};
-    }
     conn.exec(
-        "INSERT INTO documents_fts (uri, title, content) VALUES (?, ?, ?)",
-        .{ uri, row.text(3), row.text(4) },
+        "INSERT INTO documents_fts (rowid, uri, title, content) VALUES ((SELECT rowid FROM documents WHERE uri = ?), ?, ?, ?)",
+        .{ uri, uri, row.text(3), row.text(4) },
     ) catch {};
 }
 
@@ -676,4 +679,67 @@ fn insertPublicationLocal(conn: zqlite.Conn, row: anytype) !void {
         "INSERT INTO publications_fts (uri, name, description, base_path) VALUES (?, ?, ?, ?)",
         .{ uri, row.text(3), row.text(4), row.text(5) },
     ) catch {};
+}
+
+// --- tests ---
+
+test "insertDocumentLocal keys FTS by rowid: no orphans on update, MATCH works" {
+    const conn = try zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+    defer conn.close();
+    try conn.exec(
+        \\CREATE TABLE documents (
+        \\  uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, content TEXT,
+        \\  created_at TEXT, publication_uri TEXT, platform TEXT, source_collection TEXT,
+        \\  path TEXT, base_path TEXT, has_publication INTEGER, indexed_at TEXT,
+        \\  embedded_at TEXT, cover_image TEXT, is_bridgyfed INTEGER, url_dead INTEGER
+        \\)
+    , .{});
+    try conn.exec("CREATE VIRTUAL TABLE documents_fts USING fts5(uri UNINDEXED, title, content)", .{});
+
+    // a fake turso row exposing the .text()/.int() accessors insertDocumentLocal reads
+    const FakeRow = struct {
+        uri: []const u8,
+        title: []const u8,
+        content: []const u8,
+        fn text(self: @This(), i: usize) []const u8 {
+            return switch (i) {
+                0 => self.uri,
+                3 => self.title,
+                4 => self.content,
+                else => "",
+            };
+        }
+        fn int(_: @This(), _: usize) i64 {
+            return 0;
+        }
+    };
+
+    try insertDocumentLocal(conn, FakeRow{ .uri = "at://a", .title = "first", .content = "hello world" });
+    // same uri, replacement (INSERT OR REPLACE reassigns documents.rowid)
+    try insertDocumentLocal(conn, FakeRow{ .uri = "at://a", .title = "second", .content = "hello world" });
+
+    // exactly one FTS row — the stale one was dropped, not orphaned
+    {
+        const r = (try conn.row("SELECT COUNT(*) FROM documents_fts", .{})).?;
+        defer r.deinit();
+        try std.testing.expectEqual(@as(i64, 1), r.int(0));
+    }
+    // it reflects the updated title
+    {
+        const r = (try conn.row("SELECT title FROM documents_fts", .{})).?;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("second", r.text(0));
+    }
+    // FTS rowid stayed aligned to documents.rowid after the replace
+    {
+        const r = (try conn.row("SELECT (SELECT rowid FROM documents WHERE uri = f.uri) = f.rowid FROM documents_fts f", .{})).?;
+        defer r.deinit();
+        try std.testing.expectEqual(@as(i64, 1), r.int(0));
+    }
+    // the read path (MATCH) still finds it
+    {
+        const r = (try conn.row("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'hello'", .{})).?;
+        defer r.deinit();
+        try std.testing.expectEqual(@as(i64, 1), r.int(0));
+    }
 }

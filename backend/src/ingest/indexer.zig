@@ -76,7 +76,7 @@ pub fn insertDocument(
         if (result.first()) |row| {
             const old_uri = row.text(0);
             if (!std.mem.eql(u8, old_uri, uri)) {
-                c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{old_uri}) catch {};
+                c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{old_uri}) catch {};
                 c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{old_uri}) catch {};
                 c.exec("DELETE FROM documents WHERE uri = ?", &.{old_uri}) catch {};
             } else {
@@ -266,16 +266,17 @@ pub fn insertDocument(
         &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "", is_bridgyfed, content_type orelse "" },
     );
 
-    // update FTS index. `uri` is UNINDEXED in documents_fts, so this DELETE
-    // full-scans the whole FTS table on remote turso (~16s at 42k docs) — it
-    // was silently the entire indexing budget. Only pay it when this uri
-    // actually has a row to replace; creates (the vast majority) skip it.
+    // update FTS index. `uri` is UNINDEXED in documents_fts, so deleting by it
+    // would full-scan the FTS table on remote turso. Instead we key the FTS
+    // rowid to documents.rowid (a PK seek on `uri`), so deletes are O(1). Only
+    // pay the delete when this uri already has a row to replace; creates skip
+    // it. (One-time alignment of pre-existing rows: scripts/rebuild-fts.)
     if (doc_exists) {
-        c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
+        c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{uri}) catch {};
     }
     c.exec(
-        "INSERT INTO documents_fts (uri, title, content) VALUES (?, ?, ?)",
-        &.{ uri, title, content },
+        "INSERT INTO documents_fts (rowid, uri, title, content) VALUES ((SELECT rowid FROM documents WHERE uri = ?), ?, ?, ?)",
+        &.{ uri, uri, title, content },
     ) catch {};
 
     // update tags
@@ -338,8 +339,7 @@ pub fn insertPublication(
             c.exec(
                 \\UPDATE documents SET
                 \\  base_path = ?,
-                \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
-                \\  embedded_at = NULL
+                \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
                 \\WHERE publication_uri = ?
                 \\  AND (base_path IS NULL OR base_path = '' OR base_path != ?)
             , &.{ bp, uri, bp }) catch |err| {
@@ -370,9 +370,10 @@ pub fn deleteDocument(uri: []const u8) void {
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'document', ?)",
         &.{ uri, ts },
     ) catch {};
-    // delete record
+    // delete record. FTS is keyed by documents.rowid, so drop the FTS row
+    // BEFORE the documents row (the rowid lookup needs it to still exist).
+    c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{uri}) catch {};
     c.exec("DELETE FROM documents WHERE uri = ?", &.{uri}) catch {};
-    c.exec("DELETE FROM documents_fts WHERE uri = ?", &.{uri}) catch {};
     c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{uri}) catch {};
 }
 
