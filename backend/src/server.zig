@@ -979,12 +979,44 @@ fn resolveHandle(alloc: std.mem.Allocator, handle: []const u8, io: Io) ![]const 
         // silently dropping the author filter. Fall back to a lenient DoH
         // lookup here so DNS-based handles still resolve. See zat note:
         // BUG-doh-comment-field.md. Remove once a fixed zat is pinned.
-        logfire.warn("resolveHandle: zat failed for {s}: {}, trying DoH fallback", .{ handle, err });
+        logfire.warn("resolveHandle: zat failed for {s}: {}, trying fallbacks", .{ handle, err });
+        // HTTP .well-known first: covers *.bsky.social and any handle without a
+        // `_atproto` DNS TXT record (zat's own HTTP path is unreliable in our
+        // env — it falls through to DNS and dies on bsky.social's no-Answer
+        // DoH body). Then DoH for DNS-based handles.
+        if (resolveHandleWellKnown(alloc, handle, io)) |did| {
+            return did;
+        } else |wk_err| {
+            logfire.warn("resolveHandle: well-known fallback failed for {s}: {}", .{ handle, wk_err });
+        }
         return resolveHandleDoh(alloc, handle, io) catch |fb_err| {
             logfire.warn("resolveHandle: DoH fallback failed for {s}: {}", .{ handle, fb_err });
             return error.ResolveFailed;
         };
     }
+}
+
+// HTTP well-known resolution: GET https://<handle>/.well-known/atproto-did,
+// body is the DID as plain text. Covers bsky.social handles (no DNS TXT).
+fn resolveHandleWellKnown(alloc: Allocator, handle: []const u8, io: Io) ![]const u8 {
+    var url_buf: [256]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "https://{s}/.well-known/atproto-did", .{handle});
+
+    var client: http.Client = .{ .allocator = alloc, .io = io };
+    defer client.deinit();
+
+    var response_body: std.Io.Writer.Allocating = .init(alloc);
+    defer response_body.deinit();
+
+    const res = client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = &response_body.writer,
+    }) catch return error.WellKnownRequestFailed;
+    if (res.status != .ok) return error.WellKnownRequestFailed;
+
+    const did = mem.trim(u8, response_body.written(), &std.ascii.whitespace);
+    if (!mem.startsWith(u8, did, "did:")) return error.NoDidInWellKnown;
+    return try alloc.dupe(u8, did);
 }
 
 // Lenient DNS-over-HTTPS resolution of `_atproto.<handle>` TXT → did=.
