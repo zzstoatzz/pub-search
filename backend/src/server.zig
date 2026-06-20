@@ -14,6 +14,7 @@ const search = @import("server/search.zig");
 const dashboard = @import("server/dashboard.zig");
 const recommended = @import("server/recommended.zig");
 const curators = @import("server/curators.zig");
+const recommenders = @import("server/recommenders.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
@@ -125,6 +126,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleRecommendedByTopAuthors(request, target, io);
     } else if (mem.eql(u8, path, "/curators")) {
         try handleCurators(request, target, io);
+    } else if (mem.eql(u8, path, "/recommenders")) {
+        try handleRecommenders(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -500,6 +503,29 @@ fn handleCurators(request: *http.Server.Request, target: []const u8, io: Io) !vo
 
     const sliced = try curators.sliceJson(alloc, snapshot.?, limit, offset);
     try sendJson(request, sliced);
+}
+
+/// /recommenders?document=<at-uri> — the recommender DIDs behind one doc's
+/// count. Opens up the COUNT(DISTINCT did) aggregate so the UI can show who,
+/// not just how many. Recency-ordered, deduped by did. No cache (per-document
+/// keyspace is unbounded; the lookup is an indexed point query).
+fn handleRecommenders(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const span = logfire.span("http.recommenders", .{});
+    defer span.end();
+
+    const document = parseQueryParam(alloc, target, "document") catch null;
+    if (document == null or document.?.len == 0) {
+        try sendJson(request, "{\"error\":\"missing document param\"}");
+        return;
+    }
+    span.setAttribute("document", document.?);
+
+    const body = try recommenders.fetch(alloc, document.?);
+    try sendJson(request, body);
 }
 
 fn parseQueryParam(alloc: std.mem.Allocator, target: []const u8, param: []const u8) ![]const u8 {

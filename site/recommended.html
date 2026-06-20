@@ -263,6 +263,102 @@
     }
     .heart svg { width: 100%; height: 100%; display: block; }
 
+    /* score-as-trigger: the count reveals WHO recommended this — a popover of
+     * overlapping avatar circles (plyr.fm-inspired). Hover-reveal on desktop,
+     * tap-reveal on mobile. Reset native chrome so the count looks unchanged;
+     * a tiny caret hints at the disclosure and flips when open. */
+    .score-wrap { position: relative; }
+    button.score {
+      background: none;
+      border: none;
+      font-family: inherit;
+      cursor: pointer;
+      padding: 2px 2px 2px 4px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button.score:hover { color: var(--text-bright); }
+    button.score:hover .heart { color: var(--accent); }
+    button.score:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: 3px; }
+    button.score .caret {
+      font-size: 9px;
+      color: var(--text-muted);
+      transition: transform 0.12s;
+      display: inline-block;
+    }
+    button.score[aria-expanded="true"] .caret { transform: rotate(180deg); }
+    button.score[aria-expanded="true"] .heart { color: var(--accent); }
+
+    /* floating popover, anchored above the count (flips below near the top
+     * of the list). Right-aligned since the score sits at the row's edge. */
+    .likers-pop {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      right: 0;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      border-radius: 10px;
+      padding: 7px 9px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.03);
+      z-index: 1000;
+    }
+    .likers-pop.below { bottom: auto; top: calc(100% + 8px); }
+    .likers-pop .likers-empty {
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      padding: 2px 4px;
+    }
+    /* overlapping circle stack, horizontal-scroll once it gets long */
+    .likers-avatars {
+      display: flex;
+      overflow-x: auto;
+      max-width: 244px;
+      padding: 2px 0;
+      scrollbar-width: none;
+    }
+    .likers-avatars::-webkit-scrollbar { display: none; }
+    .liker-circle, .avatar-skeleton {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 2px solid var(--bg-subtle);
+      margin-left: -8px;
+      flex-shrink: 0;
+    }
+    .liker-circle:first-child, .avatar-skeleton:first-child { margin-left: 0; }
+    .liker-circle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: var(--bg-hover);
+      text-decoration: none;
+      position: relative;
+      /* springy lift on hover — the avatar pops toward you */
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .liker-circle:hover { transform: translateY(-2px) scale(1.1); z-index: 10; }
+    .liker-circle img { width: 100%; height: 100%; object-fit: cover; }
+    .liker-circle .ini {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+    .avatar-skeleton {
+      background: linear-gradient(90deg, var(--bg-hover) 0%, var(--border) 50%, var(--bg-hover) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .avatar-skeleton { animation: none; }
+      .liker-circle { transition: none; }
+    }
+
     .source .pub-link {
       color: inherit;
       text-decoration: none;
@@ -644,18 +740,33 @@
               '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>'
             : '');
 
+      // total (all-time) — rank already encodes the windowed signal.
+      // server falls back to recommendCount if totalCount isn't sent.
+      var count = (doc.totalCount != null ? doc.totalCount : doc.recommendCount);
+      // The score is a disclosure: click to reveal WHO recommended this.
+      // Only clickable when we have a URI to look up; otherwise it stays a
+      // plain static score block (no caret, no button).
+      // The popover lives as a SIBLING of the button (not inside it) so the
+      // profile links it renders aren't nested interactive elements.
+      var scoreInner = '<span class="heart">' + HEART_SVG + '</span>' + count +
+        ' <span class="caret">▾</span>';
+      var scoreHtml = doc.uri
+        ? '<div class="score-wrap">' +
+            '<button type="button" class="score score-btn" aria-expanded="false" ' +
+              'aria-label="show who recommended this" data-uri="' + escapeHtml(doc.uri) + '">' +
+              scoreInner +
+            '</button>' +
+            '<div class="likers-pop" hidden></div>' +
+          '</div>'
+        : '<div class="score"><span class="heart">' + HEART_SVG + '</span>' + count + '</div>';
+
       return '<div class="row' + podium + '" ' + dataAttrs + '>' +
         '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
         '<div class="body">' +
           '<div class="title-line">' + titleHtml + '</div>' +
           sourceLine +
         '</div>' +
-        '<div class="score">' +
-          '<span class="heart">' + HEART_SVG + '</span>' +
-          // total (all-time) — rank already encodes the windowed signal.
-          // server falls back to recommendCount if totalCount isn't sent.
-          (doc.totalCount != null ? doc.totalCount : doc.recommendCount) +
-        '</div>' +
+        scoreHtml +
       '</div>';
     }
 
@@ -781,6 +892,121 @@
             return window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || '');
           });
         }
+
+        // "who recommended this" — wire the avatar popover (hover desktop,
+        // tap mobile). Only present on post rows that carry a URI.
+        var scoreWrap = row.querySelector('.score-wrap');
+        if (scoreWrap) wireLikers(scoreWrap);
+      });
+    }
+
+    // can the device hover? desktop → reveal on hover; touch → reveal on tap.
+    var CAN_HOVER = matchMedia('(hover: hover) and (pointer: fine)').matches;
+    // track the currently-open popover so a tap elsewhere dismisses it
+    var openPop = null;
+
+    // plyr.fm-inspired: a popover of overlapping avatar circles anchored to
+    // the recommend count. Hover opens it on desktop; tap toggles on mobile
+    // (and pins it on desktop). Lazy-loads the recommender list on first open.
+    function wireLikers(wrap) {
+      var btn = wrap.querySelector('.score-btn');
+      var pop = wrap.querySelector('.likers-pop');
+      if (!btn || !pop) return;
+
+      function open() {
+        if (!pop.hasAttribute('hidden')) return;
+        if (openPop && openPop !== pop) closePop(openPop);
+        pop.removeAttribute('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        openPop = pop;
+        // flip below the count when there isn't room above it (top rows)
+        pop.classList.toggle('below', btn.getBoundingClientRect().top < 160);
+        if (!pop.dataset.loaded) loadLikers(btn.dataset.uri, pop);
+      }
+
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (pop.hasAttribute('hidden')) open(); else closePop(pop);
+      });
+
+      if (CAN_HOVER) {
+        // open on enter, close on leaving the whole wrap (button + popover),
+        // so traveling from the count onto the avatars keeps it open.
+        wrap.addEventListener('mouseenter', open);
+        wrap.addEventListener('mouseleave', function() { closePop(pop); });
+      }
+    }
+
+    function closePop(pop) {
+      pop.setAttribute('hidden', '');
+      var wrap = pop.closest('.score-wrap');
+      var btn = wrap && wrap.querySelector('.score-btn');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      if (openPop === pop) openPop = null;
+    }
+
+    // tap-outside / escape dismissal for the mobile (and pinned-desktop) case.
+    document.addEventListener('click', function(e) {
+      if (!openPop) return;
+      var wrap = openPop.closest('.score-wrap');
+      if (wrap && !wrap.contains(e.target)) closePop(openPop);
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && openPop) closePop(openPop);
+    });
+
+    function loadLikers(uri, pop) {
+      pop.dataset.loaded = '1';
+      // shimmer skeletons while the list + profiles resolve
+      pop.innerHTML = '<div class="likers-avatars">' +
+        '<span class="avatar-skeleton"></span>'.repeat(3) + '</div>';
+      fetch(API_BASE + '/recommenders?document=' + encodeURIComponent(uri))
+        .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+        .then(function(data) {
+          if (data && data.error) throw new Error(data.error);
+          renderLikers(pop, data || []);
+        })
+        .catch(function() {
+          pop.innerHTML = '<div class="likers-empty">couldn\'t load recommenders</div>';
+          delete pop.dataset.loaded; // allow a retry on next open
+        });
+    }
+
+    // Overlapping avatar circles, recency-ordered. Each starts as an initial
+    // placeholder, upgraded to an avatar image + profile link once identity
+    // resolution returns (same typeahead path the curators view uses).
+    function renderLikers(pop, rows) {
+      var dids = rows.map(function(r) { return r.did; }).filter(Boolean);
+      if (!dids.length) {
+        pop.innerHTML = '<div class="likers-empty">no recommenders indexed yet</div>';
+        return;
+      }
+      var circles = dids.map(function(did) {
+        return '<span class="liker-circle" data-did="' + escapeHtml(did) + '" title="' +
+          escapeHtml(shortDid(did)) + '"><span class="ini">' +
+          escapeHtml(shortDid(did).charAt(0)) + '</span></span>';
+      }).join('');
+      pop.innerHTML = '<div class="likers-avatars">' + circles + '</div>';
+
+      window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
+        var clients = window.LeafletClients;
+        pop.querySelectorAll('.liker-circle[data-did]').forEach(function(el) {
+          var did = el.dataset.did;
+          var p = profiles.get(did);
+          if (!p) return;
+          if (p.handle) handleCache.set(did, p.handle);
+          var label = p.handle ? '@' + p.handle : shortDid(did);
+          var a = document.createElement('a');
+          a.className = 'liker-circle';
+          a.href = clients ? clients.profileUrlFor(did) : '#';
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.title = label;
+          a.innerHTML = p.avatar
+            ? '<img src="' + escapeHtml(p.avatar) + '" alt="' + escapeHtml(label) + '" loading="lazy">'
+            : '<span class="ini">' + escapeHtml((p.handle || shortDid(did)).charAt(0)) + '</span>';
+          el.replaceWith(a);
+        });
       });
     }
 
