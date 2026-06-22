@@ -265,8 +265,7 @@
 
     /* score-as-trigger: the count reveals WHO recommended this — a popover of
      * overlapping avatar circles (plyr.fm-inspired). Hover-reveal on desktop,
-     * tap-reveal on mobile. Reset native chrome so the count looks unchanged;
-     * a tiny caret hints at the disclosure and flips when open. */
+     * tap-reveal on mobile. Reset native chrome so the count looks unchanged. */
     .score-wrap { position: relative; }
     button.score {
       background: none;
@@ -279,13 +278,6 @@
     button.score:hover { color: var(--text-bright); }
     button.score:hover .heart { color: var(--accent); }
     button.score:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: 3px; }
-    button.score .caret {
-      font-size: 9px;
-      color: var(--text-muted);
-      transition: transform 0.12s;
-      display: inline-block;
-    }
-    button.score[aria-expanded="true"] .caret { transform: rotate(180deg); }
     button.score[aria-expanded="true"] .heart { color: var(--accent); }
 
     /* floating popover, anchored above the count (flips below near the top
@@ -302,6 +294,18 @@
       z-index: 1000;
     }
     .likers-pop.below { bottom: auto; top: calc(100% + 8px); }
+    /* invisible bridge spanning the 8px gap so the cursor can travel from the
+     * count onto the avatars without crossing dead space (which would drop
+     * :hover and close the popover before you reach it). */
+    .likers-pop::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 9px;
+      bottom: -9px;
+    }
+    .likers-pop.below::after { bottom: auto; top: -9px; }
     .likers-pop .likers-empty {
       font-size: 11px;
       color: var(--text-dim);
@@ -745,11 +749,10 @@
       var count = (doc.totalCount != null ? doc.totalCount : doc.recommendCount);
       // The score is a disclosure: click to reveal WHO recommended this.
       // Only clickable when we have a URI to look up; otherwise it stays a
-      // plain static score block (no caret, no button).
+      // plain static score block (no button, no popover).
       // The popover lives as a SIBLING of the button (not inside it) so the
       // profile links it renders aren't nested interactive elements.
-      var scoreInner = '<span class="heart">' + HEART_SVG + '</span>' + count +
-        ' <span class="caret">▾</span>';
+      var scoreInner = '<span class="heart">' + HEART_SVG + '</span>' + count;
       var scoreHtml = doc.uri
         ? '<div class="score-wrap">' +
             '<button type="button" class="score score-btn" aria-expanded="false" ' +
@@ -926,18 +929,35 @@
 
       btn.addEventListener('click', function(e) {
         e.preventDefault();
+        cancelClose(pop);
         if (pop.hasAttribute('hidden')) open(); else closePop(pop);
       });
 
       if (CAN_HOVER) {
-        // open on enter, close on leaving the whole wrap (button + popover),
-        // so traveling from the count onto the avatars keeps it open.
-        wrap.addEventListener('mouseenter', open);
-        wrap.addEventListener('mouseleave', function() { closePop(pop); });
+        // Hover-intent: opening is instant, but closing is deferred and
+        // cancelable. Listening on BOTH the button and the popover means the
+        // pointer can leave the count, cross the gap, and land on the avatars
+        // (to scroll them) without the popover ever closing — re-entry cancels
+        // the pending close. Leaving the whole thing lets the timer fire.
+        btn.addEventListener('mouseenter', function() { cancelClose(pop); open(); });
+        btn.addEventListener('mouseleave', function() { scheduleClose(pop); });
+        pop.addEventListener('mouseenter', function() { cancelClose(pop); });
+        pop.addEventListener('mouseleave', function() { scheduleClose(pop); });
       }
     }
 
+    // Deferred-close machinery shared by the hover handlers. The timer id is
+    // stashed on the element so each popover manages its own.
+    function scheduleClose(pop) {
+      cancelClose(pop);
+      pop._closeTimer = setTimeout(function() { closePop(pop); }, 220);
+    }
+    function cancelClose(pop) {
+      if (pop._closeTimer) { clearTimeout(pop._closeTimer); pop._closeTimer = null; }
+    }
+
     function closePop(pop) {
+      cancelClose(pop);
       pop.setAttribute('hidden', '');
       var wrap = pop.closest('.score-wrap');
       var btn = wrap && wrap.querySelector('.score-btn');
