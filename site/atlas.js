@@ -91,6 +91,14 @@
   var uriToIndex = null; // Map<uri, index> for search matching
   var clusterFineArr = null; // Uint8Array of fine cluster IDs per point
 
+  // --- popularity / label ranking ---
+  // popScore[i] = how "popular" point i is (publication size + real recommend
+  // counts). labelOrder = point indices sorted most-popular-first, so the few
+  // labels we draw are the ones that actually matter, not whatever happened to
+  // be early in the array. Recompute order when the recommend fetch lands.
+  var popScore = null;   // Float32Array
+  var labelOrder = null; // Int32Array of indices, popular-first
+
   // --- publication state ---
   var pubData = null; // array from atlas.json
   var pubByBasePath = null; // Map<basePath, pub> for ?pub=<basePath> deep-links
@@ -789,6 +797,41 @@
   function fadeIn(zoom, start, range) { return clamp01((zoom - start) / range); }
   function fadeOut(zoom, start, range) { return 1 - clamp01((zoom - start) / range); }
 
+  // Deterministic [0,1) hash of an integer id — used to vary each cluster's
+  // pane translucency so the map reads like stained glass (panes of differing
+  // opacity) rather than one flat wash. No hue, just transparency variation.
+  function hash01(id) {
+    var x = (id * 2654435761) >>> 0; // Knuth multiplicative
+    x ^= x >>> 15; x = (x * 2246822519) >>> 0; x ^= x >>> 13;
+    return (x >>> 0) / 4294967296;
+  }
+
+  // Convex hull (Andrew's monotone chain) over [[x,y],...] in data space.
+  // Computed once per cluster at load; the render pass just transforms the
+  // few hull verts each frame. Returns the hull as a flat [x0,y0,x1,y1,...].
+  function convexHull(pts) {
+    if (pts.length < 3) return null;
+    var p = pts.slice().sort(function(a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    function cross(o, a, b) {
+      return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    }
+    var lower = [];
+    for (var i = 0; i < p.length; i++) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p[i]) <= 0) lower.pop();
+      lower.push(p[i]);
+    }
+    var upper = [];
+    for (var i = p.length - 1; i >= 0; i--) {
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p[i]) <= 0) upper.pop();
+      upper.push(p[i]);
+    }
+    lower.pop(); upper.pop();
+    var h = lower.concat(upper);
+    var flat = new Float32Array(h.length * 2);
+    for (var i = 0; i < h.length; i++) { flat[i * 2] = h[i][0]; flat[i * 2 + 1] = h[i][1]; }
+    return flat;
+  }
+
   // --- connection line buffers (pre-allocated, reused each frame) ---
   var connBufSize = 6000;
   var connBufs = null; // [platform][bucket] = Float32Array
@@ -867,6 +910,41 @@
         ctx.globalAlpha = baseAlpha * 2; // match original: gradient center was baseAlpha*2
         ctx.drawImage(halo.sprite, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
       }
+    }
+
+    // --- stained-glass cluster panes (membership via translucency, no hue) ---
+    // Fade IN as you zoom in — the opposite of the nebula halos — so cluster
+    // membership gets *clearer* the closer you look, which is exactly where the
+    // platform-colored dots become hard to parse. Neutral ink only; each pane's
+    // opacity is hashed per cluster id so adjacent panes separate like glass,
+    // and a faint hull outline is the "leading" between them. Fine clusters
+    // only — their hulls tile the populated space instead of overlapping into
+    // one bright wash the way the big coarse hulls would.
+    var paneAlpha = fadeIn(zoom, 3, 2) * fadeOut(zoom, 70, 30);
+    if (paneAlpha > 0.01 && data.clusters.fine) {
+      ctx.globalAlpha = 1; // halo pass leaves this dimmed; rgba carries our alpha
+      var ink = dark ? '255,255,255' : '15,15,15';
+      var fine = data.clusters.fine;
+      for (var c = 0; c < fine.length; c++) {
+        var cl = fine[c];
+        var hull = cl.hull;
+        if (!hull || hull.length < 6) continue;
+        if (cl.cx + cl.radius < xMin || cl.cx - cl.radius > xMax ||
+            cl.cy + cl.radius < yMin || cl.cy - cl.radius > yMax) continue;
+        var v = 0.45 + hash01(cl.id) * 1.1; // per-pane translucency variation
+        ctx.beginPath();
+        ctx.moveTo(cx + hull[0] * scale, cy + hull[1] * scale);
+        for (var hh = 2; hh < hull.length; hh += 2) {
+          ctx.lineTo(cx + hull[hh] * scale, cy + hull[hh + 1] * scale);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(' + ink + ',' + (0.07 * v * paneAlpha) + ')';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(' + ink + ',' + (0.42 * paneAlpha) + ')';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
 
     // --- connection lines (intra-cluster, colored by platform) ---
@@ -949,10 +1027,16 @@
     if (pubData && pubData.length > 0) {
       var pubLabelZoom = 3;
       var pubRendered = 0;
+      // Avatar imagery is the loudest thing on the map — spend it sparingly.
+      // pubData is sorted biggest-first, so this budget lands on the most
+      // prominent publications; everyone else reads as a quiet ring/letter.
+      var avatarBudget = smallViewport ? 6 : 22;
+      var pubCull = smallViewport ? 6 : 4;
+      var imgThreshold = smallViewport ? 16 : 11;
       for (var pi2 = 0; pi2 < pubData.length; pi2++) {
         var pub = pubData[pi2];
         var pr = Math.min(28, Math.sqrt(pub.count) * zoom * 0.35);
-        if (pr < 4) continue; // natural culling — small pubs disappear
+        if (pr < pubCull) continue; // natural culling — small pubs disappear
         var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
         // cull off-screen (with padding for labels)
         if (psx < -60 || psx > W + 60 || psy < -60 || psy > H + 60) continue;
@@ -960,10 +1044,11 @@
         var pPlatform = pub.platform || 'other';
         var pColors = frameColors[pPlatform] || frameColors.other;
 
-        // lazy-load image for visible, large-enough publications
-        if (pr >= 12) loadPubImage(pub);
+        // only the budgeted, large-enough publications get avatar imagery
+        var wantAvatar = pr >= imgThreshold && avatarBudget > 0;
+        if (wantAvatar) { loadPubImage(pub); avatarBudget--; }
 
-        var img = pubImages[pub.basePath];
+        var img = wantAvatar ? pubImages[pub.basePath] : null;
         if (img) {
           // clipped circle with cover image
           ctx.save();
@@ -1368,14 +1453,18 @@
       ctx.globalAlpha = 0.85 * coarseAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
       var fontSize = small ? 9 : 12;
+      // Cap region labels hard — a handful of the biggest regions is enough to
+      // orient; more just clutters, especially on a phone.
+      var maxCoarse = small ? 5 : 12;
+      var shownCoarse = 0;
       var sorted = data.clusters.coarse.slice().sort(function(a, b) { return b.count - a.count; });
-      for (var c = 0; c < sorted.length; c++) {
+      for (var c = 0; c < sorted.length && shownCoarse < maxCoarse; c++) {
         var cl = sorted[c];
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - Math.sqrt(cl.count) * 1.5;
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
         if (!fitsHoriz(sx, tw / 2)) continue;
-        if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
+        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(cl.label, sx, sy, dark); shownCoarse++; }
       }
     }
 
@@ -1384,15 +1473,17 @@
       ctx.globalAlpha = 0.75 * fineAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
       var fontSize = small ? 8 : 11;
+      var maxFine = small ? 6 : 16;
+      var shownFine = 0;
       var sorted = data.clusters.fine.slice().sort(function(a, b) { return b.count - a.count; });
-      for (var c = 0; c < sorted.length; c++) {
+      for (var c = 0; c < sorted.length && shownFine < maxFine; c++) {
         var cl = sorted[c];
         if (cl.cx < xMin || cl.cx > xMax || cl.cy < yMin || cl.cy > yMax) continue;
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale - 14;
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
         if (!fitsHoriz(sx, tw / 2)) continue;
-        if (canPlace(sx, sy, tw, fontSize)) drawLabel(cl.label, sx, sy, dark);
+        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(cl.label, sx, sy, dark); shownFine++; }
       }
     }
 
@@ -1407,16 +1498,19 @@
       ctx.font = fontSize + 'px monospace';
       ctx.globalAlpha = 0.7 * titleAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
-      // Mobile screen is ~390px wide. With monospace text, 20 labels
-      // overlap themselves to the point of being unreadable \u2014 drop the
-      // mobile cap further. Desktop stays at 50.
-      var maxLabels = small ? 10 : 50;
+      // Far fewer titles than before, and the ones we DO show are the most
+      // popular (publication size + real recommend counts) rather than whoever
+      // sorted early in the array \u2014 see labelOrder. On a phone a small handful
+      // is all that stays legible.
+      var maxLabels = small ? 5 : 22;
       var truncLen = small ? 22 : 45;
       var iconSize = small ? 12 : 14;
       var iconGap = 4;
       var shown = 0;
+      var order = labelOrder; // popular-first; falls back to array order if unset
 
-      for (var i = 0; i < n && shown < maxLabels; i++) {
+      for (var oi = 0; oi < n && shown < maxLabels; oi++) {
+        var i = order ? order[oi] : oi;
         var px = pointsX[i], py = pointsY[i];
         if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
         var title = data.points[i].title;
@@ -1901,6 +1995,39 @@
     markDirty();
   }
 
+  // Sort labelOrder (point indices) most-popular-first from popScore. Cheap
+  // enough to redo when the recommend boost arrives.
+  function rebuildLabelOrder() {
+    if (!labelOrder || !popScore) return;
+    var arr = Array.prototype.slice.call(labelOrder);
+    arr.sort(function(a, b) { return popScore[b] - popScore[a]; });
+    for (var i = 0; i < arr.length; i++) labelOrder[i] = arr[i];
+  }
+
+  // Layer real recommend counts onto popScore — "the best information about
+  // what is actually popular." One cached backend call returns the top-N
+  // recommended docs network-wide; we boost any that exist in the atlas so
+  // their titles win label slots. Best-effort: failure just leaves the
+  // publication-size baseline in place.
+  function fetchRecommendBoost() {
+    fetch(API_URL + '/recommended?since=all&limit=250&sort=top')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(rows) {
+        if (!rows || !rows.length || !uriToIndex) return;
+        var bumped = 0;
+        for (var k = 0; k < rows.length; k++) {
+          var idx = uriToIndex.get(rows[k].uri);
+          if (idx === undefined) continue;
+          // big additive floor so any recommended doc outranks pure pub-size,
+          // plus a log term so heavily-recommended docs sort among themselves.
+          popScore[idx] += 6 + Math.log(1 + (rows[k].totalCount || rows[k].recommendCount || 1));
+          bumped++;
+        }
+        if (bumped > 0) { rebuildLabelOrder(); markDirty(); }
+      })
+      .catch(function() {});
+  }
+
   function loadData() {
     // start logo prefetch in parallel — they're small (<60KB total) and we
     // want them ready by the time the user zooms in far enough for titles.
@@ -1992,6 +2119,48 @@
         for (var pi = 0; pi < pubData.length; pi++) {
           if (pubData[pi].basePath) pubByBasePath.set(pubData[pi].basePath, pubData[pi]);
         }
+        // Render the biggest publications first so the per-frame avatar budget
+        // (see render) spends on the most prominent ones — the rest stay quiet.
+        pubData.sort(function(a, b) { return (b.count || 0) - (a.count || 0); });
+
+        // --- stained-glass cluster panes: convex hull per fine cluster ---
+        // Gather each cluster's member coords once, hull them, stash on the
+        // cluster object. Use full int cluster ids (not the Uint8 array, which
+        // truncates past 255 fine clusters). Trim far-flung outliers first so a
+        // few stragglers don't blow the hull into a giant spike across empty
+        // space — the pane should hug the cluster's dense core.
+        var finePts = {};
+        for (var i = 0; i < n; i++) {
+          var cf = d.points[i].clusterFine;
+          (finePts[cf] || (finePts[cf] = [])).push([pointsX[i], pointsY[i]]);
+        }
+        for (var c = 0; c < d.clusters.fine.length; c++) {
+          var cl = d.clusters.fine[c];
+          var pts = finePts[cl.id];
+          if (!pts) { cl.hull = null; continue; }
+          // cl.radius ≈ 2× mean distance to centroid; keep points within it.
+          var maxR = (cl.radius || 0.05);
+          var kept = [];
+          for (var k = 0; k < pts.length; k++) {
+            var ddx = pts[k][0] - cl.cx, ddy = pts[k][1] - cl.cy;
+            if (ddx * ddx + ddy * ddy <= maxR * maxR) kept.push(pts[k]);
+          }
+          cl.hull = convexHull(kept.length >= 3 ? kept : pts);
+        }
+
+        // --- popularity score per point ---
+        // base = log publication size (offline, always available). The
+        // recommend fetch below layers real endorsement counts on top.
+        popScore = new Float32Array(n);
+        labelOrder = new Int32Array(n);
+        for (var i = 0; i < n; i++) {
+          var pub = pubByBasePath.get(d.points[i].basePath);
+          popScore[i] = pub ? Math.log(1 + (pub.count || 0)) : 0;
+          labelOrder[i] = i;
+        }
+        rebuildLabelOrder();
+        fetchRecommendBoost();
+
         buildSpatialIndex();
         renderLegend();
         var statsText = n.toLocaleString() + ' documents \u00B7 ' +
