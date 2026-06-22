@@ -30,6 +30,7 @@ from pathlib import Path
 
 import httpx
 import numpy as np
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -491,8 +492,13 @@ def main():
 
     try:
         settings = Settings()  # type: ignore
-    except Exception as e:
-        print(f"error loading settings: {e}", file=sys.stderr)
+    except ValidationError as e:
+        # never print the exception directly: pydantic's str(ValidationError)
+        # embeds input_value — the full dict of ingested env/dotenv vars,
+        # including unrelated secrets — which would land in the prefect logs.
+        # surface only the offending field names, never their values.
+        fields = ", ".join(str(err["loc"][0]) for err in e.errors()) or "config"
+        print(f"error loading settings; missing/invalid: {fields}", file=sys.stderr)
         print("required env vars: TURBOPUFFER_API_KEY", file=sys.stderr)
         sys.exit(1)
 
