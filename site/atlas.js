@@ -27,13 +27,19 @@
   // each — no presets, no settings UI; if a value is wrong, fix it here.
   // {s,l} = value for a {small, large} viewport (the W<600 split).
   var ATLAS_TUNE = {
-    // cluster panes — the stained-glass membership cue. Deliberately a whisper:
-    // fill + leading(stroke) alpha at full fade, plus the zoom fade-in window.
-    pane: {
-      fill: 0.022, stroke: 0.07,
-      inStart: 3, inRange: 2, outStart: 70, outRange: 30,
-      varBase: 0.45, varRange: 1.1, // per-cluster opacity hash spread
-      trim: 1.0,                     // keep hull pts within this × cluster radius
+    // cluster nebulae — soft translucent clouds (NOT polygons). The same
+    // platform-tinted halo sprite the zoomed-out view uses, stamped across each
+    // cluster's member points so the cloud hugs the real shape and reads
+    // continuous as you zoom in. Per-stamp alpha accumulates into the nebula.
+    nebula: {
+      alpha: 0.05,         // per-stamp globalAlpha (overlaps build the cloud)
+      stampFrac: 0.34,     // stamp radius as a fraction of cluster radius
+      minStampPx: 10,      // floor so tiny clusters still read
+      varBase: 0.6, varRange: 0.8, // per-cluster opacity variation (stained-glass)
+      inStart: 2, inRange: 1.5,    // fade in as the coarse halos fade out
+      outStart: 45, outRange: 15,  // fade out approaching card zoom
+      trim: 1.0,           // keep member pts within this × cluster radius
+      sample: 28,          // max points sampled per cluster (load-time)
     },
     // max on-screen labels per layer
     labels:    { titles: { s: 5, l: 22 }, coarse: { s: 5, l: 12 }, fine: { s: 6, l: 16 } },
@@ -817,39 +823,13 @@
   function fadeIn(zoom, start, range) { return clamp01((zoom - start) / range); }
   function fadeOut(zoom, start, range) { return 1 - clamp01((zoom - start) / range); }
 
-  // Deterministic [0,1) hash of an integer id — used to vary each cluster's
-  // pane translucency so the map reads like stained glass (panes of differing
-  // opacity) rather than one flat wash. No hue, just transparency variation.
+  // Deterministic [0,1) hash of an integer id — varies each cluster nebula's
+  // opacity a touch so neighbouring clouds read as distinct rather than one
+  // flat wash. Transparency variation only, no hue shift.
   function hash01(id) {
     var x = (id * 2654435761) >>> 0; // Knuth multiplicative
     x ^= x >>> 15; x = (x * 2246822519) >>> 0; x ^= x >>> 13;
     return (x >>> 0) / 4294967296;
-  }
-
-  // Convex hull (Andrew's monotone chain) over [[x,y],...] in data space.
-  // Computed once per cluster at load; the render pass just transforms the
-  // few hull verts each frame. Returns the hull as a flat [x0,y0,x1,y1,...].
-  function convexHull(pts) {
-    if (pts.length < 3) return null;
-    var p = pts.slice().sort(function(a, b) { return a[0] - b[0] || a[1] - b[1]; });
-    function cross(o, a, b) {
-      return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    }
-    var lower = [];
-    for (var i = 0; i < p.length; i++) {
-      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p[i]) <= 0) lower.pop();
-      lower.push(p[i]);
-    }
-    var upper = [];
-    for (var i = p.length - 1; i >= 0; i--) {
-      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p[i]) <= 0) upper.pop();
-      upper.push(p[i]);
-    }
-    lower.pop(); upper.pop();
-    var h = lower.concat(upper);
-    var flat = new Float32Array(h.length * 2);
-    for (var i = 0; i < h.length; i++) { flat[i * 2] = h[i][0]; flat[i * 2 + 1] = h[i][1]; }
-    return flat;
   }
 
   // --- connection line buffers (pre-allocated, reused each frame) ---
@@ -903,72 +883,56 @@
     var xMin = tl[0] - pad, xMax = br[0] + pad;
     var yMin = tl[1] - pad, yMax = br[1] + pad;
 
-    // --- cluster nebula halos (colored by dominant platform) ---
-    // continuous alpha curve: full at zoom<2, fades gradually past zoom 2.
-    // mobile (W<600): floor drops 25%→10% AND sprite scaled to 60% so the
-    // glow doesn't drown the rest of the map on a small screen.
     var smallViewport = W < 600;
-    var haloFloor = smallViewport ? 0.10 : 0.25;
     var haloShrink = smallViewport ? 0.6 : 1.0;
-    var haloAlphaFactor = zoom < 2 ? 1.0 : Math.max(haloFloor, 1 - (zoom - 2) / 8);
-    // at card zoom the nebulae are just backdrop noise — fade them out
-    haloAlphaFactor *= fadeOut(zoom, 30, 20);
-    if (haloAlphaFactor > 0.01) {
-      var clusters = zoom < 2 ? data.clusters.coarse : data.clusters.fine;
-      var baseAlpha = dark ? (zoom < 2 ? 0.06 : 0.04) : (zoom < 2 ? 0.05 : 0.03);
-      baseAlpha *= haloAlphaFactor;
-      for (var c = 0; c < clusters.length; c++) {
-        var cl = clusters[c];
+
+    // --- coarse cluster nebulae (the zoomed-OUT view) ---
+    // Soft platform-tinted clouds at region centroids. Full when zoomed all the
+    // way out, then hand off to the FINE nebulae below as you zoom in — same
+    // visual language, finer granularity, so the experience is continuous.
+    var coarseHaloAlpha = fadeOut(zoom, 2.5, 1.5);
+    if (coarseHaloAlpha > 0.01) {
+      var coarse = data.clusters.coarse;
+      var baseAlpha = (dark ? 0.06 : 0.05) * coarseHaloAlpha;
+      for (var c = 0; c < coarse.length; c++) {
+        var cl = coarse[c];
         var r = (cl.radius || 0.05) * scale;
         if (r < 2) continue;
         var sx = cx + cl.cx * scale, sy = cy + cl.cy * scale;
         if (sx + r < 0 || sx - r > W || sy + r < 0 || sy - r > H) continue;
-        var platform = cl.dominantPlatform || 'other';
-        var halo = getHaloSprite(platform, r);
-        var spriteScale = r / halo.bucket;
-        var drawSize = halo.sprite.width * spriteScale * haloShrink;
-        ctx.globalAlpha = baseAlpha * 2; // match original: gradient center was baseAlpha*2
+        var halo = getHaloSprite(cl.dominantPlatform || 'other', r);
+        var drawSize = halo.sprite.width * (r / halo.bucket) * haloShrink;
+        ctx.globalAlpha = baseAlpha * 2;
         ctx.drawImage(halo.sprite, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
       }
+      ctx.globalAlpha = 1;
     }
 
-    // --- stained-glass cluster panes (membership via translucency, no hue) ---
-    // Fade IN as you zoom in — the opposite of the nebula halos — so cluster
-    // membership gets *clearer* the closer you look, which is exactly where the
-    // platform-colored dots become hard to parse. Neutral ink only; each pane's
-    // opacity is hashed per cluster id so adjacent panes separate like glass,
-    // and a faint hull outline is the "leading" between them. Fine clusters
-    // only — their hulls tile the populated space instead of overlapping into
-    // one bright wash the way the big coarse hulls would.
-    var pane = ATLAS_TUNE.pane;
-    var paneAlpha = (pane.fill > 0 || pane.stroke > 0)
-      ? fadeIn(zoom, pane.inStart, pane.inRange) * fadeOut(zoom, pane.outStart, pane.outRange) : 0;
-    if (paneAlpha > 0.01 && data.clusters.fine) {
-      ctx.globalAlpha = 1; // halo pass leaves this dimmed; rgba carries our alpha
-      var ink = dark ? '255,255,255' : '15,15,15';
-      var pvBase = pane.varBase, pvRange = pane.varRange;
+    // --- fine cluster nebulae (the zoomed-IN view) ---
+    // NOT polygons. We stamp the SAME soft platform-tinted halo sprite across a
+    // sample of each cluster's member points, so overlapping soft stamps build
+    // an organic translucent cloud that hugs the cluster's actual shape. Fades
+    // in as the coarse nebulae fade out and persists through the zoomed-in
+    // range, where the fine cluster labels (below) name each cloud — continuous
+    // with the zoomed-out look, just finer.
+    var neb = ATLAS_TUNE.nebula;
+    var nebAlpha = fadeIn(zoom, neb.inStart, neb.inRange) * fadeOut(zoom, neb.outStart, neb.outRange);
+    if (nebAlpha > 0.01 && data.clusters.fine) {
       var fine = data.clusters.fine;
       for (var c = 0; c < fine.length; c++) {
         var cl = fine[c];
-        var hull = cl.hull;
-        if (!hull || hull.length < 6) continue;
+        var pts = cl.cloudPts;
+        if (!pts || pts.length < 2) continue;
         if (cl.cx + cl.radius < xMin || cl.cx - cl.radius > xMax ||
             cl.cy + cl.radius < yMin || cl.cy - cl.radius > yMax) continue;
-        var v = pvBase + hash01(cl.id) * pvRange; // per-pane translucency variation
-        ctx.beginPath();
-        ctx.moveTo(cx + hull[0] * scale, cy + hull[1] * scale);
-        for (var hh = 2; hh < hull.length; hh += 2) {
-          ctx.lineTo(cx + hull[hh] * scale, cy + hull[hh + 1] * scale);
-        }
-        ctx.closePath();
-        if (pane.fill > 0) {
-          ctx.fillStyle = 'rgba(' + ink + ',' + (pane.fill * v * paneAlpha) + ')';
-          ctx.fill();
-        }
-        if (pane.stroke > 0) {
-          ctx.strokeStyle = 'rgba(' + ink + ',' + (pane.stroke * paneAlpha) + ')';
-          ctx.lineWidth = 1;
-          ctx.stroke();
+        var rPx = Math.max(neb.minStampPx, (cl.radius || 0.05) * neb.stampFrac * scale);
+        var halo2 = getHaloSprite(cl.dominantPlatform || 'other', rPx);
+        var drawSize2 = halo2.sprite.width * (rPx / halo2.bucket) * (smallViewport ? 0.85 : 1);
+        var v = neb.varBase + hash01(cl.id) * neb.varRange; // per-cloud opacity variation
+        ctx.globalAlpha = neb.alpha * v * nebAlpha;
+        for (var s = 0; s < pts.length; s += 2) {
+          var nsx = cx + pts[s] * scale, nsy = cy + pts[s + 1] * scale;
+          ctx.drawImage(halo2.sprite, nsx - drawSize2 / 2, nsy - drawSize2 / 2, drawSize2, drawSize2);
         }
       }
       ctx.globalAlpha = 1;
@@ -1255,12 +1219,14 @@
 
     // smooth label transitions:
     // coarse labels: full opacity zoom<1.7, fade out 1.7–2.3
-    // fine labels: fade in 1.7–2.3, full opacity 2.3–4.5, fade out 4.5–5.5
+    // fine labels: fade in 1.7–2.3, then PERSIST through the zoomed-in range so
+    //   every fine nebula stays named (continuous with the zoomed-out regions);
+    //   they ride the same fade-out as the nebulae, near card zoom.
     // titles: fade in 4.5–5.5, hold until planet surface text is readable
     // planets: fade in over CARD_START..CARD_START+CARD_RANGE, keep growing
     // cards: hover/selection only — unfurl next to the planet
     var coarseAlpha = fadeOut(zoom, 1.7, 0.6);
-    var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 4.5, 1.0);
+    var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 45, 15);
     var titleAlpha = fadeIn(zoom, 4.5, 1.0) * fadeOut(zoom, 110, 40);
     var planetAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
     var cardAlpha = planetAlpha;
@@ -2151,29 +2117,34 @@
         // (see render) spends on the most prominent ones — the rest stay quiet.
         pubData.sort(function(a, b) { return (b.count || 0) - (a.count || 0); });
 
-        // --- stained-glass cluster panes: convex hull per fine cluster ---
-        // Gather each cluster's member coords once, hull them, stash on the
-        // cluster object. Use full int cluster ids (not the Uint8 array, which
-        // truncates past 255 fine clusters). Trim far-flung outliers first so a
-        // few stragglers don't blow the hull into a giant spike across empty
-        // space — the pane should hug the cluster's dense core.
+        // --- fine-cluster nebula sample points ---
+        // Gather each fine cluster's member coords, trim far-flung outliers so
+        // the cloud hugs the dense core, then stride-sample down to a small cap.
+        // The render pass stamps a soft halo sprite at each of these to build an
+        // organic translucent nebula. Full int cluster ids (not the Uint8 array,
+        // which truncates past 255 fine clusters).
         var finePts = {};
         for (var i = 0; i < n; i++) {
           var cf = d.points[i].clusterFine;
           (finePts[cf] || (finePts[cf] = [])).push([pointsX[i], pointsY[i]]);
         }
+        var nebSample = ATLAS_TUNE.nebula.sample, nebTrim = ATLAS_TUNE.nebula.trim;
         for (var c = 0; c < d.clusters.fine.length; c++) {
           var cl = d.clusters.fine[c];
           var pts = finePts[cl.id];
-          if (!pts) { cl.hull = null; continue; }
-          // cl.radius ≈ 2× mean distance to centroid; keep points within it.
-          var maxR = (cl.radius || 0.05) * ATLAS_TUNE.pane.trim;
+          if (!pts) { cl.cloudPts = null; continue; }
+          var maxR = (cl.radius || 0.05) * nebTrim;
           var kept = [];
           for (var k = 0; k < pts.length; k++) {
             var ddx = pts[k][0] - cl.cx, ddy = pts[k][1] - cl.cy;
             if (ddx * ddx + ddy * ddy <= maxR * maxR) kept.push(pts[k]);
           }
-          cl.hull = convexHull(kept.length >= 3 ? kept : pts);
+          if (kept.length < 2) kept = pts;
+          // stride-sample to <= nebSample so big clusters don't cost more
+          var stride = Math.max(1, Math.ceil(kept.length / nebSample));
+          var flat = [];
+          for (var k = 0; k < kept.length; k += stride) { flat.push(kept[k][0], kept[k][1]); }
+          cl.cloudPts = new Float32Array(flat);
         }
 
         // --- popularity score per point ---
