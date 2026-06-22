@@ -1,7 +1,10 @@
 #!/usr/bin/env -S uv run --script --quiet
 # /// script
-# requires-python = ">=3.12"
-# dependencies = ["httpx", "numpy", "scikit-learn", "umap-learn", "hdbscan", "pydantic-settings", "anthropic"]
+# requires-python = ">=3.12,<3.14"
+# # numpy<2.2 + python<3.14: umap-learn's transitive numba/llvmlite have no wheel
+# # for numpy>=2.2 or py3.14, so an unpinned solve backtracks to ancient numba
+# # 0.53 and tries a source build that fails the py-version guard. keep both pins.
+# dependencies = ["httpx", "numpy<2.2", "scikit-learn", "umap-learn", "hdbscan", "pydantic-settings", "anthropic"]
 # ///
 """
 Build atlas.json — 2D semantic map of the document index.
