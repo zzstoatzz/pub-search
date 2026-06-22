@@ -21,6 +21,26 @@
 
   var PLATFORMS = ['leaflet', 'whitewind', 'pckt', 'offprint', 'greengale', 'other'];
 
+  // --- atlas tuning --------------------------------------------------------
+  // Every label-density / avatar / cluster-pane knob lives here instead of as
+  // magic numbers scattered through the render loop. One opinionated default
+  // each — no presets, no settings UI; if a value is wrong, fix it here.
+  // {s,l} = value for a {small, large} viewport (the W<600 split).
+  var ATLAS_TUNE = {
+    // cluster panes — the stained-glass membership cue. Deliberately a whisper:
+    // fill + leading(stroke) alpha at full fade, plus the zoom fade-in window.
+    pane: {
+      fill: 0.022, stroke: 0.07,
+      inStart: 3, inRange: 2, outStart: 70, outRange: 30,
+      varBase: 0.45, varRange: 1.1, // per-cluster opacity hash spread
+      trim: 1.0,                     // keep hull pts within this × cluster radius
+    },
+    // max on-screen labels per layer
+    labels:    { titles: { s: 5, l: 22 }, coarse: { s: 5, l: 12 }, fine: { s: 6, l: 16 } },
+    avatars:   { budget: { s: 6, l: 22 }, cull: { s: 6, l: 4 }, imgThreshold: { s: 16, l: 11 } },
+    recommend: { limit: 250, boostFloor: 6 }, // popularity boost from /recommended
+  };
+
   // --- precomputed color cache (rebuilt once per frame) ---
   var frameColors = null; // current platform colors object
   var frameDark = true;   // current theme
@@ -920,10 +940,13 @@
     // and a faint hull outline is the "leading" between them. Fine clusters
     // only — their hulls tile the populated space instead of overlapping into
     // one bright wash the way the big coarse hulls would.
-    var paneAlpha = fadeIn(zoom, 3, 2) * fadeOut(zoom, 70, 30);
+    var pane = ATLAS_TUNE.pane;
+    var paneAlpha = (pane.fill > 0 || pane.stroke > 0)
+      ? fadeIn(zoom, pane.inStart, pane.inRange) * fadeOut(zoom, pane.outStart, pane.outRange) : 0;
     if (paneAlpha > 0.01 && data.clusters.fine) {
       ctx.globalAlpha = 1; // halo pass leaves this dimmed; rgba carries our alpha
       var ink = dark ? '255,255,255' : '15,15,15';
+      var pvBase = pane.varBase, pvRange = pane.varRange;
       var fine = data.clusters.fine;
       for (var c = 0; c < fine.length; c++) {
         var cl = fine[c];
@@ -931,18 +954,22 @@
         if (!hull || hull.length < 6) continue;
         if (cl.cx + cl.radius < xMin || cl.cx - cl.radius > xMax ||
             cl.cy + cl.radius < yMin || cl.cy - cl.radius > yMax) continue;
-        var v = 0.45 + hash01(cl.id) * 1.1; // per-pane translucency variation
+        var v = pvBase + hash01(cl.id) * pvRange; // per-pane translucency variation
         ctx.beginPath();
         ctx.moveTo(cx + hull[0] * scale, cy + hull[1] * scale);
         for (var hh = 2; hh < hull.length; hh += 2) {
           ctx.lineTo(cx + hull[hh] * scale, cy + hull[hh + 1] * scale);
         }
         ctx.closePath();
-        ctx.fillStyle = 'rgba(' + ink + ',' + (0.022 * v * paneAlpha) + ')';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(' + ink + ',' + (0.07 * paneAlpha) + ')';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        if (pane.fill > 0) {
+          ctx.fillStyle = 'rgba(' + ink + ',' + (pane.fill * v * paneAlpha) + ')';
+          ctx.fill();
+        }
+        if (pane.stroke > 0) {
+          ctx.strokeStyle = 'rgba(' + ink + ',' + (pane.stroke * paneAlpha) + ')';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
       }
       ctx.globalAlpha = 1;
     }
@@ -1030,9 +1057,10 @@
       // Avatar imagery is the loudest thing on the map — spend it sparingly.
       // pubData is sorted biggest-first, so this budget lands on the most
       // prominent publications; everyone else reads as a quiet ring/letter.
-      var avatarBudget = smallViewport ? 6 : 22;
-      var pubCull = smallViewport ? 6 : 4;
-      var imgThreshold = smallViewport ? 16 : 11;
+      var avKey = smallViewport ? 's' : 'l';
+      var avatarBudget = ATLAS_TUNE.avatars.budget[avKey];
+      var pubCull = ATLAS_TUNE.avatars.cull[avKey];
+      var imgThreshold = ATLAS_TUNE.avatars.imgThreshold[avKey];
       for (var pi2 = 0; pi2 < pubData.length; pi2++) {
         var pub = pubData[pi2];
         var pr = Math.min(28, Math.sqrt(pub.count) * zoom * 0.35);
@@ -1455,7 +1483,7 @@
       var fontSize = small ? 9 : 12;
       // Cap region labels hard — a handful of the biggest regions is enough to
       // orient; more just clutters, especially on a phone.
-      var maxCoarse = small ? 5 : 12;
+      var maxCoarse = ATLAS_TUNE.labels.coarse[small ? 's' : 'l'];
       var shownCoarse = 0;
       var sorted = data.clusters.coarse.slice().sort(function(a, b) { return b.count - a.count; });
       for (var c = 0; c < sorted.length && shownCoarse < maxCoarse; c++) {
@@ -1473,7 +1501,7 @@
       ctx.globalAlpha = 0.75 * fineAlpha;
       ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
       var fontSize = small ? 8 : 11;
-      var maxFine = small ? 6 : 16;
+      var maxFine = ATLAS_TUNE.labels.fine[small ? 's' : 'l'];
       var shownFine = 0;
       var sorted = data.clusters.fine.slice().sort(function(a, b) { return b.count - a.count; });
       for (var c = 0; c < sorted.length && shownFine < maxFine; c++) {
@@ -1502,7 +1530,7 @@
       // popular (publication size + real recommend counts) rather than whoever
       // sorted early in the array \u2014 see labelOrder. On a phone a small handful
       // is all that stays legible.
-      var maxLabels = small ? 5 : 22;
+      var maxLabels = ATLAS_TUNE.labels.titles[small ? 's' : 'l'];
       var truncLen = small ? 22 : 45;
       var iconSize = small ? 12 : 14;
       var iconGap = 4;
@@ -2010,7 +2038,7 @@
   // their titles win label slots. Best-effort: failure just leaves the
   // publication-size baseline in place.
   function fetchRecommendBoost() {
-    fetch(API_URL + '/recommended?since=all&limit=250&sort=top')
+    fetch(API_URL + '/recommended?since=all&limit=' + ATLAS_TUNE.recommend.limit + '&sort=top')
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(rows) {
         if (!rows || !rows.length || !uriToIndex) return;
@@ -2020,7 +2048,7 @@
           if (idx === undefined) continue;
           // big additive floor so any recommended doc outranks pure pub-size,
           // plus a log term so heavily-recommended docs sort among themselves.
-          popScore[idx] += 6 + Math.log(1 + (rows[k].totalCount || rows[k].recommendCount || 1));
+          popScore[idx] += ATLAS_TUNE.recommend.boostFloor + Math.log(1 + (rows[k].totalCount || rows[k].recommendCount || 1));
           bumped++;
         }
         if (bumped > 0) { rebuildLabelOrder(); markDirty(); }
@@ -2139,7 +2167,7 @@
           var pts = finePts[cl.id];
           if (!pts) { cl.hull = null; continue; }
           // cl.radius ≈ 2× mean distance to centroid; keep points within it.
-          var maxR = (cl.radius || 0.05);
+          var maxR = (cl.radius || 0.05) * ATLAS_TUNE.pane.trim;
           var kept = [];
           for (var k = 0; k < pts.length; k++) {
             var ddx = pts[k][0] - cl.cx, ddy = pts[k][1] - cl.cy;
