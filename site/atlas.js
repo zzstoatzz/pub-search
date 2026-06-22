@@ -938,9 +938,9 @@
           ctx.lineTo(cx + hull[hh] * scale, cy + hull[hh + 1] * scale);
         }
         ctx.closePath();
-        ctx.fillStyle = 'rgba(' + ink + ',' + (0.07 * v * paneAlpha) + ')';
+        ctx.fillStyle = 'rgba(' + ink + ',' + (0.022 * v * paneAlpha) + ')';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(' + ink + ',' + (0.42 * paneAlpha) + ')';
+        ctx.strokeStyle = 'rgba(' + ink + ',' + (0.07 * paneAlpha) + ')';
         ctx.lineWidth = 1;
         ctx.stroke();
       }
