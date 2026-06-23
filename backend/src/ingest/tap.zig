@@ -21,6 +21,11 @@ const STANDARD_DOCUMENT = "site.standard.document";
 const STANDARD_PUBLICATION = "site.standard.publication";
 const STANDARD_RECOMMEND = "site.standard.graph.recommend";
 
+// standard.site's publication-subscription graph record. No leaflet variant
+// is ingested by design — subscriptions are a cross-platform standard.site
+// concept (see /subscribed). Field `publication` is the subscribed at-uri.
+const STANDARD_SUBSCRIPTION = "site.standard.graph.subscription";
+
 // leaflet's parallel "interactions" lexicon. Most leaflet UI writes
 // recommends here (.subject), not to the cross-platform standard one.
 const LEAFLET_RECOMMEND = "pub.leaflet.interactions.recommend";
@@ -42,6 +47,10 @@ fn isPublicationCollection(collection: []const u8) bool {
 fn isRecommendCollection(collection: []const u8) bool {
     return mem.eql(u8, collection, STANDARD_RECOMMEND) or
         mem.eql(u8, collection, LEAFLET_RECOMMEND);
+}
+
+fn isSubscriptionCollection(collection: []const u8) bool {
+    return mem.eql(u8, collection, STANDARD_SUBSCRIPTION);
 }
 
 /// Lexicons disagree on the field name for the recommended doc:
@@ -378,6 +387,10 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
             processRecommend(uri, did.raw, rec.rkey, rec.collection, inner_record) catch |err| {
                 logfire.err("recommend processing error: {}", .{err});
             };
+        } else if (isSubscriptionCollection(rec.collection)) {
+            processSubscription(uri, did.raw, rec.rkey, inner_record) catch |err| {
+                logfire.err("subscription processing error: {}", .{err});
+            };
         }
     } else if (rec.isDelete()) {
         if (isDocumentCollection(rec.collection)) {
@@ -389,6 +402,8 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
             indexer.deletePublication(uri);
         } else if (isRecommendCollection(rec.collection)) {
             indexer.deleteRecommend(uri);
+        } else if (isSubscriptionCollection(rec.collection)) {
+            indexer.deleteSubscription(uri);
         }
     }
 }
@@ -465,6 +480,19 @@ fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collecti
     logfire.counter("tap.recommends_indexed", 1);
 }
 
+fn processSubscription(uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
+    const record_val: json.Value = .{ .object = record };
+
+    const publication_uri = zat.json.getString(record_val, "publication") orelse {
+        logfire.span("tap.dropped", .{ .reason = "subscription_missing_publication", .uri = uri }).end();
+        return;
+    };
+    const created_at = zat.json.getString(record_val, "createdAt");
+
+    try indexer.insertSubscription(uri, did, rkey, publication_uri, created_at);
+    logfire.counter("tap.subscriptions_indexed", 1);
+}
+
 // ---------------------------------------------------------------------------
 // Targeted backfill: pull every record of our collections for a single repo
 // directly from its PDS and run it through the SAME extract+index path the
@@ -475,13 +503,14 @@ fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collecti
 const BACKFILL_COLLECTIONS = [_][]const u8{
     LEAFLET_DOCUMENT,    STANDARD_DOCUMENT,    WHITEWIND_ENTRY,
     LEAFLET_PUBLICATION, STANDARD_PUBLICATION, STANDARD_RECOMMEND,
-    LEAFLET_RECOMMEND,
+    LEAFLET_RECOMMEND,   STANDARD_SUBSCRIPTION,
 };
 
 pub const BackfillCounts = struct {
     documents: usize = 0,
     publications: usize = 0,
     recommends: usize = 0,
+    subscriptions: usize = 0,
     skipped: usize = 0,
 };
 
@@ -520,8 +549,8 @@ pub fn backfillRepo(
         };
     }
 
-    logfire.info("backfill: {s} done — docs {d}, pubs {d}, recs {d}, skipped {d}", .{
-        did.raw, counts.documents, counts.publications, counts.recommends, counts.skipped,
+    logfire.info("backfill: {s} done — docs {d}, pubs {d}, recs {d}, subs {d}, skipped {d}", .{
+        did.raw, counts.documents, counts.publications, counts.recommends, counts.subscriptions, counts.skipped,
     });
     return counts;
 }
@@ -586,6 +615,12 @@ fn backfillCollection(
                     continue;
                 };
                 counts.recommends += 1;
+            } else if (isSubscriptionCollection(collection)) {
+                processSubscription(uri, did, rkey, inner) catch {
+                    counts.skipped += 1;
+                    continue;
+                };
+                counts.subscriptions += 1;
             }
         }
 

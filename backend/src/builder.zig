@@ -84,8 +84,8 @@ pub fn run(allocator: Allocator, io: Io) !void {
     try local.openAt(db_path);
 
     const counts = try sync.buildSnapshot(turso, &local, watermark);
-    logfire.info("builder: built {d} docs, {d} pubs, {d} tags, {d} popular, {d} recommends", .{
-        counts.documents, counts.publications, counts.tags, counts.popular, counts.recommends,
+    logfire.info("builder: built {d} docs, {d} pubs, {d} tags, {d} popular, {d} recommends, {d} subscriptions", .{
+        counts.documents, counts.publications, counts.tags, counts.popular, counts.recommends, counts.subscriptions,
     });
 
     // ------------------------------------------------------------------
