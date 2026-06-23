@@ -15,7 +15,7 @@ const LocalDb = @This();
 /// built by an out-of-date builder image must stall freshness, not break
 /// serving. (Scheduled builder machines pin their creation image: recreate
 /// them after bumping this.)
-pub const SCHEMA_VERSION: u32 = 2; // v2: recommends table (top-author cascade served locally)
+pub const SCHEMA_VERSION: u32 = 3; // v3: subscriptions table (/subscribed + /subscribers served locally)
 
 const READ_POOL_SIZE = 4;
 
@@ -368,6 +368,24 @@ fn createSchema(self: *LocalDb) !void {
     };
     c.exec("CREATE INDEX IF NOT EXISTS idx_recommends_document_uri ON recommends(document_uri)", .{}) catch {};
     c.exec("CREATE INDEX IF NOT EXISTS idx_recommends_did ON recommends(did)", .{}) catch {};
+
+    // subscriptions (schema v3): the /subscribed leaderboard + /subscribers
+    // drill-down serve from the replica, same as recommends. Empty on pre-v3
+    // snapshots — endpoints fall back to turso until the first v3 build.
+    c.exec(
+        \\CREATE TABLE IF NOT EXISTS subscriptions (
+        \\  uri TEXT PRIMARY KEY,
+        \\  did TEXT NOT NULL,
+        \\  rkey TEXT NOT NULL,
+        \\  publication_uri TEXT NOT NULL,
+        \\  created_at TEXT,
+        \\  indexed_at TEXT
+        \\)
+    , .{}) catch |err| {
+        std.debug.print("local db: failed to create subscriptions table: {}\n", .{err});
+    };
+    c.exec("CREATE INDEX IF NOT EXISTS idx_subscriptions_publication_uri ON subscriptions(publication_uri)", .{}) catch {};
+    c.exec("CREATE INDEX IF NOT EXISTS idx_subscriptions_did ON subscriptions(did)", .{}) catch {};
 
     // Idempotent column-add for existing local DBs. SQLite returns an error
     // when the column already exists ("duplicate column name"), which is

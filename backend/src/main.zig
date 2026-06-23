@@ -139,6 +139,7 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // so leaderboard pages never block user requests on a remote Turso query.
     server.initRecommendedCache(io);
     server.initCuratorsCache(io);
+    server.initSubscribedCache(io);
     server.initDashboardCache(io);
     server.initTagsCache(io);
 

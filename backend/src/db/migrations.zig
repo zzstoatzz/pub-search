@@ -313,6 +313,28 @@ pub const migrations = [_]zug.Migration{
         // A plain btree turns the scan into a seek.
         .sql = "CREATE INDEX IF NOT EXISTS idx_documents_publication_uri ON documents(publication_uri)",
     },
+    .{
+        .id = "017_create_subscriptions",
+        .name = "site.standard.graph.subscription table for publication-subscriber aggregation",
+        // Sibling of `recommends` (012) one grain up: a recommend endorses one
+        // document, a subscription follows a whole publication. `publication_uri`
+        // is the at-uri the record points at; `did` is the subscriber. Indexed
+        // both ways — by publication (leaderboard + "who's subscribed to me")
+        // and by subscriber (dedupe via the unique (did, rkey)).
+        .sql =
+        \\CREATE TABLE IF NOT EXISTS subscriptions (
+        \\  uri TEXT PRIMARY KEY,
+        \\  did TEXT NOT NULL,
+        \\  rkey TEXT NOT NULL,
+        \\  publication_uri TEXT NOT NULL,
+        \\  created_at TEXT,
+        \\  indexed_at TEXT
+        \\);
+        \\CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_did_rkey ON subscriptions(did, rkey);
+        \\CREATE INDEX IF NOT EXISTS idx_subscriptions_publication_uri ON subscriptions(publication_uri);
+        \\CREATE INDEX IF NOT EXISTS idx_subscriptions_did ON subscriptions(did);
+        ,
+    },
 };
 
 // --- tests ---

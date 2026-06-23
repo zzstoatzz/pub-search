@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pub search / subscribed</title>
+  <meta name="description" content="most-subscribed publications across atproto publishing platforms">
+  <meta property="og:title" content="pub search / subscribed">
+  <meta property="og:description" content="most-subscribed publications across atproto publishing platforms">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://pub-search.waow.tech/og-image?page=subscribed">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="pub search / subscribed">
+  <meta name="twitter:description" content="most-subscribed publications across atproto publishing platforms">
+  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image?page=subscribed">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='2' fill='%231B7340'/><circle cx='8' cy='10' r='1.5' fill='%231B7340' opacity='.6'/><circle cx='24' cy='8' r='1' fill='%231B7340' opacity='.4'/><circle cx='22' cy='22' r='1.5' fill='%231B7340' opacity='.5'/><circle cx='6' cy='24' r='1' fill='%231B7340' opacity='.3'/></svg>">
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'dark';
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="components.css?v=1779507677">
+  <style>
+    :root, [data-theme="dark"] {
+      --bg: #050505;
+      --bg-subtle: #0d0d0d;
+      --bg-hover: #141414;
+      --border: #1d1d1d;
+      --border-subtle: #161616;
+      --border-focus: #2a2a2a;
+      --text: #ccc;
+      --text-bright: #fff;
+      --text-secondary: #888;
+      --text-dim: #777;
+      --text-muted: #444;
+      --accent: #2a9d5c;
+      --accent-dim: #1B7340;
+      --podium-bg: rgba(42, 157, 92, 0.04);
+      --podium-border: rgba(42, 157, 92, 0.25);
+    }
+    [data-theme="light"] {
+      --bg: #f5f5f0;
+      --bg-subtle: #eee;
+      --bg-hover: #e4e4e0;
+      --border: #ddd;
+      --border-subtle: #ccc;
+      --border-focus: #bbb;
+      --text: #333;
+      --text-bright: #111;
+      --text-secondary: #555;
+      --text-dim: #666;
+      --text-muted: #999;
+      --accent: #1B7340;
+      --accent-dim: #2a9d5c;
+      --podium-bg: rgba(27, 115, 64, 0.05);
+      --podium-border: rgba(27, 115, 64, 0.25);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.25rem 1rem 3rem;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .container { max-width: 600px; margin: 0 auto; }
+
+    a { color: var(--accent-dim); text-decoration: none; }
+    a:hover { color: var(--accent); }
+
+    /* Header matches the homepage shape: title + dim suffix + inline
+     * controls (settings, theme). Flex so the gear/theme sit at the right. */
+    h1 {
+      font-size: 12px;
+      font-weight: normal;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    h1 a.title { color: var(--text-secondary); }
+    h1 a.title:hover { color: var(--text-bright); }
+    h1 .dim { color: var(--text-dim); }
+    /* push the settings gear to the right edge so it sits at the line's
+     * end, matching the homepage's pinned gear behavior. */
+    h1 .lf-settings-btn { margin-left: auto; }
+    .theme-toggle {
+      cursor: pointer;
+      color: var(--text-dim);
+      user-select: none;
+      padding: 0.3rem 0.4rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      font: inherit;
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .theme-toggle:hover { color: var(--text-secondary); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+    .lead {
+      font-size: 18px;
+      line-height: 1.3;
+      color: var(--text-bright);
+      margin-bottom: 1.5rem;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* tiny "?" affordance for the nerd-detail tooltip */
+    /* Real <button> so it's keyboard-reachable + screen-reader-friendly.
+     * Reset native chrome so the existing visual (small circle) stays. */
+    .info {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 1px solid var(--text-muted);
+      background: none;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-family: monospace;
+      cursor: help;
+      user-select: none;
+      padding: 0;
+      line-height: 1;
+    }
+    .info:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
+    .info:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+    /* Invisible bridge directly below the `?` so the cursor never lands in
+     * dead space when traveling from the button to the tooltip. Without it,
+     * leaving the `?` even briefly drops :hover and closes the tip before
+     * the cursor reaches the link. */
+    .info::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: -16px;
+      right: -16px;
+      height: 14px;
+    }
+
+    .info .tip {
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 0;
+      width: max-content;
+      max-width: min(360px, 80vw);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s;
+      z-index: 5;
+    }
+    .info .tip-inner {
+      display: block;
+      padding: 0.5rem 0.65rem;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      color: var(--text-secondary);
+      font-size: 11px;
+      line-height: 1.5;
+      letter-spacing: normal;
+      text-align: left;
+    }
+    .info .tip code { color: var(--text); }
+    .info .tip a { color: var(--accent-dim); }
+    .info .tip a:hover { color: var(--accent); }
+    .info:hover .tip, .info:focus-within .tip { opacity: 1; pointer-events: auto; }
+
+    .status {
+      font-size: 11px;
+      color: var(--text-dim);
+      padding: 1rem 0;
+    }
+
+    /* leaderboard row: rank | body | score */
+    .row {
+      display: grid;
+      grid-template-columns: 3rem 1fr auto;
+      column-gap: 1rem;
+      align-items: center;
+      padding: 0.85rem 0.6rem;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.12s;
+    }
+    .row:hover { background: var(--bg-subtle); }
+    .row:last-child { border-bottom: none; }
+
+    /* top-3 get a soft accent stripe on the left, brighter rank+heart */
+    .row.podium {
+      background: var(--podium-bg);
+      border-left: 2px solid var(--podium-border);
+      padding-left: 0.5rem;
+    }
+    .row.podium:hover { background: var(--bg-subtle); }
+    .row.podium .rank { color: var(--accent); }
+    .row.podium .heart { color: var(--accent); }
+
+    .rank {
+      font-size: 18px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      padding-right: 0.25rem;
+      line-height: 1;
+    }
+    .rank .hash { font-size: 12px; opacity: 0.6; margin-right: 1px; }
+
+    .body { min-width: 0; }
+    .title-line {
+      color: var(--text-bright);
+      font-size: 14px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .title-line a { color: inherit; }
+    .title-line a:hover { color: var(--accent); }
+    .source {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 0.25rem;
+      letter-spacing: 0.01em;
+    }
+
+    /* score block: heart icon + count, baseline-aligned */
+    .score {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--text-secondary);
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .heart {
+      width: 14px;
+      height: 14px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .heart svg { width: 100%; height: 100%; display: block; }
+
+    /* score-as-trigger: the count reveals WHO recommended this — a popover of
+     * overlapping avatar circles (plyr.fm-inspired). Hover-reveal on desktop,
+     * tap-reveal on mobile. Reset native chrome so the count looks unchanged. */
+    .score-wrap { position: relative; }
+    button.score {
+      background: none;
+      border: none;
+      font-family: inherit;
+      cursor: pointer;
+      padding: 2px 2px 2px 4px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button.score:hover { color: var(--text-bright); }
+    button.score:hover .heart { color: var(--accent); }
+    button.score:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: 3px; }
+    button.score[aria-expanded="true"] .heart { color: var(--accent); }
+
+    /* floating popover, anchored above the count (flips below near the top
+     * of the list). Right-aligned since the score sits at the row's edge. */
+    .likers-pop {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      right: 0;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-focus);
+      border-radius: 10px;
+      padding: 7px 9px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.03);
+      z-index: 1000;
+    }
+    .likers-pop.below { bottom: auto; top: calc(100% + 8px); }
+    /* invisible bridge spanning the 8px gap so the cursor can travel from the
+     * count onto the avatars without crossing dead space (which would drop
+     * :hover and close the popover before you reach it). */
+    .likers-pop::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 9px;
+      bottom: -9px;
+    }
+    .likers-pop.below::after { bottom: auto; top: -9px; }
+    .likers-pop .likers-empty {
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      padding: 2px 4px;
+    }
+    /* overlapping circle stack, horizontal-scroll once it gets long */
+    .likers-avatars {
+      display: flex;
+      overflow-x: auto;
+      max-width: 244px;
+      padding: 2px 0;
+      scrollbar-width: none;
+    }
+    .likers-avatars::-webkit-scrollbar { display: none; }
+    .liker-circle, .avatar-skeleton {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 2px solid var(--bg-subtle);
+      margin-left: -8px;
+      flex-shrink: 0;
+    }
+    .liker-circle:first-child, .avatar-skeleton:first-child { margin-left: 0; }
+    .liker-circle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: var(--bg-hover);
+      text-decoration: none;
+      position: relative;
+      /* springy lift on hover — the avatar pops toward you */
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .liker-circle:hover { transform: translateY(-2px) scale(1.1); z-index: 10; }
+    .liker-circle img { width: 100%; height: 100%; object-fit: cover; }
+    .liker-circle .ini {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+    .avatar-skeleton {
+      background: linear-gradient(90deg, var(--bg-hover) 0%, var(--border) 50%, var(--bg-hover) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .avatar-skeleton { animation: none; }
+      .liker-circle { transition: none; }
+    }
+
+    .source .pub-link {
+      color: inherit;
+      text-decoration: none;
+    }
+    .source .pub-link:hover { color: var(--text-secondary); }
+    .source .dot { opacity: 0.5; }
+    .source .windowed { color: var(--text-dim); }
+
+    /* curator-row variants — same .row grid, different body content */
+    .handle-line {
+      color: var(--text-bright);
+      font-size: 14px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .handle-line a { color: inherit; }
+    .handle-line a:hover { color: var(--accent); }
+    .handle-line .at { color: var(--text-dim); }
+    .handle-line .did-fallback { color: var(--text-dim); font-size: 12px; }
+    .curator-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 0.25rem;
+      flex-wrap: wrap;
+    }
+    .curator-meta .dot { opacity: 0.5; }
+
+    /* row "⋯" overflow button — matches .lf-row-more styling from
+     * components.css but scoped tight to the leaderboard row. */
+    .row .lf-row-more {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 14px;
+      line-height: 1;
+      letter-spacing: 1px;
+      padding: 4px 6px;
+      margin-left: 6px;
+      cursor: pointer;
+      vertical-align: middle;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .row .lf-row-more:hover { color: var(--text-secondary); }
+
+    /* view toggle: posts | curators — higher-order than the window picker.
+     * Same axis (recommends) measured against different entities. */
+    .views {
+      display: flex;
+      gap: 0;
+      margin: 0 0 1.25rem;
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      width: max-content;
+      overflow: hidden;
+    }
+    .view-pill {
+      font-size: 12px;
+      padding: 5px 14px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-family: monospace;
+      transition: color 0.12s, background 0.12s;
+      border-right: 1px solid var(--border-subtle);
+      /* bigger tap target on touch devices (pointer is coarse) */
+      min-height: 36px;
+    }
+    .view-pill:last-child { border-right: none; }
+    .view-pill:hover { color: var(--text); background: var(--bg-subtle); }
+    .view-pill:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; position: relative; z-index: 1; }
+    .view-pill.active {
+      background: var(--bg-subtle);
+      color: var(--text-bright);
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .view-pill { min-height: 44px; padding: 8px 16px; }
+    }
+
+    /* active-author chip: shown when ?author= is in the URL */
+    .filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 4px 10px;
+      background: rgba(42, 157, 92, 0.15);
+      border: 1px solid var(--accent-dim);
+      border-radius: 3px;
+      color: #34d399;
+      font-size: 12px;
+      margin: 0 0 1rem;
+    }
+    .filter-chip .x {
+      cursor: pointer;
+      opacity: 0.7;
+      padding: 0 2px;
+      line-height: 1;
+    }
+    .filter-chip .x:hover { opacity: 1; color: #f87171; }
+    .filter-chip .label-handle { color: var(--text-bright); }
+
+    /* window picker (since=day|week|month|year|all) */
+    .windows {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: -0.25rem 0 1rem;
+    }
+    .win-pill {
+      font-size: 11px;
+      padding: 3px 9px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-subtle);
+      border-radius: 3px;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-family: monospace;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+      min-height: 30px;
+    }
+    .win-pill:hover {
+      color: var(--text);
+      border-color: var(--border-focus);
+    }
+    .win-pill:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+    .win-pill.active {
+      background: rgba(14, 165, 233, 0.18);
+      border-color: #0ea5e9;
+      color: #38bdf8;
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .win-pill { min-height: 44px; padding: 6px 14px; font-size: 12px; }
+    }
+
+    .load-more {
+      text-align: center;
+      padding: 1.25rem 0;
+    }
+    .load-more button {
+      background: none;
+      border: 1px solid var(--border-focus);
+      color: var(--text-secondary);
+      font-family: monospace;
+      font-size: 12px;
+      padding: 0.4rem 0.9rem;
+      cursor: pointer;
+    }
+    .load-more button:hover { background: var(--bg-subtle); color: var(--text-bright); }
+
+    /* tighter mobile layout */
+    @media (max-width: 480px) {
+      body { padding: 1rem 0.75rem 2rem; }
+      .container { padding: 0; }
+      .lead { font-size: 16px; margin-bottom: 1.25rem; }
+      .row {
+        grid-template-columns: 2.25rem 1fr auto;
+        column-gap: 0.6rem;
+        padding: 0.7rem 0.4rem;
+      }
+      .row.podium { padding-left: 0.3rem; }
+      .rank { font-size: 15px; }
+      .rank .hash { font-size: 10px; }
+      .title-line { font-size: 13px; }
+      .source { font-size: 10.5px; }
+      .score { font-size: 14px; }
+      .heart { width: 12px; height: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ subscribed</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
+
+    <div class="views" role="tablist" aria-label="view">
+      <button class="view-pill" data-view="publications" role="tab">publications</button>
+      <button class="view-pill" data-view="people"       role="tab">people</button>
+    </div>
+
+    <div class="lead">
+      <span id="lead-title">most-subscribed publications</span>
+      <button type="button" class="info" aria-label="how counts are computed">?<span class="tip"><span class="tip-inner" id="lead-tip">
+        counts distinct subscribers via <a href="https://standard.site" target="_blank" rel="noopener"><code>site.standard.graph.subscription</code></a> — a standing follow of a whole publication, across platforms.
+      </span></span></button>
+    </div>
+
+    <div class="windows" id="windows" role="tablist" aria-label="time window">
+      <button class="win-pill" data-window="day"   role="tab">day</button>
+      <button class="win-pill" data-window="week"  role="tab">week</button>
+      <button class="win-pill" data-window="month" role="tab">month</button>
+      <button class="win-pill" data-window="year"  role="tab">year</button>
+      <button class="win-pill" data-window="all"   role="tab">all-time</button>
+    </div>
+
+    <div id="status" class="status">loading…</div>
+    <div id="list"></div>
+  </div>
+
+  <script>
+    var THEME_ICONS = { dark: '☾', light: '☼', system: '◑' };
+    var THEME_CYCLE = ['dark', 'light', 'system'];
+    var currentTheme = localStorage.getItem('theme') || 'dark';
+    function applyTheme(t) {
+      currentTheme = t;
+      localStorage.setItem('theme', t);
+      var resolved = t === 'system'
+        ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : t;
+      document.documentElement.setAttribute('data-theme', resolved);
+      var el = document.getElementById('theme-toggle');
+      if (el) { el.textContent = THEME_ICONS[t]; el.title = t; }
+    }
+    document.getElementById('theme-toggle').textContent = THEME_ICONS[currentTheme];
+    document.getElementById('theme-toggle').title = currentTheme;
+    document.getElementById('theme-toggle').addEventListener('click', function() {
+      applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3]);
+    });
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
+      if (currentTheme === 'system') applyTheme('system');
+    });
+  </script>
+  <script src="clients.js"></script>
+  <script src="identity.js"></script>
+  <script src="ui.js"></script>
+  <script>
+    var API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+      ? 'http://localhost:3000'
+      : 'https://leaflet-search-backend.fly.dev';
+
+    // subscriber glyph — a single filled person, to differentiate the
+    // subscription signal from /recommended's heart. The count beside it is a
+    // headcount of distinct subscribers.
+    var HEART_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+      + '<path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
+
+    // Phrase the windowed activity in plain English ("today", "this week", …).
+    // Used on the curator row meta line.
+    var WINDOW_PHRASE = {
+      day: 'today',
+      week: 'this week',
+      month: 'this month',
+      year: 'this year',
+    };
+
+    var PAGE_SIZE = 20;
+    var WINDOWS = ['day', 'week', 'month', 'year', 'all'];
+    var VIEWS = ['publications', 'people'];
+    var currentOffset = 0;
+    var totalRendered = 0;
+    var currentWindow = (function() {
+      var p = new URLSearchParams(location.search).get('since');
+      return WINDOWS.indexOf(p) >= 0 ? p : 'all';
+    })();
+    var currentView = (function() {
+      var p = new URLSearchParams(location.search).get('view');
+      return VIEWS.indexOf(p) >= 0 ? p : 'publications';
+    })();
+    // DID → handle cache for the people view + subscriber popovers
+    var handleCache = new Map();
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function shortDid(did) {
+      var parts = String(did).split(':');
+      var last = parts[parts.length - 1] || did;
+      return last.length > 14 ? last.slice(0, 14) + '…' : last;
+    }
+
+    function relativeTime(iso) {
+      if (!iso) return '';
+      var t = Date.parse(iso);
+      if (isNaN(t)) return '';
+      var s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      if (s < 604800) return Math.floor(s / 86400) + 'd ago';
+      return Math.floor(s / 604800) + 'w ago';
+    }
+
+    // People row — a publication OWNER ranked by distinct subscribers across
+    // all their publications. Handle renders as a fallback short-DID first;
+    // resolveHandles upgrades to @handle once typeahead returns. The score
+    // opens a popover of WHO subscribes (scope = this owner's did).
+    function personRowHtml(p, rank) {
+      var podium = rank <= 3 ? ' podium' : '';
+      var did = p.did || '';
+      var handleHtml = '<span class="did-fallback">' + escapeHtml(shortDid(did)) + '</span>';
+      var dataAttrs = (did ? 'data-did="' + escapeHtml(did) + '" ' : '') + 'data-kind="person"';
+
+      var pubs = p.pubCount || 0;
+      var metaParts = [pubs + ' publication' + (pubs === 1 ? '' : 's')];
+      if (currentWindow !== 'all' && p.subscriberCount != null) {
+        var phrase = WINDOW_PHRASE[currentWindow] || ('in the last ' + currentWindow);
+        metaParts.push(p.subscriberCount + ' new ' + phrase);
+      }
+      var metaText = metaParts.join(' · ');
+
+      var count = (p.totalCount != null ? p.totalCount : p.subscriberCount);
+      var scoreInner = '<span class="heart">' + HEART_SVG + '</span>' + count;
+      var scoreHtml = did
+        ? '<div class="score-wrap">' +
+            '<button type="button" class="score score-btn" aria-expanded="false" ' +
+              'aria-label="show who subscribes" data-scope="owner" data-key="' + escapeHtml(did) + '">' +
+              scoreInner +
+            '</button>' +
+            '<div class="likers-pop" hidden></div>' +
+          '</div>'
+        : '<div class="score">' + scoreInner + '</div>';
+
+      return '<div class="row' + podium + '" ' + dataAttrs + '>' +
+        '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
+        '<div class="body">' +
+          '<div class="handle-line">' + handleHtml + '</div>' +
+          '<div class="curator-meta">' +
+            escapeHtml(metaText) +
+            '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>' +
+          '</div>' +
+        '</div>' +
+        scoreHtml +
+      '</div>';
+    }
+
+    // Publication row — a publication ranked by distinct subscribers. Title is
+    // the publication name (linked to its own site); the source line shows the
+    // host. The score opens a popover of WHO subscribes (scope = this
+    // publication's at-uri).
+    function publicationRowHtml(pub, rank) {
+      var podium = rank <= 3 ? ' podium' : '';
+      var title = escapeHtml(pub.name || pub.basePath || 'Untitled publication');
+      var url = pub.url || (pub.basePath ? ('https://' + pub.basePath) : '');
+      var extUrl = pub.basePath ? ('https://' + pub.basePath) : '';
+      var source = pub.basePath || pub.platform || '';
+      var titleHtml = url
+        ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + title + '</a>'
+        : title;
+      var sourceHtml = '';
+      if (source) {
+        sourceHtml = extUrl
+          ? '<a class="pub-link" href="' + escapeHtml(extUrl) + '" target="_blank" rel="noopener">' + escapeHtml(source) + '</a>'
+          : escapeHtml(source);
+      }
+      var dataAttrs = [
+        pub.ownerDid ? 'data-did="' + escapeHtml(pub.ownerDid) + '"' : '',
+        pub.uri ? 'data-uri="' + escapeHtml(pub.uri) + '"' : '',
+        pub.basePath ? 'data-base-path="' + escapeHtml(pub.basePath) + '"' : '',
+        extUrl ? 'data-ext-url="' + escapeHtml(extUrl) + '"' : '',
+      ].filter(Boolean).join(' ');
+      // Windowed activity hint ("source · 5 new this week"). Skipped at
+      // window=all (would equal the right-side total).
+      var windowedHint = '';
+      if (currentWindow !== 'all' && pub.subscriberCount != null) {
+        var phrase = WINDOW_PHRASE[currentWindow] || ('in the last ' + currentWindow);
+        windowedHint = ' <span class="dot">·</span> <span class="windowed">' +
+          pub.subscriberCount + ' new ' + escapeHtml(phrase) + '</span>';
+      }
+      var sourceLine = (sourceHtml || windowedHint)
+        ? '<div class="source">' + sourceHtml + windowedHint +
+          '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button></div>'
+        : '';
+
+      var count = (pub.totalCount != null ? pub.totalCount : pub.subscriberCount);
+      var scoreInner = '<span class="heart">' + HEART_SVG + '</span>' + count;
+      var scoreHtml = pub.uri
+        ? '<div class="score-wrap">' +
+            '<button type="button" class="score score-btn" aria-expanded="false" ' +
+              'aria-label="show who subscribes" data-scope="publication" data-key="' + escapeHtml(pub.uri) + '">' +
+              scoreInner +
+            '</button>' +
+            '<div class="likers-pop" hidden></div>' +
+          '</div>'
+        : '<div class="score">' + scoreInner + '</div>';
+
+      return '<div class="row' + podium + '" ' + dataAttrs + '>' +
+        '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
+        '<div class="body">' +
+          '<div class="title-line">' + titleHtml + '</div>' +
+          sourceLine +
+        '</div>' +
+        scoreHtml +
+      '</div>';
+    }
+
+    function renderRows(rows, append) {
+      var status = document.getElementById('status');
+      var list = document.getElementById('list');
+
+      if (!append) {
+        totalRendered = 0;
+        list.innerHTML = '';
+      }
+      // strip any prior load-more (always re-add below if needed)
+      var oldLoadMore = list.querySelector('.load-more');
+      if (oldLoadMore) oldLoadMore.remove();
+
+      if ((!rows || rows.length === 0) && totalRendered === 0) {
+        status.textContent = 'no subscriptions indexed yet.';
+        return;
+      }
+      status.textContent = '';
+
+      var html = '';
+      for (var i = 0; i < rows.length; i++) {
+        html += (currentView === 'people')
+          ? personRowHtml(rows[i], totalRendered + i + 1)
+          : publicationRowHtml(rows[i], totalRendered + i + 1);
+      }
+      list.insertAdjacentHTML('beforeend', html);
+      totalRendered += rows.length;
+
+      // if the batch came back full, there might be more — offer load-more.
+      // (we don't know the total upstream; a full batch is the only signal.)
+      if (rows.length === PAGE_SIZE) {
+        var moreHtml = '<div class="load-more"><button onclick="loadMore()">load more</button></div>';
+        list.insertAdjacentHTML('beforeend', moreHtml);
+      }
+
+      if (currentView === 'people') resolveHandles(rows);
+      wireRowActions(list);
+    }
+
+    // Batch-resolve DID → handle via LeafletIdentity (typeahead.waow.tech),
+    // swap in-place once resolved. Used by the curators view; the posts view
+    // doesn't need this because rows already display titles.
+    function resolveHandles(rows) {
+      var dids = rows.map(function(r) { return r.did; }).filter(function(d) {
+        return d && !handleCache.has(d);
+      });
+      if (dids.length === 0) { applyHandles(); return; }
+      window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
+        profiles.forEach(function(p, key) {
+          if (key.indexOf('did:') === 0 && p.handle) handleCache.set(key, p.handle);
+        });
+        applyHandles();
+      });
+    }
+
+    function applyHandles() {
+      // single-click on a curator's @handle → open their profile in the
+      // preferred client (matches the homepage @handle behavior). The
+      // action menu (right-click / long-press) is where you'd choose
+      // "view posts they've recommended" / atlas / copy handle / etc.
+      var clients = window.LeafletClients;
+      document.querySelectorAll('.row[data-kind="person"][data-did]').forEach(function(row) {
+        if (row.dataset.handleApplied) return;
+        var did = row.dataset.did;
+        var handle = handleCache.get(did);
+        if (!handle) return;
+        var line = row.querySelector('.handle-line');
+        if (!line) return;
+        var profileUrl = clients ? clients.profileUrlFor(did) : '#';
+        line.innerHTML = '<a href="' + escapeHtml(profileUrl) +
+          '" target="_blank" rel="noopener" title="open profile">' +
+          '<span class="at">@</span>' + escapeHtml(handle) + '</a>';
+        row.dataset.handleApplied = '1';
+        var link = line.querySelector('a');
+        if (link && window.LeafletUI) {
+          window.LeafletUI.bindContextMenu(link, function() {
+            return window.LeafletUI.curatorMenuItems(handle, did);
+          });
+        }
+      });
+    }
+
+    // Wire the action menu on each row. Two row kinds — posts (default)
+    // and curators (data-kind="curator") — get different menu builders:
+    // post rows act on the doc, curator rows act on the person.
+    function wireRowActions(scope) {
+      if (!window.LeafletUI) return;
+      scope.querySelectorAll('.row').forEach(function(row) {
+        if (row.dataset.actionsWired) return;
+        row.dataset.actionsWired = '1';
+
+        var data = row.dataset;
+        var moreBtn = row.querySelector('.lf-row-more');
+        if (moreBtn) {
+          var handler = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var items;
+            if (data.kind === 'person') {
+              var handle = data.did ? handleCache.get(data.did) : null;
+              items = window.LeafletUI.curatorMenuItems(handle || '', data.did || '');
+            } else {
+              items = window.LeafletUI.rowMenuItems({
+                uri: data.uri || '',
+                basePath: data.basePath || '',
+                handle: '',
+                authorDid: data.did || '',
+                externalUrl: data.extUrl || '',
+              });
+            }
+            var rect = moreBtn.getBoundingClientRect();
+            window.LeafletUI.showMenu(items, rect.right - 8, rect.bottom + 4);
+          };
+          moreBtn.addEventListener('click', handler);
+          window.LeafletUI.longPress(moreBtn, handler);
+        }
+
+        var pubLink = row.querySelector('.pub-link');
+        if (pubLink && (data.basePath || data.extUrl)) {
+          window.LeafletUI.bindContextMenu(pubLink, function() {
+            return window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || '');
+          });
+        }
+
+        // "who recommended this" — wire the avatar popover (hover desktop,
+        // tap mobile). Only present on post rows that carry a URI.
+        var scoreWrap = row.querySelector('.score-wrap');
+        if (scoreWrap) wireLikers(scoreWrap);
+      });
+    }
+
+    // can the device hover? desktop → reveal on hover; touch → reveal on tap.
+    var CAN_HOVER = matchMedia('(hover: hover) and (pointer: fine)').matches;
+    // track the currently-open popover so a tap elsewhere dismisses it
+    var openPop = null;
+
+    // plyr.fm-inspired: a popover of overlapping avatar circles anchored to
+    // the recommend count. Hover opens it on desktop; tap toggles on mobile
+    // (and pins it on desktop). Lazy-loads the recommender list on first open.
+    function wireLikers(wrap) {
+      var btn = wrap.querySelector('.score-btn');
+      var pop = wrap.querySelector('.likers-pop');
+      if (!btn || !pop) return;
+
+      function open() {
+        if (!pop.hasAttribute('hidden')) return;
+        if (openPop && openPop !== pop) closePop(openPop);
+        pop.removeAttribute('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        openPop = pop;
+        // flip below the count when there isn't room above it (top rows)
+        pop.classList.toggle('below', btn.getBoundingClientRect().top < 160);
+        if (!pop.dataset.loaded) loadLikers(btn.dataset.scope, btn.dataset.key, pop);
+      }
+
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        cancelClose(pop);
+        if (pop.hasAttribute('hidden')) open(); else closePop(pop);
+      });
+
+      if (CAN_HOVER) {
+        // Hover-intent: opening is instant, but closing is deferred and
+        // cancelable. Listening on BOTH the button and the popover means the
+        // pointer can leave the count, cross the gap, and land on the avatars
+        // (to scroll them) without the popover ever closing — re-entry cancels
+        // the pending close. Leaving the whole thing lets the timer fire.
+        btn.addEventListener('mouseenter', function() { cancelClose(pop); open(); });
+        btn.addEventListener('mouseleave', function() { scheduleClose(pop); });
+        pop.addEventListener('mouseenter', function() { cancelClose(pop); });
+        pop.addEventListener('mouseleave', function() { scheduleClose(pop); });
+      }
+    }
+
+    // Deferred-close machinery shared by the hover handlers. The timer id is
+    // stashed on the element so each popover manages its own.
+    function scheduleClose(pop) {
+      cancelClose(pop);
+      pop._closeTimer = setTimeout(function() { closePop(pop); }, 220);
+    }
+    function cancelClose(pop) {
+      if (pop._closeTimer) { clearTimeout(pop._closeTimer); pop._closeTimer = null; }
+    }
+
+    function closePop(pop) {
+      cancelClose(pop);
+      pop.setAttribute('hidden', '');
+      var wrap = pop.closest('.score-wrap');
+      var btn = wrap && wrap.querySelector('.score-btn');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      if (openPop === pop) openPop = null;
+    }
+
+    // tap-outside / escape dismissal for the mobile (and pinned-desktop) case.
+    document.addEventListener('click', function(e) {
+      if (!openPop) return;
+      var wrap = openPop.closest('.score-wrap');
+      if (wrap && !wrap.contains(e.target)) closePop(openPop);
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && openPop) closePop(openPop);
+    });
+
+    function loadLikers(scope, key, pop) {
+      pop.dataset.loaded = '1';
+      // shimmer skeletons while the list + profiles resolve
+      pop.innerHTML = '<div class="likers-avatars">' +
+        '<span class="avatar-skeleton"></span>'.repeat(3) + '</div>';
+      var param = scope === 'owner' ? 'did' : 'publication';
+      fetch(API_BASE + '/subscribers?' + param + '=' + encodeURIComponent(key))
+        .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+        .then(function(data) {
+          if (data && data.error) throw new Error(data.error);
+          renderLikers(pop, data || []);
+        })
+        .catch(function() {
+          pop.innerHTML = '<div class="likers-empty">couldn\'t load subscribers</div>';
+          delete pop.dataset.loaded; // allow a retry on next open
+        });
+    }
+
+    // Overlapping avatar circles, recency-ordered. Each starts as an initial
+    // placeholder, upgraded to an avatar image + profile link once identity
+    // resolution returns (same typeahead path the curators view uses).
+    function renderLikers(pop, rows) {
+      var dids = rows.map(function(r) { return r.did; }).filter(Boolean);
+      if (!dids.length) {
+        pop.innerHTML = '<div class="likers-empty">no subscribers indexed yet</div>';
+        return;
+      }
+      var circles = dids.map(function(did) {
+        return '<span class="liker-circle" data-did="' + escapeHtml(did) + '" title="' +
+          escapeHtml(shortDid(did)) + '"><span class="ini">' +
+          escapeHtml(shortDid(did).charAt(0)) + '</span></span>';
+      }).join('');
+      pop.innerHTML = '<div class="likers-avatars">' + circles + '</div>';
+
+      window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
+        var clients = window.LeafletClients;
+        pop.querySelectorAll('.liker-circle[data-did]').forEach(function(el) {
+          var did = el.dataset.did;
+          var p = profiles.get(did);
+          if (!p) return;
+          if (p.handle) handleCache.set(did, p.handle);
+          var label = p.handle ? '@' + p.handle : shortDid(did);
+          var a = document.createElement('a');
+          a.className = 'liker-circle';
+          a.href = clients ? clients.profileUrlFor(did) : '#';
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.title = label;
+          a.innerHTML = p.avatar
+            ? '<img src="' + escapeHtml(p.avatar) + '" alt="' + escapeHtml(label) + '" loading="lazy">'
+            : '<span class="ini">' + escapeHtml((p.handle || shortDid(did)).charAt(0)) + '</span>';
+          el.replaceWith(a);
+        });
+      });
+    }
+
+    function fetchPage(offset, append) {
+      var url = API_BASE + '/subscribed?limit=' + PAGE_SIZE + '&offset=' + offset
+        + '&since=' + encodeURIComponent(currentWindow)
+        + '&view=' + encodeURIComponent(currentView);
+      fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+        .then(function(data) {
+          if (data && data.error) throw new Error(data.error);
+          renderRows(data || [], append);
+        })
+        .catch(function(err) {
+          document.getElementById('status').textContent = 'failed to load: ' + err.message;
+        });
+    }
+
+    function loadMore() {
+      currentOffset += PAGE_SIZE;
+      fetchPage(currentOffset, true);
+    }
+    window.loadMore = loadMore;
+
+    function syncWindowPills() {
+      document.querySelectorAll('.win-pill').forEach(function(b) {
+        var active = b.dataset.window === currentWindow;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+        b.tabIndex = active ? 0 : -1; // roving tabindex per WAI-ARIA tabs pattern
+      });
+    }
+
+    function syncViewPills() {
+      document.querySelectorAll('.view-pill').forEach(function(b) {
+        var active = b.dataset.view === currentView;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+        b.tabIndex = active ? 0 : -1;
+      });
+      // page title + tooltip change with the view — same signal
+      // (site.standard.graph.subscription), two entities.
+      var lead = document.getElementById('lead-title');
+      var tip = document.getElementById('lead-tip');
+      if (currentView === 'people') {
+        if (lead) lead.textContent = 'most-subscribed people';
+        if (tip) tip.innerHTML = 'ranks authors by distinct subscribers across all the publications they own. open a row to see who subscribes. signal: <code>site.standard.graph.subscription</code>.';
+      } else {
+        if (lead) lead.textContent = 'most-subscribed publications';
+        if (tip) tip.innerHTML = 'ranks publications by distinct subscribers via <a href="https://standard.site" target="_blank" rel="noopener"><code>site.standard.graph.subscription</code></a> — a standing follow of a whole publication. open a row to see who subscribes.';
+      }
+    }
+
+    // Keep <title> in sync with the current state so the browser tab tells
+    // you which view you're on (helps when you have a few tabs open).
+    function updateDocTitle() {
+      var entity = currentView === 'people' ? 'most-subscribed people' : 'most-subscribed publications';
+      var win = currentWindow !== 'all' ? ' (' + (WINDOW_PHRASE[currentWindow] || currentWindow) + ')' : '';
+      document.title = entity + win + ' · pub search';
+    }
+
+    function resetAndFetch() {
+      currentOffset = 0;
+      totalRendered = 0;
+      document.getElementById('status').textContent = 'loading…';
+      document.getElementById('list').innerHTML = '';
+      updateDocTitle();
+      fetchPage(0, false);
+    }
+
+    function setWindow(w) {
+      if (currentWindow === w) return;
+      currentWindow = w;
+      var u = new URL(location.href);
+      if (w === 'all') u.searchParams.delete('since');
+      else u.searchParams.set('since', w);
+      history.replaceState(null, '', u);
+      syncWindowPills();
+      resetAndFetch();
+    }
+
+    function setView(v) {
+      if (currentView === v) return;
+      currentView = v;
+      var u = new URL(location.href);
+      if (v === 'publications') u.searchParams.delete('view');
+      else u.searchParams.set('view', v);
+      history.replaceState(null, '', u);
+      syncViewPills();
+      resetAndFetch();
+    }
+
+    document.querySelectorAll('.win-pill').forEach(function(b) {
+      b.addEventListener('click', function() { setWindow(b.dataset.window); });
+    });
+    document.querySelectorAll('.view-pill').forEach(function(b) {
+      b.addEventListener('click', function() { setView(b.dataset.view); });
+    });
+    syncWindowPills();
+    syncViewPills();
+    updateDocTitle();
+
+    fetchPage(0, false);
+
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      if (window.LeafletUI && window.LeafletUI.openSettings) {
+        window.LeafletUI.openSettings();
+      } else {
+        location.href = '/';
+      }
+    });
+  </script>
+</body>
+</html>

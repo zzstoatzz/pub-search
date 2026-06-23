@@ -221,6 +221,7 @@ pub const BuildCounts = struct {
     tags: usize = 0,
     popular: usize = 0,
     recommends: usize = 0,
+    subscriptions: usize = 0,
 };
 
 const BUILD_PAGE_SIZE = 500;
@@ -260,6 +261,17 @@ const BUILD_REC_SQL =
 
 pub const BUILD_REC_COUNT_SQL =
     "SELECT COUNT(*) FROM recommends WHERE COALESCE(indexed_at, '') <= ? " ++
+    "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
+
+// watermark-pinned like recommends. did = subscriber; banned subscribers are
+// excluded the same way (a banned repo's signal never lands in the snapshot).
+const BUILD_SUB_SQL =
+    "SELECT uri, did, rkey, publication_uri, COALESCE(created_at, ''), COALESCE(indexed_at, '') " ++
+    "FROM subscriptions WHERE COALESCE(indexed_at, '') <= ? " ++
+    "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
+
+pub const BUILD_SUB_COUNT_SQL =
+    "SELECT COUNT(*) FROM subscriptions WHERE COALESCE(indexed_at, '') <= ? " ++
     "AND did NOT IN (" ++ policy.banned_dids_sql ++ ")";
 
 /// Offline snapshot build: populate a FRESH local db from turso. The target
@@ -360,6 +372,24 @@ pub fn buildSnapshot(turso: *Client, local: *LocalDb, watermark: []const u8) !Bu
                 .{ row.text(0), row.text(1), row.text(2), row.text(3), row.text(4), row.text(5) },
             ) catch {};
             counts.recommends += 1;
+        }
+        conn.exec("COMMIT", .{}) catch {};
+    }
+
+    {
+        var sub_result = turso.query(BUILD_SUB_SQL, &.{watermark}) catch |err| {
+            logfire.err("build: turso subscriptions query failed: {}", .{err});
+            return err;
+        };
+        defer sub_result.deinit();
+
+        conn.exec("BEGIN", .{}) catch {};
+        for (sub_result.rows) |row| {
+            conn.exec(
+                "INSERT OR REPLACE INTO subscriptions (uri, did, rkey, publication_uri, created_at, indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                .{ row.text(0), row.text(1), row.text(2), row.text(3), row.text(4), row.text(5) },
+            ) catch {};
+            counts.subscriptions += 1;
         }
         conn.exec("COMMIT", .{}) catch {};
     }

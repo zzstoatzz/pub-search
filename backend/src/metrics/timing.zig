@@ -12,6 +12,7 @@ pub const Endpoint = enum {
     recommended,
     recommended_top_authors,
     curators,
+    subscribed,
     dashboard,
     timeline,
     activity,
