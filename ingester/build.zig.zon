@@ -9,8 +9,8 @@
             .hash = "websocket-0.1.8-ZPISdZ1cBADCBRYrCAZ8ueTIEN2T9ns7U7rtDE-IAvkr",
         },
         .zat = .{
-            .url = "https://tangled.org/zat.dev/zat/archive/bb93dc212bec8cc1bd0263714a1acc68ea6c4388.tar.gz",
-            .hash = "zat-0.3.7-5PuC7glgCgCV8hqxGrXTSVFnRNGP3MQAPoDZXg2vGNX0",
+            .url = "https://tangled.org/zat.dev/zat/archive/v0.3.8.tar.gz",
+            .hash = "zat-0.3.8-5PuC7glgCgCVn18R0k6AuXiNok-jjqDRGgaBFj5JsI_N",
         },
         .logfire = .{
             .url = "https://tangled.sh/@zzstoatzz.io/logfire-zig/archive/v0.2.2.tar.gz",
