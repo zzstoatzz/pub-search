@@ -38,6 +38,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 from atproto_core.car import CAR
@@ -49,6 +50,30 @@ SLINGSHOT = "https://slingshot.microcosm.blue"
 COLLECTION = "site.standard.graph.subscription"
 # field in the record holding the subscribed publication's at-uri
 PUB_FIELD = "publication"
+
+# site.standard.graph.subscription.createdAt is OPTIONAL and ~90% of records
+# in the wild omit it. Without a real timestamp, every backfilled row would
+# fall back to indexed_at (= backfill time) and the /subscribed time filter
+# would collapse to one bucket. The rkey IS a TID (lexicon key: "tid"), which
+# encodes the record's creation time — decode it as the authoritative fallback.
+_TID_ALPHABET = "234567abcdefghijklmnopqrstuvwxyz"
+
+
+def tid_to_iso(rkey: str) -> str | None:
+    """Decode an atproto TID rkey into an ISO-8601 UTC timestamp, or None if
+    it isn't a well-formed TID in a sane range (2001–2033)."""
+    if len(rkey) != 13:
+        return None
+    val = 0
+    for c in rkey[:11]:  # first 11 chars = timestamp (microseconds); last 2 = clock id
+        i = _TID_ALPHABET.find(c)
+        if i < 0:
+            return None
+        val = (val << 5) | i
+    secs = val / 1_000_000
+    if secs < 1_000_000_000 or secs > 2_000_000_000:
+        return None
+    return datetime.fromtimestamp(secs, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 # Union DIDs across multiple relays — lightrail's index lags the Bluesky
 # reference relay for niche collections.
@@ -266,7 +291,10 @@ def fetch_subscriptions_for_did(client: httpx.Client, did: str) -> FetchResult:
         created_at = value.get("createdAt") if isinstance(value, dict) else None
         if not isinstance(pub_uri, str):
             continue  # malformed; skip
-        rows.append((uri, did, rkey, pub_uri, str(created_at) if created_at else ""))
+        # prefer the record's own createdAt; fall back to the rkey TID time
+        # (most subscription records omit createdAt) so windowing has a real date
+        iso = str(created_at) if created_at else (tid_to_iso(rkey) or "")
+        rows.append((uri, did, rkey, pub_uri, iso))
     return FetchResult(did, rows, "ok")
 
 

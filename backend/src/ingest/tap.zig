@@ -487,10 +487,32 @@ fn processSubscription(uri: []const u8, did: []const u8, rkey: []const u8, recor
         logfire.span("tap.dropped", .{ .reason = "subscription_missing_publication", .uri = uri }).end();
         return;
     };
-    const created_at = zat.json.getString(record_val, "createdAt");
+    // createdAt is optional on this lexicon and usually absent. Fall back to
+    // the rkey TID time (the record's true creation time) rather than letting
+    // it default to indexed_at downstream — otherwise /subscribed's time filter
+    // collapses for any record ingested long after it was created (backfill).
+    var tid_buf: [24]u8 = undefined;
+    const created_at: ?[]const u8 = zat.json.getString(record_val, "createdAt") orelse
+        tidToIso(&tid_buf, rkey);
 
     try indexer.insertSubscription(uri, did, rkey, publication_uri, created_at);
     logfire.counter("tap.subscriptions_indexed", 1);
+}
+
+/// Decode an atproto TID rkey into an ISO-8601 UTC timestamp. Returns null if
+/// the rkey isn't a valid TID. Used as the createdAt fallback for records that
+/// omit it (the rkey itself encodes creation time).
+fn tidToIso(buf: []u8, rkey: []const u8) ?[]const u8 {
+    const tid = zat.Tid.parse(rkey) orelse return null;
+    const secs: u64 = tid.timestamp() / std.time.us_per_s;
+    const es = std.time.epoch.EpochSeconds{ .secs = secs };
+    const yd = es.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    const ds = es.getDaySeconds();
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+        yd.year,                  md.month.numeric(), md.day_index + 1,
+        ds.getHoursIntoDay(),     ds.getMinutesIntoHour(), ds.getSecondsIntoMinute(),
+    }) catch null;
 }
 
 // ---------------------------------------------------------------------------

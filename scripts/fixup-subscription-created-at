@@ -1,0 +1,73 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""One-shot: backfill subscriptions.created_at from the rkey TID where it's
+empty. No PDS walk — pure recompute from data already in turso."""
+import os, sys
+from datetime import datetime, timezone
+import httpx
+
+ALPHABET = "234567abcdefghijklmnopqrstuvwxyz"
+
+def tid_to_iso(rkey: str):
+    if len(rkey) != 13:
+        return None
+    val = 0
+    for c in rkey[:11]:
+        i = ALPHABET.find(c)
+        if i < 0:
+            return None
+        val = (val << 5) | i
+    secs = val / 1_000_000
+    if secs < 1_000_000_000 or secs > 2_000_000_000:
+        return None
+    return datetime.fromtimestamp(secs, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+host = os.environ["TURSO_URL"].removeprefix("libsql://")
+token = os.environ["TURSO_TOKEN"]
+
+def pipeline(reqs):
+    r = httpx.post(f"https://{host}/v2/pipeline",
+                   headers={"Authorization": f"Bearer {token}"},
+                   json={"requests": [*reqs, {"type": "close"}]}, timeout=180)
+    r.raise_for_status()
+    return r.json()["results"]
+
+# pull uri+rkey for rows missing created_at
+res = pipeline([{"type": "execute", "stmt": {"sql":
+    "SELECT uri, rkey FROM subscriptions WHERE COALESCE(created_at,'') = ''"}}])
+rows = res[0]["response"]["result"]["rows"]
+print(f"{len(rows)} rows missing created_at")
+
+updates = []
+skipped = 0
+for row in rows:
+    uri, rkey = row[0]["value"], row[1]["value"]
+    iso = tid_to_iso(rkey)
+    if not iso:
+        skipped += 1
+        continue
+    updates.append((uri, iso))
+
+print(f"derived {len(updates)}, skipped {skipped} (non-TID rkeys)")
+
+BATCH = 50
+written = 0
+for i in range(0, len(updates), BATCH):
+    chunk = updates[i:i+BATCH]
+    reqs = [{"type": "execute", "stmt": {
+        "sql": "UPDATE subscriptions SET created_at = ? WHERE uri = ?",
+        "args": [{"type": "text", "value": iso}, {"type": "text", "value": uri}],
+    }} for (uri, iso) in chunk]
+    out = pipeline(reqs)
+    for r in out:
+        if r["type"] == "error":
+            print("err:", r["error"], file=sys.stderr)
+            continue
+        resp = r.get("response") or {}
+        if resp.get("type") == "execute":
+            written += int(resp.get("result", {}).get("affected_row_count", 0))
+
+print(f"updated {written} rows")
