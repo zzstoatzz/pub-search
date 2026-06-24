@@ -842,6 +842,7 @@
         if (!line) return;
         var profileUrl = clients ? clients.profileUrlFor(did) : '#';
         line.innerHTML = '<a href="' + escapeHtml(profileUrl) +
+          '" data-profile-did="' + escapeHtml(did) +
           '" target="_blank" rel="noopener" title="open profile">' +
           '<span class="at">@</span>' + escapeHtml(handle) + '</a>';
         row.dataset.handleApplied = '1';
@@ -1018,6 +1019,7 @@
           var label = p.handle ? '@' + p.handle : shortDid(did);
           var a = document.createElement('a');
           a.className = 'liker-circle';
+          a.setAttribute('data-profile-did', did); // clients.js rewrites href on client change
           a.href = clients ? clients.profileUrlFor(did) : '#';
           a.target = '_blank';
           a.rel = 'noopener';

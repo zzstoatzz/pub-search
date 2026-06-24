@@ -1264,7 +1264,7 @@
         const profileUrl = (window.LeafletClients
           ? window.LeafletClients.profileUrlFor(did)
           : `https://bsky.app/profile/${encodeURIComponent(did)}`);
-        nameSpan.innerHTML = `<a class="lf-author-link" href="${profileUrl}" target="_blank">@${handleEsc}</a> · `;
+        nameSpan.innerHTML = `<a class="lf-author-link" href="${profileUrl}" data-profile-did="${escapeHtml(did)}" target="_blank">@${handleEsc}</a> · `;
         const link = nameSpan.querySelector('.lf-author-link');
         if (link && window.LeafletUI) {
           window.LeafletUI.bindContextMenu(link, () =>

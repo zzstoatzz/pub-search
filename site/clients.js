@@ -43,6 +43,17 @@
     return getPreferredClient().profileUrl(handleOrDid);
   }
 
+  // Profile links bake the preferred-client URL into their href at render time.
+  // Rather than make every page listen for changes (easy to forget on a new
+  // surface), keep them fresh here: any anchor tagged `data-profile-did` gets
+  // its href rewritten app-wide when the preference changes. Render sites just
+  // need the attribute — no per-page wiring.
+  window.addEventListener('leaflet:preferred-client-changed', function() {
+    document.querySelectorAll('a[data-profile-did]').forEach(function(a) {
+      a.href = profileUrlFor(a.getAttribute('data-profile-did'));
+    });
+  });
+
   window.LeafletClients = {
     CLIENTS: CLIENTS,
     getPreferredClient: getPreferredClient,
