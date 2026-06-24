@@ -558,10 +558,11 @@ function buildSubscribedImage(rows, params) {
   const { view, since, handleMap } = params || {};
   const isPeople = view === "people";
   const top = (rows || []).slice(0, 6);
-  const totalSubs = (rows || []).reduce(
-    (s, r) => s + (r.totalCount != null ? r.totalCount : r.subscriberCount || 0),
-    0,
-  );
+  // show the WINDOWED subscriber count — it's what drives the rank, so the
+  // numbers descend in order (mirrors the recommended card's recommendCount).
+  // For all-time it equals totalCount anyway.
+  const subCount = (r) => (r.subscriberCount != null ? r.subscriberCount : r.totalCount || 0);
+  const totalSubs = (rows || []).reduce((s, r) => s + subCount(r), 0);
   const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
   const handles = handleMap || new Map();
   const title = isPeople ? "most-subscribed people" : "most-subscribed publications";
@@ -618,7 +619,7 @@ function buildSubscribedImage(rows, params) {
     const secondary = isPeople
       ? `${r.pubCount || 0} publication${(r.pubCount || 0) === 1 ? "" : "s"}`
       : (r.basePath || r.platform || "");
-    const count = r.totalCount != null ? r.totalCount : r.subscriberCount || 0;
+    const count = subCount(r);
     return {
       type: "div",
       props: {

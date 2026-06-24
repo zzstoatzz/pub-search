@@ -188,6 +188,43 @@ async function handleRecommended(context, url) {
   return rewriteMeta(response, { title, description, ogUrl: url.toString(), ogImageUrl: ogImageUrl.toString() });
 }
 
+// ---------- /subscribed (leaderboard) ----------
+
+function buildSubscribedTitle(params) {
+  const { since, view } = params;
+  const head = view === 'people' ? 'most-subscribed people' : 'most-subscribed publications';
+  const win = since && since !== 'all' ? WINDOW_LABELS[since] || since : null;
+  return `${head}${win ? ' ' + win : ''} · pub search`;
+}
+
+function buildSubscribedDescription(params) {
+  const { since, view } = params;
+  const head = view === 'people'
+    ? 'people with the most subscribers across atproto publishing platforms'
+    : 'most-subscribed publications across atproto publishing platforms';
+  const win = since && since !== 'all' ? WINDOW_LABELS[since] || since : null;
+  return `${head}${win ? ' (' + win + ')' : ''}`;
+}
+
+async function handleSubscribed(context, url) {
+  const since = url.searchParams.get('since');
+  const view = url.searchParams.get('view');
+
+  // bare /subscribed → static OG is fine (and likely already cached upstream).
+  if (!since && !view) return context.next();
+
+  const title = buildSubscribedTitle({ since, view });
+  const description = buildSubscribedDescription({ since, view });
+
+  const ogImageUrl = new URL('/og-image', url.origin);
+  ogImageUrl.searchParams.set('page', 'subscribed');
+  if (view === 'people') ogImageUrl.searchParams.set('view', 'people');
+  if (since && since !== 'all') ogImageUrl.searchParams.set('since', since);
+
+  const response = await context.next();
+  return rewriteMeta(response, { title, description, ogUrl: url.toString(), ogImageUrl: ogImageUrl.toString() });
+}
+
 // ---------- shared rewrite ----------
 
 function rewriteMeta(response, { title, description, ogUrl, ogImageUrl }) {
@@ -234,6 +271,9 @@ export async function onRequest(context) {
   }
   if (path === '/recommended' || path === '/recommended.html' || path === '/recommended/') {
     return handleRecommended(context, url);
+  }
+  if (path === '/subscribed' || path === '/subscribed.html' || path === '/subscribed/') {
+    return handleSubscribed(context, url);
   }
   return context.next();
 }
