@@ -834,9 +834,9 @@
       });
     }
 
-    // Wire the action menu on each row. Two row kinds — posts (default)
-    // and curators (data-kind="curator") — get different menu builders:
-    // post rows act on the doc, curator rows act on the person.
+    // Wire the action menu on each row. Two row kinds — publications (default)
+    // and people (data-kind="person") — get different menu builders:
+    // publication rows act on the publication, person rows act on the person.
     function wireRowActions(scope) {
       if (!window.LeafletUI) return;
       scope.querySelectorAll('.row').forEach(function(row) {
@@ -854,13 +854,9 @@
               var handle = data.did ? handleCache.get(data.did) : null;
               items = window.LeafletUI.curatorMenuItems(handle || '', data.did || '');
             } else {
-              items = window.LeafletUI.rowMenuItems({
-                uri: data.uri || '',
-                basePath: data.basePath || '',
-                handle: '',
-                authorDid: data.did || '',
-                externalUrl: data.extUrl || '',
-              });
+              // publication rows act on the PUBLICATION, not a document — same
+              // menu the row's pub-link uses (atlas-by-pub, open site, copy).
+              items = window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || '');
             }
             var rect = moreBtn.getBoundingClientRect();
             window.LeafletUI.showMenu(items, rect.right - 8, rect.bottom + 4);
