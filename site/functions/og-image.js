@@ -532,6 +532,169 @@ function buildRecommendedImage(rows, params) {
   };
 }
 
+async function fetchSubscribed(view, since) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
+  const params = new URLSearchParams({ limit: "10" });
+  if (view === "people") params.set("view", "people");
+  if (since && since !== "all") params.set("since", since);
+  try {
+    const res = await fetch(`${API_URL}/subscribed?${params.toString()}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await res.json();
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
+// Subscription leaderboard card. Mirrors buildRecommendedImage / buildCuratorsImage
+// (same header tag + windowLabel + 6-row list). Two views:
+//   publications → name + host + subscriber count
+//   people       → @handle + "N publications" + subscriber count (handle-resolved)
+function buildSubscribedImage(rows, params) {
+  const { view, since, handleMap } = params || {};
+  const isPeople = view === "people";
+  const top = (rows || []).slice(0, 6);
+  const totalSubs = (rows || []).reduce(
+    (s, r) => s + (r.totalCount != null ? r.totalCount : r.subscriberCount || 0),
+    0,
+  );
+  const windowLabel = since && WINDOW_LABELS[since] ? WINDOW_LABELS[since] : "all-time";
+  const handles = handleMap || new Map();
+  const title = isPeople ? "most-subscribed people" : "most-subscribed publications";
+
+  const shortDid = (did) => {
+    const parts = String(did || "").split(":");
+    const last = parts[parts.length - 1] || did || "";
+    return last.length > 14 ? last.slice(0, 14) + "…" : last;
+  };
+
+  const headerBlock = {
+    type: "div",
+    props: {
+      style: { display: "flex", flexDirection: "column", gap: "10px" },
+      children: [
+        {
+          type: "div",
+          props: {
+            style: { display: "flex", alignItems: "center", gap: "10px", color: "#888", fontSize: "24px" },
+            children: [
+              "pub search",
+              { type: "span", props: { style: { color: "#444" }, children: "/" } },
+              { type: "span", props: { style: { color: "#555" }, children: "subscribed" } },
+            ],
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: {
+              color: "#fff",
+              fontSize: "44px",
+              letterSpacing: "-0.5px",
+              lineHeight: "1",
+              display: "flex",
+              alignItems: "baseline",
+              gap: "14px",
+              flexWrap: "wrap",
+            },
+            children: [
+              title,
+              { type: "div", props: { style: { color: "#38bdf8", fontSize: "22px" }, children: windowLabel } },
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  const list = top.map((r, i) => {
+    const primary = isPeople
+      ? (handles.get(r.did) ? "@" + handles.get(r.did) : shortDid(r.did))
+      : truncate(r.name || r.basePath || "untitled", 52);
+    const secondary = isPeople
+      ? `${r.pubCount || 0} publication${(r.pubCount || 0) === 1 ? "" : "s"}`
+      : (r.basePath || r.platform || "");
+    const count = r.totalCount != null ? r.totalCount : r.subscriberCount || 0;
+    return {
+      type: "div",
+      props: {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: "20px",
+          padding: "10px 0",
+          borderBottom: "1px solid #1d1d1d",
+        },
+        children: [
+          {
+            type: "div",
+            props: {
+              style: { color: i < 3 ? "#2a9d5c" : "#555", fontSize: "22px", width: "56px", textAlign: "right" },
+              children: `#${i + 1}`,
+            },
+          },
+          {
+            type: "div",
+            props: {
+              style: { display: "flex", flexDirection: "column", flex: "1", minWidth: "0", gap: "4px" },
+              children: [
+                { type: "div", props: { style: { color: "#fff", fontSize: "22px", overflow: "hidden" }, children: primary } },
+                { type: "div", props: { style: { color: "#555", fontSize: "15px" }, children: secondary } },
+              ],
+            },
+          },
+          {
+            type: "div",
+            props: {
+              style: { color: i < 3 ? "#2a9d5c" : "#888", fontSize: "24px", fontVariantNumeric: "tabular-nums" },
+              children: String(count),
+            },
+          },
+        ],
+      },
+    };
+  });
+
+  const listBlock = {
+    type: "div",
+    props: { style: { display: "flex", flexDirection: "column" }, children: list },
+  };
+
+  const footerBlock = totalSubs > 0
+    ? {
+        type: "div",
+        props: {
+          style: { color: "#444", fontSize: "16px" },
+          children: `${totalSubs.toLocaleString()} subscribers across the top ${top.length} · pub-search.waow.tech/subscribed`,
+        },
+      }
+    : null;
+
+  const outerChildren = [headerBlock, listBlock];
+  if (footerBlock) outerChildren.push(footerBlock);
+
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        width: "1200px",
+        height: "630px",
+        background: "#050505",
+        padding: "40px 56px 32px 56px",
+        fontFamily: '"JetBrains Mono", monospace',
+        gap: "16px",
+      },
+      children: outerChildren,
+    },
+  };
+}
+
 async function fetchStats() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
@@ -933,6 +1096,26 @@ export async function onRequest(context) {
       headers: {
         "Cache-Control": "public, max-age=1800",
       },
+    });
+  }
+
+  // subscribed leaderboard page
+  if (page === "subscribed") {
+    const since = url.searchParams.get("since");
+    const view = url.searchParams.get("view");
+    const rows = await fetchSubscribed(view, since);
+    // people view shows @handles — resolve the rows that will render
+    let handleMap = new Map();
+    if (view === "people") {
+      const dids = (rows || []).slice(0, 6).map((r) => r.did).filter(Boolean);
+      handleMap = await resolveHandles(dids);
+    }
+    const html = buildSubscribedImage(rows, { view, since, handleMap });
+    return new ImageResponse(html, {
+      width: 1200,
+      height: 630,
+      fonts: [{ name: "JetBrains Mono", data: await loadGoogleFont("JetBrains Mono"), style: "normal" }],
+      headers: { "Cache-Control": "public, max-age=1800" },
     });
   }
 
