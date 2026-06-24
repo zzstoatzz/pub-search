@@ -998,6 +998,7 @@
           var label = p.handle ? '@' + p.handle : shortDid(did);
           var a = document.createElement('a');
           a.className = 'liker-circle';
+          a.dataset.did = did; // so a preferred-client change can rewrite the href live
           a.href = clients ? clients.profileUrlFor(did) : '#';
           a.target = '_blank';
           a.rel = 'noopener';
@@ -1108,6 +1109,22 @@
     syncWindowPills();
     syncViewPills();
     updateDocTitle();
+
+    // Handle links bake the preferred-client URL at render time. When the user
+    // switches clients in settings, rewrite the already-rendered profile links
+    // live so the choice takes effect without a page refresh (the people-view
+    // @handle links and the subscriber-avatar links in any open popover).
+    window.addEventListener('leaflet:preferred-client-changed', function() {
+      var clients = window.LeafletClients;
+      if (!clients) return;
+      document.querySelectorAll('.row[data-kind="person"][data-did] .handle-line a').forEach(function(a) {
+        var row = a.closest('.row');
+        if (row && row.dataset.did) a.href = clients.profileUrlFor(row.dataset.did);
+      });
+      document.querySelectorAll('a.liker-circle[data-did]').forEach(function(a) {
+        a.href = clients.profileUrlFor(a.dataset.did);
+      });
+    });
 
     fetchPage(0, false);
 
