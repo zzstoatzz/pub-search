@@ -1,5 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
+const db = @import("../db.zig");
+const logfire = @import("logfire");
 
 /// endpoints we track latency for
 pub const Endpoint = enum {
@@ -128,12 +130,98 @@ fn persistLoop() void {
     const io = getIo();
     while (true) {
         io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
+        {
+            mutex.lockUncancelable(io);
+            defer mutex.unlock(io);
+            if (!initialized) continue;
+            persistLocked();
+            persistHourlyLocked();
+        }
+        // durable mirror to turso, OUTSIDE the mutex (network I/O must never be
+        // held under the per-request lock — 2026-06-10 lesson). Self-no-ops if
+        // turso/initialization isn't ready.
+        flushToTurso();
+    }
+}
+
+fn endpointFromName(name: []const u8) ?Endpoint {
+    inline for (@typeInfo(Endpoint).@"enum".fields) |f| {
+        if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
+    }
+    return null;
+}
+
+/// Upsert the current + previous hour's per-endpoint buckets to turso. Cheap
+/// (≤ 2×ENDPOINT_COUNT rows) and off the request path. The previous hour is
+/// included so an hour's final values land after the boundary rolls.
+pub fn flushToTurso() void {
+    const io = getIo();
+    const c = db.getClient() orelse return;
+
+    const Pending = struct { hour: i64, ep: usize, b: HourlyBucket };
+    var pending: [2 * ENDPOINT_COUNT]Pending = undefined;
+    var n: usize = 0;
+    {
         mutex.lockUncancelable(io);
         defer mutex.unlock(io);
-        if (!initialized) continue;
-        persistLocked();
-        persistHourlyLocked();
+        if (!initialized) return;
+        const cur = getCurrentHour();
+        for ([_]i64{ cur, cur - 3600 }) |hr| {
+            const idx = getHourIndex(hr);
+            for (0..ENDPOINT_COUNT) |ep| {
+                const b = hourly[ep][idx];
+                if (b.hour == hr and b.count > 0) {
+                    pending[n] = .{ .hour = hr, .ep = ep, .b = b };
+                    n += 1;
+                }
+            }
+        }
     }
+    // network outside the lock
+    for (pending[0..n]) |p| {
+        const ep_name = @tagName(@as(Endpoint, @enumFromInt(p.ep)));
+        var buf: [384]u8 = undefined;
+        const sql = std.fmt.bufPrint(&buf,
+            "INSERT INTO traffic_hourly (hour, endpoint, count, sum_us, max_us) VALUES ({d}, '{s}', {d}, {d}, {d}) ON CONFLICT(hour, endpoint) DO UPDATE SET count=excluded.count, sum_us=excluded.sum_us, max_us=excluded.max_us",
+            .{ p.hour, ep_name, p.b.count, p.b.sum_us, p.b.max_us },
+        ) catch continue;
+        c.execRuntime(sql, &.{}) catch {};
+    }
+}
+
+/// Load the last HOURS_TO_KEEP hours of per-endpoint buckets from turso into the
+/// ring buffer. Call once at startup (after migrations). Authoritative over the
+/// binary cache, so it survives both restarts and endpoint-enum resets.
+pub fn loadFromTurso() void {
+    const io = getIo();
+    const c = db.getClient() orelse return;
+
+    const cutoff = getCurrentHour() - @as(i64, HOURS_TO_KEEP) * 3600;
+    var sql_buf: [128]u8 = undefined;
+    const sql = std.fmt.bufPrint(&sql_buf, "SELECT hour, endpoint, count, sum_us, max_us FROM traffic_hourly WHERE hour >= {d}", .{cutoff}) catch return;
+    var res = c.queryRuntime(sql, &.{}) catch |err| {
+        logfire.warn("timing: loadFromTurso failed: {s}", .{@errorName(err)});
+        return;
+    };
+    defer res.deinit();
+
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
+    ensureInitialized();
+    var loaded: usize = 0;
+    for (res.rows) |row| {
+        const hour = row.int(0);
+        const ep = endpointFromName(row.text(1)) orelse continue;
+        const idx = getHourIndex(hour);
+        hourly[@intFromEnum(ep)][idx] = .{
+            .hour = hour,
+            .count = @intCast(@max(0, row.int(2))),
+            .sum_us = @intCast(@max(0, row.int(3))),
+            .max_us = @intCast(@max(0, row.int(4))),
+        };
+        loaded += 1;
+    }
+    logfire.info("timing: loaded {d} hourly buckets from turso", .{loaded});
 }
 
 fn getIo() Io {

@@ -335,6 +335,25 @@ pub const migrations = [_]zug.Migration{
         \\CREATE INDEX IF NOT EXISTS idx_subscriptions_did ON subscriptions(did);
         ,
     },
+    .{
+        .id = "018_create_traffic_hourly",
+        .name = "durable per-hour request metrics (was an in-memory ring buffer + brittle binary blob that reset whenever the endpoint enum changed)",
+        // One row per (hour, endpoint). The backend keeps the hot path in memory
+        // and upserts the current/previous hour here every 30s (off the request
+        // path, same pattern as the stats table), then loads it on boot. Durable
+        // across restarts AND endpoint-enum changes, and backfillable with plain
+        // SQL (e.g. from logfire).
+        .sql =
+        \\CREATE TABLE IF NOT EXISTS traffic_hourly (
+        \\  hour INTEGER NOT NULL,
+        \\  endpoint TEXT NOT NULL,
+        \\  count INTEGER NOT NULL DEFAULT 0,
+        \\  sum_us INTEGER NOT NULL DEFAULT 0,
+        \\  max_us INTEGER NOT NULL DEFAULT 0,
+        \\  PRIMARY KEY (hour, endpoint)
+        \\);
+        ,
+    },
 };
 
 // --- tests ---

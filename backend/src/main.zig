@@ -116,6 +116,10 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // run schema migrations first (idempotent, but may be slow if turso is laggy)
     db.initSchema();
 
+    // hydrate the hourly request-metrics ring buffer from turso (durable across
+    // restarts + endpoint-enum resets). Runs after migrations so the table exists.
+    metrics.timing.loadFromTurso();
+
     // init local db (slow - turso already initialized)
     db.initLocalDb(io);
     db.startSync(io);
