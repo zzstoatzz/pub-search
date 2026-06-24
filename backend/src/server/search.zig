@@ -530,10 +530,87 @@ fn isBridgyFed(uri: []const u8) bool {
     return false;
 }
 
-/// Keyword search: FTS5 via local SQLite or Turso fallback.
+// --- Turso keyword-fallback guard ------------------------------------------
+//
+// Keyword search serves from the local replica (~0.2ms). During the brief
+// window where the replica is not ready — process boot, snapshot adoption — it
+// falls back to Turso. That fallback is the failure amplifier: a traffic burst
+// during the unready window stampedes Turso with concurrent full-corpus FTS
+// batches that contend and self-amplify to tens of seconds (the 2026-06-24
+// storm: ~38 concurrent fallbacks, each ~26s; a lone fallback is ~1-2s). Two
+// guards keep a momentary blip from becoming an outage:
+//   1. wait briefly for the replica to become ready (the window is usually
+//      sub-second) so most searches still take the fast local path, then
+//   2. cap concurrent Turso fallbacks, shedding over-cap searches with a fast
+//      empty result instead of piling onto a saturated Turso.
+
+/// Max in-flight Turso keyword fallbacks. Deliberately small: the fallback
+/// exists to cover a brief unready window, not sustained load, and Turso FTS
+/// concurrency is itself what makes each query slow — admitting more is
+/// counterproductive.
+const TURSO_FALLBACK_CAP: u32 = 4;
+
+/// How long an unready search waits for the replica before giving up on the
+/// fast path. The unready window is typically sub-second, so a short wait turns
+/// "stampede Turso" into "hit the local replica a beat later" for most requests.
+const LOCAL_READY_WAIT_MS: u64 = 400;
+const LOCAL_READY_POLL_MS: u64 = 20;
+
+var turso_fallback_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+/// Return the replica once ready, waiting up to LOCAL_READY_WAIT_MS. Null if it
+/// stays unready (or no replica object exists yet). Polls via the LocalDb's own
+/// io so we needn't thread io through the search call chain.
+fn waitForLocalReady() ?*db.LocalDb {
+    if (db.getLocalDb()) |l| return l;
+    const raw = db.getLocalDbRaw() orelse return null; // no replica object yet
+    var waited: u64 = 0;
+    while (waited < LOCAL_READY_WAIT_MS) {
+        raw.io.sleep(std.Io.Duration.fromMilliseconds(LOCAL_READY_POLL_MS), .awake) catch {};
+        if (db.getLocalDb()) |l| return l;
+        waited += LOCAL_READY_POLL_MS;
+    }
+    return null;
+}
+
+/// Non-blocking acquire of a Turso-fallback slot. False when the cap is already
+/// saturated (caller should shed). May briefly over-admit by one under race —
+/// harmless at this cap.
+fn tryAcquireTursoSlot() bool {
+    const prev = turso_fallback_inflight.fetchAdd(1, .acq_rel);
+    if (prev >= TURSO_FALLBACK_CAP) {
+        _ = turso_fallback_inflight.fetchSub(1, .acq_rel);
+        return false;
+    }
+    return true;
+}
+
+fn releaseTursoSlot() void {
+    _ = turso_fallback_inflight.fetchSub(1, .acq_rel);
+}
+
+test "turso fallback cap admits up to N, sheds beyond, and frees on release" {
+    turso_fallback_inflight.store(0, .release);
+    defer turso_fallback_inflight.store(0, .release);
+
+    var i: u32 = 0;
+    while (i < TURSO_FALLBACK_CAP) : (i += 1) {
+        try std.testing.expect(tryAcquireTursoSlot());
+    }
+    // cap reached → shed (and the failed acquire must not leak a slot)
+    try std.testing.expect(!tryAcquireTursoSlot());
+    try std.testing.expectEqual(TURSO_FALLBACK_CAP, turso_fallback_inflight.load(.acquire));
+    // release one → a slot frees up again
+    releaseTursoSlot();
+    try std.testing.expect(tryAcquireTursoSlot());
+}
+
+/// Keyword search: FTS5 via local SQLite, with a bounded Turso fallback.
 fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
-    // try local SQLite first (faster for FTS queries)
-    if (db.getLocalDb()) |local| {
+    // try local SQLite first (faster for FTS queries). If the replica is
+    // briefly not ready (boot / snapshot adoption), wait a short beat for it
+    // rather than immediately stampeding turso.
+    if (waitForLocalReady()) |local| {
         if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter, author_filter)) |result| {
             logfire.info("search.local hit", .{});
             return result;
@@ -543,6 +620,15 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     } else {
         logfire.warn("search.local unavailable (not ready), falling back to turso", .{});
     }
+
+    // Bounded Turso fallback: shed over-cap searches fast so a not-ready window
+    // plus a traffic burst can't stampede Turso into a multi-minute stall.
+    if (!tryAcquireTursoSlot()) {
+        logfire.counter("search.fallback_shed", 1);
+        logfire.warn("search.turso fallback shed: cap {d} saturated", .{TURSO_FALLBACK_CAP});
+        return alloc.dupe(u8, "[]");
+    }
+    defer releaseTursoSlot();
 
     // fall back to Turso
     logfire.info("search.turso fallback", .{});
