@@ -55,25 +55,15 @@ pub const LatencyRange = enum {
     }
 };
 
-/// Percentiles summarize only the last STATS_WINDOW_SECONDS of samples. Without
-/// this, the 1000-slot ring spans weeks at low-traffic endpoints (~2-5 req/hr),
-/// so a single past incident's tens-of-seconds samples haunt p95/p99 forever
-/// even after weeks of healthy sub-second service (observed: keyword p95 stuck
-/// at 21s in the dashboard with zero >2s searches in the prior 4 days). The
-/// hourly charts are unaffected — they bucket separately and load from turso.
-const STATS_WINDOW_SECONDS: i64 = 24 * 3600;
-
 /// per-endpoint latency buffer
 const LatencyBuffer = struct {
     samples: [SAMPLE_COUNT]u32 = .{0} ** SAMPLE_COUNT, // microseconds
-    times: [SAMPLE_COUNT]i64 = .{0} ** SAMPLE_COUNT, // unix seconds, parallel to samples
     count: usize = 0,
     head: usize = 0,
     total_count: u64 = 0,
 
-    fn record(self: *LatencyBuffer, latency_us: u32, now_s: i64) void {
+    fn record(self: *LatencyBuffer, latency_us: u32) void {
         self.samples[self.head] = latency_us;
-        self.times[self.head] = now_s;
         self.head = (self.head + 1) % SAMPLE_COUNT;
         if (self.count < SAMPLE_COUNT) self.count += 1;
         self.total_count += 1;
@@ -270,7 +260,7 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
     ensureInitialized();
 
     const ep_idx = @intFromEnum(endpoint);
-    buffers[ep_idx].record(elapsed_us, @divFloor(now, std.time.us_per_s));
+    buffers[ep_idx].record(elapsed_us);
     hourly[ep_idx][hour_idx].record(current_hour, elapsed_us);
     // memory-only: persistence happens on the background loop (see setIo).
     // NEVER do file/network I/O here — every handler runs through this
@@ -282,19 +272,15 @@ fn loadLocked() void {
     defer _ = std.c.close(fd);
 
     // read entire file at once (small file, ~16KB per endpoint)
-    var file_buf: [ENDPOINT_COUNT * (@sizeOf([SAMPLE_COUNT]u32) + @sizeOf([SAMPLE_COUNT]i64) + @sizeOf(usize) * 2 + @sizeOf(u64))]u8 = undefined;
+    var file_buf: [ENDPOINT_COUNT * (@sizeOf([SAMPLE_COUNT]u32) + @sizeOf(usize) * 2 + @sizeOf(u64))]u8 = undefined;
     const bytes_read = readAll(fd, &file_buf) orelse return;
-    if (bytes_read != file_buf.len) return; // incomplete file (incl. format change → silent one-time reset)
+    if (bytes_read != file_buf.len) return; // incomplete file
 
     var offset: usize = 0;
     for (&buffers) |*buf| {
         const samples_size = @sizeOf([SAMPLE_COUNT]u32);
         buf.samples = std.mem.bytesToValue([SAMPLE_COUNT]u32, file_buf[offset..][0..samples_size]);
         offset += samples_size;
-
-        const times_size = @sizeOf([SAMPLE_COUNT]i64);
-        buf.times = std.mem.bytesToValue([SAMPLE_COUNT]i64, file_buf[offset..][0..times_size]);
-        offset += times_size;
 
         buf.count = std.mem.readInt(usize, file_buf[offset..][0..@sizeOf(usize)], .little);
         offset += @sizeOf(usize);
@@ -314,7 +300,6 @@ fn persistLocked() void {
     // write all buffers
     for (buffers) |buf| {
         writeAll(fd, std.mem.asBytes(&buf.samples));
-        writeAll(fd, std.mem.asBytes(&buf.times));
         writeAll(fd, std.mem.asBytes(&buf.count));
         writeAll(fd, std.mem.asBytes(&buf.head));
         writeAll(fd, std.mem.asBytes(&buf.total_count));
@@ -397,31 +382,18 @@ pub fn getStats(endpoint: Endpoint) EndpointStats {
 
     ensureInitialized();
 
-    const cutoff = @divFloor(microTimestamp(), std.time.us_per_s) - STATS_WINDOW_SECONDS;
-    return statsInWindow(&buffers[@intFromEnum(endpoint)], cutoff);
-}
-
-/// Pure percentile computation over samples at-or-after `cutoff` (unix seconds).
-/// A long-past incident can't dominate the tail at low-traffic endpoints because
-/// its samples fall outside the window. No recent traffic → lifetime count but
-/// zeroed latency figures, rather than stale ones.
-fn statsInWindow(buf: *const LatencyBuffer, cutoff: i64) EndpointStats {
+    const buf = &buffers[@intFromEnum(endpoint)];
     if (buf.count == 0) return .{};
 
+    // copy and sort for percentiles
     var sorted: [SAMPLE_COUNT]u32 = undefined;
-    var count: usize = 0;
-    for (0..buf.count) |i| {
-        if (buf.times[i] >= cutoff) {
-            sorted[count] = buf.samples[i];
-            count += 1;
-        }
-    }
-    if (count == 0) return .{ .count = buf.total_count };
-    std.mem.sort(u32, sorted[0..count], {}, std.sort.asc(u32));
+    @memcpy(sorted[0..buf.count], buf.samples[0..buf.count]);
+    std.mem.sort(u32, sorted[0..buf.count], {}, std.sort.asc(u32));
 
     var sum: u64 = 0;
-    for (sorted[0..count]) |v| sum += v;
+    for (sorted[0..buf.count]) |v| sum += v;
 
+    const count = buf.count;
     return .{
         .count = buf.total_count,
         .avg_ms = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) / 1000.0,
@@ -430,29 +402,6 @@ fn statsInWindow(buf: *const LatencyBuffer, cutoff: i64) EndpointStats {
         .p99_ms = @as(f64, @floatFromInt(sorted[(count * 99) / 100])) / 1000.0,
         .max_ms = @as(f64, @floatFromInt(sorted[count - 1])) / 1000.0,
     };
-}
-
-test "statsInWindow excludes samples older than the cutoff" {
-    var buf = LatencyBuffer{};
-    // one ancient catastrophic sample (26s) at t=0, then 100 recent ~50ms ones.
-    buf.record(26_000_000, 0);
-    var i: usize = 0;
-    while (i < 100) : (i += 1) buf.record(50_000, 1_000_000 + @as(i64, @intCast(i)));
-
-    // cutoff after the ancient sample: the 26s ghost is excluded.
-    const recent = statsInWindow(&buf, 1_000_000);
-    try std.testing.expectEqual(@as(u64, 101), recent.count); // lifetime count unchanged
-    try std.testing.expect(recent.p95_ms < 100.0); // ~50ms recent, not the 26000ms ghost
-    try std.testing.expect(recent.max_ms < 100.0);
-
-    // cutoff before everything: the ghost still dominates the tail.
-    const all = statsInWindow(&buf, 0);
-    try std.testing.expect(all.max_ms > 25_000.0);
-
-    // cutoff past all samples: no recent data, lifetime count but zeroed latency.
-    const empty = statsInWindow(&buf, 9_999_999);
-    try std.testing.expectEqual(@as(u64, 101), empty.count);
-    try std.testing.expectEqual(@as(f64, 0), empty.p95_ms);
 }
 
 /// get stats for all endpoints
