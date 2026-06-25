@@ -205,6 +205,39 @@
 
     .empty { color: var(--text-muted); font-size: 13px; font-style: italic; }
 
+    /* entry-screen explore teaser — ranked participants you can dive into */
+    .explore { margin-top: 2.25rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    @media (max-width: 560px) { .explore { grid-template-columns: 1fr; gap: 1.5rem; } }
+    .explore-col .sec-label {
+      font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 0.6rem; display: block;
+    }
+    .lb { display: flex; flex-direction: column; gap: 2px; }
+    .lb-row {
+      display: flex; align-items: center; gap: 0.55rem; padding: 0.4rem 0.5rem;
+      border-radius: 8px; cursor: pointer; color: var(--text);
+      background: none; border: none; font: inherit; text-align: left; width: 100%;
+    }
+    .lb-row:hover { background: var(--bg-subtle); color: var(--text-bright); }
+    .lb-rank {
+      flex: 0 0 auto; width: 1.4rem; text-align: right; font-size: 12px;
+      color: var(--text-muted); font-variant-numeric: tabular-nums;
+    }
+    .lb-row:nth-child(-n+3) .lb-rank { color: var(--accent); }
+    .lb-av {
+      flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; overflow: hidden;
+      background: var(--bg-hover); display: inline-flex; align-items: center; justify-content: center;
+    }
+    .lb-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .lb-av .ini { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
+    .lb-text { min-width: 0; flex: 1; }
+    .lb-handle { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lb-stat { font-size: 11px; color: var(--text-dim); }
+    .lb-loading { color: var(--text-muted); font-size: 12px; padding: 0.4rem 0.5rem; }
+
+    /* avatar anchors shouldn't look like links */
+    .sea-av, .reco-av { text-decoration: none; color: inherit; }
+
     /* section sub-header inside a card (e.g. "who subscribes") */
     .card-section {
       margin-top: 0.9rem; padding-top: 0.85rem;
@@ -331,6 +364,14 @@
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+    // encode a query value but keep colons readable — DIDs (did:plc:…) are
+    // legal with bare colons in a query string, and the encoded %3A is ugly.
+    function enc(v) { return encodeURIComponent(v).replace(/%3A/g, ':'); }
+    // resolved profile URL for the user's preferred bsky client (localStorage).
+    function profileUrl(didOrHandle) {
+      try { return (window.LeafletClients && didOrHandle) ? window.LeafletClients.profileUrlFor(didOrHandle) : '#'; }
+      catch (e) { return '#'; }
+    }
     function shortDid(d) {
       if (!d) return '';
       var p = d.split(':');
@@ -353,7 +394,7 @@
       var v = String(handle || '').trim().replace(/^@/, '');
       if (!v) return;
       var key = v.indexOf('did:') === 0 ? 'did' : 'handle';
-      history.pushState({}, '', '/wrapped?' + key + '=' + encodeURIComponent(v));
+      history.pushState({}, '', '/wrapped?' + key + '=' + enc(v));
       load();
     }
 
@@ -370,6 +411,12 @@
             '</div>' +
             '<button type="submit">go</button>' +
           '</form>' +
+          '<div class="explore" id="explore">' +
+            '<div class="explore-col"><span class="sec-label">top curators</span>' +
+              '<div class="lb-loading" id="lb-curators">loading…</div></div>' +
+            '<div class="explore-col"><span class="sec-label">most subscribed</span>' +
+              '<div class="lb-loading" id="lb-people">loading…</div></div>' +
+          '</div>' +
         '</div>';
       var form = document.getElementById('entry-form');
       var input = document.getElementById('entry-input');
@@ -382,6 +429,52 @@
         e.preventDefault();
         go(input.value);
       });
+      renderExplore();
+    }
+
+    // entry-screen teaser: two mini-leaderboards of the most active people on
+    // standard.site. each row dives into that person's wrapped — discovery +
+    // a reason to linger instead of a blank input.
+    function renderExplore() {
+      loadLeaderboard('lb-curators', API_BASE + '/curators?limit=6',
+        function(r) { return { did: r.did, stat: (r.totalRecommends || 0) + ' recommends' }; });
+      loadLeaderboard('lb-people', API_BASE + '/subscribed?view=people&limit=6',
+        function(r) { return { did: r.did, stat: (r.totalCount || 0) + ' subscribers' }; });
+    }
+
+    function loadLeaderboard(elId, url, mapRow) {
+      var box = document.getElementById(elId);
+      if (!box) return;
+      fetch(url).then(function(r) { return r.json(); }).then(function(rows) {
+        if (!Array.isArray(rows) || !rows.length) { box.textContent = ''; return; }
+        var items = rows.map(mapRow).filter(function(x) { return x.did; });
+        box.className = 'lb';
+        box.innerHTML = items.map(function(it, i) {
+          return '<button type="button" class="lb-row" data-did="' + esc(it.did) + '">' +
+            '<span class="lb-rank">' + (i + 1) + '</span>' +
+            '<span class="lb-av" data-avatar-did="' + esc(it.did) + '"><span class="ini">·</span></span>' +
+            '<span class="lb-text"><div class="lb-handle">' + esc(shortDid(it.did)) + '</div>' +
+            '<div class="lb-stat">' + esc(it.stat) + '</div></span></button>';
+        }).join('');
+        box.querySelectorAll('.lb-row').forEach(function(el) {
+          el.addEventListener('click', function() { go(el.dataset.did); });
+        });
+        var dids = items.map(function(x) { return x.did; });
+        if (!window.LeafletIdentity) return;
+        window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
+          box.querySelectorAll('.lb-row').forEach(function(row) {
+            var p = profiles.get(row.dataset.did); if (!p) return;
+            if (p.handle) { var h = row.querySelector('.lb-handle'); if (h) h.textContent = '@' + p.handle; }
+            var av = row.querySelector('.lb-av'); if (!av) return;
+            var ini = av.querySelector('.ini'); if (ini && p.handle) ini.textContent = p.handle.charAt(0);
+            if (p.avatar) {
+              var img = new Image(); img.alt = '';
+              img.onload = function() { av.innerHTML = ''; av.appendChild(img); };
+              img.src = p.avatar;
+            }
+          });
+        });
+      }).catch(function() { var b = document.getElementById(elId); if (b) b.textContent = ''; });
     }
 
     // Handle typeahead against nate's community service (typeahead.waow.tech),
@@ -594,7 +687,10 @@
             }
           }
           if (nameEl && p.displayName) nameEl.textContent = p.displayName;
-          if (handleEl && p.handle) handleEl.innerHTML = '<span class="at">@</span>' + esc(p.handle);
+          if (handleEl && p.handle) {
+            handleEl.innerHTML = '<a href="' + esc(profileUrl(primaryDid)) + '" data-profile-did="' + esc(primaryDid) +
+              '" target="_blank" rel="noopener"><span class="at">@</span>' + esc(p.handle) + '</a>';
+          }
         } else if (av) {
           av.classList.remove('loading');
           av.innerHTML = '<span class="ini">?</span>';
@@ -656,8 +752,9 @@
           var extra = dids.length - shown.length;
           var html = '<span class="sec-label">who subscribes</span><div class="sea">' +
             shown.map(function(d) {
-              return '<span class="sea-av" data-avatar-did="' + esc(d) + '" data-ini="?" title="' + esc(shortDid(d)) + '">' +
-                '<span class="ini">?</span></span>';
+              return '<a class="sea-av" href="' + esc(profileUrl(d)) + '" data-profile-did="' + esc(d) +
+                '" data-avatar-did="' + esc(d) + '" data-ini="?" target="_blank" rel="noopener" title="' + esc(shortDid(d)) + '">' +
+                '<span class="ini">?</span></a>';
             }).join('') +
             (extra > 0 ? '<span class="sea-more">+' + extra + ' more</span>' : '') +
             '</div>';
@@ -710,9 +807,11 @@
                 : title;
               var src = esc(d.publicationName || d.basePath || d.platform || '');
               var ini = esc((d.title || d.basePath || '?').charAt(0));
+              var avDid = d.did || '';
               return '<div class="reco">' +
-                '<span class="reco-av" data-avatar-did="' + esc(d.did || '') + '" data-ini="' + ini + '">' +
-                  '<span class="ini">' + ini + '</span></span>' +
+                '<a class="reco-av" href="' + esc(profileUrl(avDid)) + '" data-profile-did="' + esc(avDid) +
+                  '" data-avatar-did="' + esc(avDid) + '" data-ini="' + ini + '" target="_blank" rel="noopener" title="open author profile">' +
+                  '<span class="ini">' + ini + '</span></a>' +
                 '<div class="reco-body"><div class="reco-title">' + titleHtml + '</div>' +
                 (src ? '<div class="reco-meta">' + src + '</div>' : '') + '</div></div>';
             }).join('') + '</div>';
@@ -737,8 +836,42 @@
       });
     }
 
-    // ----- ambient constellation backdrop -------------------------------
+    // ----- ambient flow field -------------------------------------------
+    // A simplex-noise flow field: threads advect along the field and leave
+    // silk trails (a low-alpha fade pass instead of a hard clear). The cursor
+    // is a stone in the stream — threads bend around it, and a click sends a
+    // pulse downstream. Inspired by nate's github.io particles + the Prefect
+    // Labs flow landing; tuned dim + brand-green so it lives behind the cards
+    // without fighting them. Respects prefers-reduced-motion.
     var ambientStarted = false;
+
+    // compact 2d simplex (adapted from the prefect-labs landing)
+    var noise2 = (function () {
+      var grad = [1,1,-1,1,1,-1,-1,-1,1,0,-1,0,0,1,0,-1];
+      var perm = new Uint8Array(512), p = new Uint8Array(256), seed = 1337, i;
+      for (i = 0; i < 256; i++) p[i] = i;
+      for (i = 255; i > 0; i--) {
+        seed = (seed * 16807) % 2147483647;
+        var j = seed % (i + 1), t = p[i]; p[i] = p[j]; p[j] = t;
+      }
+      for (i = 0; i < 512; i++) perm[i] = p[i & 255];
+      var F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+      return function (x, y) {
+        var s = (x + y) * F2, ii = Math.floor(x + s), jj = Math.floor(y + s);
+        var t = (ii + jj) * G2, x0 = x - (ii - t), y0 = y - (jj - t);
+        var i1 = x0 > y0 ? 1 : 0, j1 = 1 - i1;
+        var x1 = x0 - i1 + G2, y1 = y0 - j1 + G2, x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+        var gi = ii & 255, gj = jj & 255, n = 0, g, tt;
+        tt = 0.5 - x0 * x0 - y0 * y0;
+        if (tt > 0) { tt *= tt; g = (perm[gi + perm[gj]] & 7) * 2; n += tt * tt * (grad[g] * x0 + grad[g + 1] * y0); }
+        tt = 0.5 - x1 * x1 - y1 * y1;
+        if (tt > 0) { tt *= tt; g = (perm[gi + i1 + perm[gj + j1]] & 7) * 2; n += tt * tt * (grad[g] * x1 + grad[g + 1] * y1); }
+        tt = 0.5 - x2 * x2 - y2 * y2;
+        if (tt > 0) { tt *= tt; g = (perm[gi + 1 + perm[gj + 1]] & 7) * 2; n += tt * tt * (grad[g] * x2 + grad[g + 1] * y2); }
+        return 70 * n;
+      };
+    })();
+
     function startAmbient() {
       if (ambientStarted) return;
       var c = document.getElementById('ambient');
@@ -747,59 +880,77 @@
       var ctx = c.getContext('2d');
       var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
       var dpr = Math.min(2, window.devicePixelRatio || 1);
-      var W = 0, H = 0, dots = [];
-      function accent() {
-        return (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#2a9d5c').trim();
+      var W = 0, H = 0, parts = [];
+
+      // flow params
+      var SCALE = 0.0017;     // noise zoom — smaller = broader sweeps
+      var TDRIFT = 0.00007;   // field evolution over time
+      var SWIRL = 2.1;        // how many turns the field can impose
+      var SPEED = 0.85;       // px/frame advection
+      var FADE = 0.072;       // trail persistence — lower = longer silk
+      var MR = 150, PUSH = 2.6; // cursor radius + push strength
+      var mx = -9999, my = -9999, pulse = 0, px = 0, py = 0;
+
+      var bg = '#050505', accent = '#2a9d5c';
+      function readColors() {
+        var s = getComputedStyle(document.documentElement);
+        bg = (s.getPropertyValue('--bg') || '#050505').trim();
+        accent = (s.getPropertyValue('--accent') || '#2a9d5c').trim();
+      }
+      function seed(p2) {
+        p2.x = Math.random() * W; p2.y = Math.random() * H;
+        p2.px = p2.x; p2.py = p2.y;
+        p2.life = 80 + Math.random() * 240;
+        p2.a = 0.25 + Math.random() * 0.55;
       }
       function resize() {
         W = c.clientWidth; H = c.clientHeight;
         c.width = Math.max(1, W * dpr); c.height = Math.max(1, H * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        var n = Math.max(24, Math.min(70, Math.round((W * H) / 16000)));
-        dots = [];
-        for (var i = 0; i < n; i++) {
-          dots.push({
-            x: Math.random() * W, y: Math.random() * H,
-            r: Math.random() * 1.3 + 0.5,
-            vx: (Math.random() - 0.5) * 0.05, vy: (Math.random() - 0.5) * 0.05,
-            ph: Math.random() * 6.283, sp: 0.4 + Math.random() * 0.7
-          });
-        }
+        ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+        var n = Math.max(110, Math.min(380, Math.round((W * H) / 4600)));
+        parts = []; for (var i = 0; i < n; i++) { var pt = {}; seed(pt); parts.push(pt); }
       }
       function frame(t) {
-        ctx.clearRect(0, 0, W, H);
-        var col = accent();
-        // faint links between nearby dots
-        ctx.globalAlpha = 0.045; ctx.strokeStyle = col; ctx.lineWidth = 0.5;
-        for (var i = 0; i < dots.length; i++) {
-          for (var j = i + 1; j < dots.length; j++) {
-            var a = dots[i], b = dots[j], dx = a.x - b.x, dy = a.y - b.y;
-            if (dx * dx + dy * dy < 8000) {
-              ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-            }
-          }
-        }
-        // twinkling dots
-        ctx.fillStyle = col;
-        for (var k = 0; k < dots.length; k++) {
-          var d = dots[k];
-          if (!reduce) {
-            d.x += d.vx; d.y += d.vy;
-            if (d.x < 0) d.x += W; if (d.x > W) d.x -= W;
-            if (d.y < 0) d.y += H; if (d.y > H) d.y -= H;
-          }
-          var tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 0.001 * d.sp + d.ph));
-          ctx.globalAlpha = 0.12 * tw;
-          ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 6.283); ctx.fill();
-        }
+        // fade pass — paints the bg at low alpha so prior threads dissolve
+        ctx.globalAlpha = FADE; ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
         ctx.globalAlpha = 1;
+        var time = t * TDRIFT;
+        ctx.strokeStyle = accent; ctx.lineWidth = 1.1; ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (var i = 0; i < parts.length; i++) {
+          var p2 = parts[i];
+          var ang = noise2(p2.x * SCALE, p2.y * SCALE + time) * Math.PI * SWIRL;
+          var vx = Math.cos(ang) * SPEED, vy = Math.sin(ang) * SPEED;
+          // cursor as a stone in the stream
+          var dx = p2.x - mx, dy = p2.y - my, d2 = dx * dx + dy * dy;
+          if (d2 < MR * MR) {
+            var d = Math.sqrt(d2) || 1, f = (1 - d / MR) * PUSH * (1 + pulse * 3);
+            vx += dx / d * f; vy += dy / d * f;
+          }
+          p2.px = p2.x; p2.py = p2.y;
+          p2.x += vx; p2.y += vy; p2.life--;
+          if (p2.x < -20 || p2.x > W + 20 || p2.y < -20 || p2.y > H + 20 || p2.life < 0) { seed(p2); continue; }
+          ctx.globalAlpha = p2.a;
+          ctx.moveTo(p2.px, p2.py); ctx.lineTo(p2.x, p2.y);
+        }
+        ctx.stroke(); ctx.globalAlpha = 1;
+        if (pulse > 0) pulse = Math.max(0, pulse - 0.04);
         if (!reduce) requestAnimationFrame(frame);
       }
-      resize();
-      window.addEventListener('resize', function() {
-        clearTimeout(c._rt); c._rt = setTimeout(resize, 150);
-      });
-      requestAnimationFrame(frame);
+
+      readColors(); resize();
+      window.addEventListener('resize', function () { clearTimeout(c._rt); c._rt = setTimeout(function () { readColors(); resize(); }, 150); });
+      window.addEventListener('leaflet:preferred-client-changed', readColors);
+      document.addEventListener('mousemove', function (e) { mx = e.clientX; my = e.clientY; });
+      document.addEventListener('mouseleave', function () { mx = -9999; my = -9999; });
+      document.addEventListener('mousedown', function (e) { mx = e.clientX; my = e.clientY; pulse = 1; });
+      // pick up theme-toggle palette changes
+      var tg = document.getElementById('theme-toggle');
+      if (tg) tg.addEventListener('click', function () { setTimeout(readColors, 0); });
+
+      if (reduce) { for (var k = 0; k < 90; k++) frame(k * 16); }
+      else requestAnimationFrame(frame);
     }
 
     // ----- load ---------------------------------------------------------
