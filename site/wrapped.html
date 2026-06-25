@@ -117,7 +117,10 @@
     .entry form { display: flex; gap: 0.5rem; }
     .entry .ta-wrap { position: relative; flex: 1; min-width: 0; }
     .entry input {
-      width: 100%; min-width: 0; font: inherit; padding: 0.7rem 0.8rem;
+      /* 16px (not the inherited 14px) so iOS Safari doesn't zoom on focus.
+         the `font` shorthand would reset this, so set family + size explicitly. */
+      width: 100%; min-width: 0; font-family: inherit; font-size: 16px;
+      padding: 0.7rem 0.8rem;
       background: var(--bg-subtle); border: 1px solid var(--border);
       border-radius: 8px; color: var(--text-bright);
     }
