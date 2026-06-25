@@ -48,6 +48,9 @@ const Publisher = struct {
     totalOwners: i64,
     /// their single most-subscribed publication (null when none).
     topPublication: ?TopPub,
+    /// host (base_path) of every publication they own — lets the frontend
+    /// light up their footprint in the atlas backdrop.
+    publications: []const []const u8,
 };
 
 const Curator = struct {
@@ -158,6 +161,20 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
         if (rows.err()) |e| return e;
     }
 
+    var pub_hosts: std.ArrayList([]const u8) = .empty;
+    if (pub_count > 0) {
+        var rows = try local.query(
+            \\SELECT DISTINCT base_path FROM publications
+            \\WHERE did = ? AND base_path IS NOT NULL AND base_path <> ''
+            \\ORDER BY base_path LIMIT 32
+        , .{did});
+        defer rows.deinit();
+        while (rows.next()) |row| {
+            try pub_hosts.append(alloc, try alloc.dupe(u8, row.text(0)));
+        }
+        if (rows.err()) |e| return e;
+    }
+
     // ---- curator lens ---------------------------------------------------
     var total_recommends: i64 = 0;
     var unique_docs: i64 = 0;
@@ -256,6 +273,7 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
             .rank = owner_rank,
             .totalOwners = total_owners,
             .topPublication = top_pub,
+            .publications = pub_hosts.items,
         },
         .curator = .{
             .totalRecommends = total_recommends,
