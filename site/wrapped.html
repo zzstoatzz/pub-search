@@ -148,6 +148,13 @@
     .who-name { font-size: 17px; color: var(--text-bright); font-weight: 600; line-height: 1.2; word-break: break-word; }
     .who-handle { color: var(--text-secondary); }
     .who-handle .at { color: var(--text-dim); }
+    /* semantic neighborhood membership (from atlas clusters) */
+    .who-hoods { margin-top: 0.3rem; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+    .who-hoods .verb { color: var(--text-dim); }
+    .who-hoods .hood { color: var(--accent); }
+    .who-hoods .hood.huge { color: var(--text-bright); }
+    .who-hoods .hood-sz { color: var(--text-muted); }
+    .who-hoods .hood-sep { margin: 0 0.35rem; opacity: 0.5; }
     .who-tag { color: var(--text-dim); font-size: 12px; margin-top: 0.15rem; }
 
     @keyframes shimmer {
@@ -157,9 +164,17 @@
 
     /* ---- lens cards ----------------------------------------------------- */
     .cards { display: flex; flex-direction: column; gap: 0.85rem; }
+    /* liquid glass — translucent + blurred so the centered atlas shows through */
     .card {
-      border: 1px solid var(--border); border-radius: 12px;
-      background: var(--bg-subtle); padding: 1.1rem 1.15rem;
+      border: 1px solid var(--border-focus);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--bg-subtle) 58%, transparent);
+      backdrop-filter: blur(16px) saturate(150%);
+      -webkit-backdrop-filter: blur(16px) saturate(150%);
+      box-shadow:
+        inset 0 1px 0 0 color-mix(in srgb, var(--text-bright) 8%, transparent),
+        0 12px 34px -14px rgba(0, 0, 0, 0.7);
+      padding: 1.1rem 1.15rem;
       opacity: 0; transform: translateY(8px);
       animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     }
@@ -724,6 +739,9 @@
       if (pub.topPublication && pub.topPublication.basePath) hosts.add(pub.topPublication.basePath.toLowerCase());
       ((data.reader || {}).following || []).forEach(function(f) { if (f.basePath) hosts.add(f.basePath.toLowerCase()); });
       AMBIENT_MY_HOSTS = hosts.size ? hosts : null;
+
+      lastWrappedData = data;
+      applyHoods(); // semantic-neighborhood line (needs atlas-mini; re-applied when it loads)
       root.innerHTML =
         '<div class="who">' +
           '<div class="who-avatar loading" id="who-avatar"></div>' +
@@ -732,6 +750,7 @@
             '<div class="who-handle" id="who-handle">' +
               (handleGuess ? '<span class="at">@</span>' + esc(handleGuess) : esc(shortDid(did))) +
             '</div>' +
+            '<div class="who-hoods" id="who-hoods"></div>' +
           '</div>' +
         '</div>' +
         '<div class="cards">' +
@@ -863,8 +882,47 @@
     function fetchAmbientData() {
       fetch('atlas-mini.json')
         .then(function (r) { return r.json(); })
-        .then(function (g) { if (g && Array.isArray(g.pts) && g.pts.length) ambientGalaxy = g; })
+        .then(function (g) { if (g && Array.isArray(g.pts) && g.pts.length) { ambientGalaxy = g; applyHoods(); } })
         .catch(function () {});
+    }
+
+    var lastWrappedData = null;
+
+    // Which named atlas neighborhoods this person lives in. We map their pub
+    // hosts → dominant coarse cluster (precomputed over the full atlas), then
+    // surface the labels + sizes ("a huge neighborhood" = high doc count).
+    function applyHoods() {
+      var box = document.getElementById('who-hoods');
+      var data = lastWrappedData, g = ambientGalaxy;
+      if (!box || !data || !g || !g.hostCluster || !g.coarse) return;
+      var labels = {};
+      g.coarse.forEach(function (c) { labels[c[0]] = { label: c[1], size: c[2] }; });
+      var pub = data.publisher || {};
+      var hosts = (pub.publications || []).slice();
+      if (pub.topPublication && pub.topPublication.basePath) hosts.push(pub.topPublication.basePath);
+      var fromReading = false;
+      if (!hosts.length) {
+        fromReading = true;
+        ((data.reader || {}).following || []).forEach(function (f) { if (f.basePath) hosts.push(f.basePath); });
+      }
+      var tally = {};
+      hosts.forEach(function (h) {
+        var cid = g.hostCluster[String(h).toLowerCase()];
+        if (cid == null) return;
+        tally[cid] = (tally[cid] || 0) + 1;
+      });
+      var arr = Object.keys(tally).map(function (cid) {
+        var L = labels[cid] || { label: '?', size: 0 };
+        return { label: L.label, size: L.size, mine: tally[cid] };
+      }).sort(function (a, b) { return b.mine - a.mine || b.size - a.size; }).slice(0, 3);
+      if (!arr.length) { box.innerHTML = ''; return; }
+      var bigMedian = 600; // a coarse "this is a large neighborhood" threshold
+      box.innerHTML = '<span class="verb">' + (fromReading ? 'reads in ' : 'lives in ') + '</span>' +
+        arr.map(function (h) {
+          var huge = h.size >= bigMedian ? ' huge' : '';
+          return '<span class="hood' + huge + '" title="' + h.size + ' documents in this neighborhood">' +
+            esc(h.label) + '</span> <span class="hood-sz">(' + h.size.toLocaleString() + ')</span>';
+        }).join('<span class="hood-sep">·</span>');
     }
 
     function startAmbient() {
@@ -890,9 +948,12 @@
         if (!ambientGalaxy) return;
         var b = ambientGalaxy.bounds || [0, 0, 1, 1];
         var bw = (b[2] - b[0]) || 1, bh = (b[3] - b[1]) || 1;
-        var scale = Math.max(W / bw, H / bh) * 1.04; // cover + slight bleed
-        var ox = W / 2 - ((b[0] + b[2]) / 2) * scale;
-        var oy = H / 2 - ((b[1] + b[3]) / 2) * scale;
+        var scale = Math.max(W / bw, H / bh) * 1.18; // cover + bleed
+        // center on the mass centroid so the dense core sits mid-screen (behind
+        // the glass cards), not the bounding-box center.
+        var ctr = ambientGalaxy.center || [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+        var ox = W / 2 - ctr[0] * scale;
+        var oy = H / 2 - ctr[1] * scale;
         var pts = ambientGalaxy.pts;
         for (var i = 0; i < pts.length; i++) {
           var p = pts[i];
@@ -917,7 +978,7 @@
         // slow autonomous sway only — no mouse gimmick
         var parX = Math.sin(t * 0.00016) * 8, parY = Math.cos(t * 0.00013) * 6;
         var mine = AMBIENT_MY_HOSTS;           // a person is loaded → highlight their footprint
-        var dimRest = mine ? 0.5 : 1;          // when highlighting, push the rest further back
+        var dimRest = mine ? 0.38 : 1;         // when highlighting, push the rest further back
         // first pass: the dim network
         for (var i = 0; i < stars.length; i++) {
           var s = stars[i];
@@ -935,11 +996,13 @@
             var x = s2.x + parX, y = s2.y + parY;
             var pulse2 = 0.6 + 0.4 * Math.sin(t * 0.0022 + s2.ph);
             var col = pal[s2.pi] || pal[5];
-            ctx.globalAlpha = 0.18 * pulse2;
+            ctx.globalAlpha = 0.30 * pulse2;
             ctx.fillStyle = col;
-            ctx.beginPath(); ctx.arc(x, y, (s2.r + 1.4) * 2.6, 0, 6.283); ctx.fill(); // halo
-            ctx.globalAlpha = 0.85;
-            ctx.beginPath(); ctx.arc(x, y, s2.r + 1.2, 0, 6.283); ctx.fill();          // bright core
+            ctx.beginPath(); ctx.arc(x, y, (s2.r + 2.2) * 3.1, 0, 6.283); ctx.fill(); // wide halo
+            ctx.globalAlpha = 0.16 * pulse2;
+            ctx.beginPath(); ctx.arc(x, y, (s2.r + 1.6) * 1.7, 0, 6.283); ctx.fill(); // inner glow
+            ctx.globalAlpha = 0.98;
+            ctx.beginPath(); ctx.arc(x, y, s2.r + 1.7, 0, 6.283); ctx.fill();          // bright core
           }
         }
         ctx.globalAlpha = 1;
