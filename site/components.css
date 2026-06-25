@@ -7,6 +7,21 @@
  * without each having the exact same token set.
  */
 
+/* iOS Safari zooms the viewport when a focused text field has a computed
+ * font-size below 16px. Several pages set inputs to `font: inherit` (14px
+ * monospace), which triggers the zoom-on-focus. Force >=16px on mobile for
+ * every text-like field so no page can regress into the jump. */
+@media (max-width: 640px) {
+  input[type="text"],
+  input[type="search"],
+  input[type="email"],
+  input[type="url"],
+  input:not([type]),
+  textarea {
+    font-size: 16px;
+  }
+}
+
 /* ---------- typeahead popover (desktop) ---------- */
 
 .lf-typeahead-dropdown {

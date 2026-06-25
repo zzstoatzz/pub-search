@@ -56,6 +56,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SLINGSHOT = "https://slingshot.microcosm.blue"
 
+# corpus admission policy — mirror of backend/src/policy.zig + tap.zig
+# isBridgyPds. Every write path (ingester, indexer, snapshot builder) drops
+# these; a backfill must enforce the same gates or it re-admits exactly what we
+# deliberately keep out. Registry of who/why/evidence: docs/exclusions.md.
+BANNED_DIDS = frozenset(
+    {
+        "did:plc:oql6ds5vnff4ugar6rruliwd",  # drivepatents.com patent bot
+        "did:plc:2s32mlusc66sjb256aenynfc",  # destinationcharged.com NHTSA recall mirror
+    }
+)
+
+
+def is_bridgy_pds(pds: str | None) -> bool:
+    """Host-match a PDS endpoint against brid.gy (mirrors backend isBridgyPds)."""
+    if not pds:
+        return False
+    host = pds.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+    return host == "brid.gy" or host.endswith(".brid.gy")
+
+
 # both publication lexicons. leaflet stores the host in `base_path`; standard
 # stores a full `url` we strip to its host (matches backend tap.zig).
 COLLECTIONS = ["pub.leaflet.publication", "site.standard.publication"]
@@ -323,9 +343,15 @@ class FetchResult:
 
 
 def fetch_publications_for_did(client: httpx.Client, did: str) -> FetchResult:
+    # policy gate 1: explicitly banned bulk-archive repos (docs/exclusions.md).
+    if did in BANNED_DIDS:
+        return FetchResult(did, [], "banned")
     pds = resolve_pds(client, did)
     if not pds:
         return FetchResult(did, [], "no-pds")
+    # policy gate 2: bridgy-hosted PDS — same drop as every other write path.
+    if is_bridgy_pds(pds):
+        return FetchResult(did, [], "bridgy")
     try:
         r = client.get(
             f"{pds}/xrpc/com.atproto.sync.getRepo",
