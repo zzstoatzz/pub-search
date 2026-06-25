@@ -188,4 +188,5 @@ test {
     _ = @import("policy.zig");
     _ = @import("promote.zig");
     _ = @import("db/LocalDb.zig");
+    _ = @import("server/pubkey.zig");
 }

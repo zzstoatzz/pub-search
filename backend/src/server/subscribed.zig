@@ -25,6 +25,7 @@ const zql = @import("zql");
 const db = @import("../db.zig");
 const recommended = @import("recommended.zig");
 const cache = @import("cache.zig");
+const pubkey = @import("pubkey.zig");
 
 /// Reuse the Window enum from /recommended so the cache slot shape + URL
 /// semantics (`since=day|week|month|year|all`) match across both pages.
@@ -51,25 +52,27 @@ pub const View = enum {
 // TopQuery, which drives the scan from the small side instead of scanning the
 // whole publications table. Subquery-in-FROM rather than CTE for the same
 // zql comptime-parser reason documented there.
+// Collection-agnostic: a publication dual-written under both lexicons (same
+// did+rkey) is one row in `publications`; subscriptions may point at either
+// at-uri. We join subscriptions → publications by (did, rkey) and GROUP BY
+// p.uri so both collection uris collapse onto the single publication instead of
+// splitting its subscribers across two leaderboard rows. Drives from the small
+// subscriptions table; the (did, rkey) lookup is indexed (UNIQUE constraint).
 const PublicationsQuery = zql.Query(
     \\SELECT p.uri, p.did AS owner_did,
     \\  COALESCE(p.name, '') AS name,
     \\  COALESCE(p.base_path, '') AS base_path,
     \\  COALESCE(p.platform, '') AS platform,
-    \\  agg.subscriber_count AS subscriber_count,
-    \\  agg.total_count AS total_count
-    \\FROM (
-    \\  SELECT publication_uri,
-    \\    COUNT(DISTINCT CASE
-    \\      WHEN DATE(COALESCE(NULLIF(created_at, ''), indexed_at)) >= DATE('now', ?)
-    \\      THEN did END) AS subscriber_count,
-    \\    COUNT(DISTINCT did) AS total_count
-    \\  FROM subscriptions
-    \\  GROUP BY publication_uri
-    \\  HAVING subscriber_count > 0
-    \\) agg
-    \\JOIN publications p ON p.uri = agg.publication_uri
-    \\ORDER BY agg.subscriber_count DESC, p.name
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)) >= DATE('now', ?)
+    \\    THEN s.did END) AS subscriber_count,
+    \\  COUNT(DISTINCT s.did) AS total_count
+    \\FROM subscriptions s
+    \\JOIN publications p ON
+++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+    \\GROUP BY p.uri
+    \\HAVING subscriber_count > 0
+    \\ORDER BY subscriber_count DESC, p.name
     \\LIMIT 250
 );
 
@@ -85,7 +88,8 @@ const PeopleQuery = zql.Query(
     \\  COUNT(DISTINCT s.did) AS total_count,
     \\  COUNT(DISTINCT p.uri) AS pub_count
     \\FROM subscriptions s
-    \\JOIN publications p ON p.uri = s.publication_uri
+    \\JOIN publications p ON
+++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
     \\GROUP BY p.did
     \\HAVING subscriber_count > 0
     \\ORDER BY subscriber_count DESC, total_count DESC

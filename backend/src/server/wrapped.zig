@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const json = std.json;
 
 const db = @import("../db.zig");
+const pubkey = @import("pubkey.zig");
 
 const TopPub = struct {
     uri: []const u8,
@@ -93,7 +94,8 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
         var rows = try local.query(
             \\SELECT COUNT(DISTINCT p.uri), COUNT(DISTINCT s.did)
             \\FROM publications p
-            \\LEFT JOIN subscriptions s ON s.publication_uri = p.uri
+            \\LEFT JOIN subscriptions s ON
+        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
             \\WHERE p.did = ?
         , .{did});
         defer rows.deinit();
@@ -111,7 +113,8 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
             var rows = try local.query(
                 \\SELECT COUNT(*) FROM (
                 \\  SELECT p.did
-                \\  FROM subscriptions s JOIN publications p ON p.uri = s.publication_uri
+                \\  FROM subscriptions s JOIN publications p ON
+            ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
                 \\  GROUP BY p.did
                 \\)
             , .{});
@@ -123,12 +126,14 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
             var rows = try local.query(
                 \\SELECT COUNT(*) + 1 FROM (
                 \\  SELECT p.did AS owner, COUNT(DISTINCT s.did) AS subs
-                \\  FROM subscriptions s JOIN publications p ON p.uri = s.publication_uri
+                \\  FROM subscriptions s JOIN publications p ON
+            ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
                 \\  GROUP BY p.did
                 \\) t
                 \\WHERE t.subs > (
                 \\  SELECT COUNT(DISTINCT s2.did)
-                \\  FROM subscriptions s2 JOIN publications p2 ON p2.uri = s2.publication_uri
+                \\  FROM subscriptions s2 JOIN publications p2 ON
+            ++ " " ++ pubkey.joinOn("p2", "s2.publication_uri") ++ "\n" ++
                 \\  WHERE p2.did = ?
                 \\)
             , .{did});
@@ -143,7 +148,8 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
         var rows = try local.query(
             \\SELECT p.uri, COALESCE(p.name, ''), COALESCE(p.base_path, ''),
             \\  COUNT(DISTINCT s.did) AS subs
-            \\FROM publications p JOIN subscriptions s ON s.publication_uri = p.uri
+            \\FROM publications p JOIN subscriptions s ON
+        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
             \\WHERE p.did = ?
             \\GROUP BY p.uri
             \\ORDER BY subs DESC, p.name
@@ -223,11 +229,14 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
     {
         // join publications so the count matches the `following` list exactly —
         // a subscription to a publication we don't index would otherwise inflate
-        // the count past what we can render.
+        // the count. COUNT(DISTINCT p.uri) (not s.publication_uri) so a reader who
+        // subscribed under BOTH dual-write collection uris still counts the
+        // publication once, matching the GROUP BY p.uri following list below.
         var rows = try local.query(
-            \\SELECT COUNT(DISTINCT s.publication_uri),
+            \\SELECT COUNT(DISTINCT p.uri),
             \\  COALESCE(MIN(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)), '')
-            \\FROM subscriptions s JOIN publications p ON p.uri = s.publication_uri
+            \\FROM subscriptions s JOIN publications p ON
+        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
             \\WHERE s.did = ?
         , .{did});
         defer rows.deinit();
@@ -242,7 +251,8 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
     {
         var rows = try local.query(
             \\SELECT p.uri, p.did, COALESCE(p.name, ''), COALESCE(p.base_path, '')
-            \\FROM subscriptions s JOIN publications p ON p.uri = s.publication_uri
+            \\FROM subscriptions s JOIN publications p ON
+        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
             \\WHERE s.did = ?
             \\GROUP BY p.uri
             \\ORDER BY MAX(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)) DESC

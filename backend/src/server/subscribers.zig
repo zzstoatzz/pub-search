@@ -22,13 +22,18 @@ const zql = @import("zql");
 const logfire = @import("logfire");
 
 const db = @import("../db.zig");
+const pubkey = @import("pubkey.zig");
 
-// One positional param: the publication at-uri.
+// Two positional params: the publication's (did, rkey). Collection-agnostic so
+// subscribers who referenced the OTHER dual-write collection's at-uri are still
+// counted — keeps this drill-down in lockstep with the /subscribed leaderboard,
+// which now also matches by (did, rkey). See pubkey.zig.
 const ByPublicationQuery = zql.Query(
     \\SELECT did,
     \\  MAX(COALESCE(NULLIF(created_at, ''), indexed_at)) AS subscribed_at
     \\FROM subscriptions
-    \\WHERE publication_uri = ?
+    \\WHERE
+++ " " ++ pubkey.didExpr("publication_uri") ++ " = ? AND " ++ pubkey.rkeyExpr("publication_uri") ++ " = ?\n" ++
     \\GROUP BY did
     \\ORDER BY subscribed_at DESC
     \\LIMIT 200
@@ -41,7 +46,8 @@ const ByOwnerQuery = zql.Query(
     \\SELECT s.did AS did,
     \\  MAX(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)) AS subscribed_at
     \\FROM subscriptions s
-    \\JOIN publications p ON p.uri = s.publication_uri
+    \\JOIN publications p ON
+++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
     \\WHERE p.did = ?
     \\GROUP BY s.did
     \\ORDER BY subscribed_at DESC
@@ -97,7 +103,10 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb, scope: Scope) ![]const u8 {
     errdefer output.deinit();
 
     var rows = switch (scope) {
-        .publication => |uri| try local.query(ByPublicationQuery.positional, .{uri}),
+        .publication => |uri| blk: {
+            const k = pubkey.parse(uri) orelse return error.BadPublicationUri;
+            break :blk try local.query(ByPublicationQuery.positional, .{ k.did, k.rkey });
+        },
         .owner => |did| try local.query(ByOwnerQuery.positional, .{did}),
     };
     defer rows.deinit();
@@ -122,8 +131,15 @@ fn fetchTurso(alloc: Allocator, scope: Scope) ![]const u8 {
     errdefer output.deinit();
 
     const key = scopeKey(scope);
+    const pub_parts: ?pubkey.Parsed = switch (scope) {
+        .publication => pubkey.parse(key),
+        .owner => null,
+    };
     var res = switch (scope) {
-        .publication => c.query(ByPublicationQuery.positional, &.{key}),
+        .publication => if (pub_parts) |k|
+            c.query(ByPublicationQuery.positional, &.{ k.did, k.rkey })
+        else
+            c.query(ByPublicationQuery.positional, &.{ "", "" }),
         .owner => c.query(ByOwnerQuery.positional, &.{key}),
     } catch {
         try output.writer.writeAll("{\"error\":\"failed to fetch subscribers\"}");
