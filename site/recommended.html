@@ -225,7 +225,36 @@
     }
     .rank .hash { font-size: 12px; opacity: 0.6; margin-right: 1px; }
 
-    .body { min-width: 0; }
+    .body { min-width: 0; display: flex; align-items: center; gap: 0.6rem; }
+    .body-text { min-width: 0; flex: 1; }
+
+    /* leading avatar — author (post rows) or curator (curator rows). resolved
+       async via typeahead; degrades to an initial-letter circle. */
+    .row-avatar {
+      flex: 0 0 auto;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      overflow: hidden;
+      background: var(--bg-hover);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .row-avatar.loading {
+      background: linear-gradient(90deg, var(--bg-hover) 0%, var(--border) 50%, var(--bg-hover) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+    .row-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .row-avatar .ini {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+    @media (prefers-reduced-motion: reduce) { .row-avatar.loading { animation: none; } }
+
     .title-line {
       color: var(--text-bright);
       font-size: 14px;
@@ -638,6 +667,52 @@
     if (currentAuthor || currentCurator) currentView = 'posts';
     // DID → handle cache for curator rows + the active-filter chip
     var handleCache = new Map();
+    // DID → full profile (handle + avatar), populated by resolveRowProfiles
+    var profileCache = new Map();
+
+    // Leading row avatar. Renders an initial-letter circle immediately (so a
+    // failed/slow resolve degrades gracefully) and is upgraded to the bsky
+    // avatar image once typeahead resolves the DID. `loading` shows a shimmer
+    // when we have no meaningful initial yet (curator rows, pre-resolution).
+    function avatarHtml(did, initial, loading) {
+      var ini = escapeHtml((((initial || '') + '').trim() || '?').charAt(0));
+      var cls = 'row-avatar' + (loading ? ' loading' : '');
+      var attrs = did ? ' data-avatar-did="' + escapeHtml(did) + '"' : '';
+      var inner = loading ? '' : '<span class="ini">' + ini + '</span>';
+      return '<div class="' + cls + '"' + attrs + ' data-avatar-ini="' + ini + '">' + inner + '</div>';
+    }
+
+    function avatarIniFor(el, p) {
+      var ini = el.dataset.avatarIni;
+      if (ini && ini !== '?') return ini;
+      if (p && p.handle) return p.handle.charAt(0);
+      return '?';
+    }
+
+    // Upgrade any resolved leading avatars to their image (or a handle-derived
+    // initial). Idempotent: each circle is stamped once applied.
+    function applyAvatars() {
+      document.querySelectorAll('.row-avatar[data-avatar-did]').forEach(function(el) {
+        if (el.dataset.avatarApplied) return;
+        var p = profileCache.get(el.dataset.avatarDid);
+        if (!p) return; // not resolved yet — stays as initial/shimmer
+        el.dataset.avatarApplied = '1';
+        el.classList.remove('loading');
+        if (p.avatar) {
+          var img = new Image();
+          img.loading = 'lazy';
+          img.alt = '';
+          img.onerror = function() {
+            el.innerHTML = '<span class="ini">' + escapeHtml(avatarIniFor(el, p)) + '</span>';
+          };
+          img.src = p.avatar;
+          el.innerHTML = '';
+          el.appendChild(img);
+        } else {
+          el.innerHTML = '<span class="ini">' + escapeHtml(avatarIniFor(el, p)) + '</span>';
+        }
+      });
+    }
 
     function escapeHtml(s) {
       return String(s == null ? '' : s)
@@ -664,7 +739,7 @@
     }
 
     // Curator row — same .row grid as posts, different body content.
-    // Handle is rendered as a fallback short-DID first; resolveHandles
+    // Handle is rendered as a fallback short-DID first; resolveRowProfiles
     // upgrades to @handle once typeahead returns.
     function curatorRowHtml(c, rank) {
       var podium = rank <= 3 ? ' podium' : '';
@@ -691,11 +766,14 @@
       return '<div class="row' + podium + '" ' + dataAttrs + '>' +
         '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
         '<div class="body">' +
-          '<div class="handle-line">' + handleHtml + '</div>' +
-          '<div class="curator-meta">' +
-            escapeHtml(metaText) +
-            (lastSeen ? ' <span class="dot">·</span> last ' + lastSeen : '') +
-            '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>' +
+          avatarHtml(did, '', true) +
+          '<div class="body-text">' +
+            '<div class="handle-line">' + handleHtml + '</div>' +
+            '<div class="curator-meta">' +
+              escapeHtml(metaText) +
+              (lastSeen ? ' <span class="dot">·</span> last ' + lastSeen : '') +
+              '<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>' +
+            '</div>' +
           '</div>' +
         '</div>' +
         '<div class="score">' +
@@ -766,8 +844,11 @@
       return '<div class="row' + podium + '" ' + dataAttrs + '>' +
         '<div class="rank"><span class="hash">#</span>' + rank + '</div>' +
         '<div class="body">' +
-          '<div class="title-line">' + titleHtml + '</div>' +
-          sourceLine +
+          avatarHtml(doc.did, doc.title, false) +
+          '<div class="body-text">' +
+            '<div class="title-line">' + titleHtml + '</div>' +
+            sourceLine +
+          '</div>' +
         '</div>' +
         scoreHtml +
       '</div>';
@@ -807,23 +888,27 @@
         list.insertAdjacentHTML('beforeend', moreHtml);
       }
 
-      if (currentView === 'curators') resolveHandles(rows);
+      resolveRowProfiles(rows);
       wireRowActions(list);
     }
 
-    // Batch-resolve DID → handle via LeafletIdentity (typeahead.waow.tech),
-    // swap in-place once resolved. Used by the curators view; the posts view
-    // doesn't need this because rows already display titles.
-    function resolveHandles(rows) {
-      var dids = rows.map(function(r) { return r.did; }).filter(function(d) {
-        return d && !handleCache.has(d);
-      });
-      if (dids.length === 0) { applyHandles(); return; }
+    // Batch-resolve row DIDs via LeafletIdentity (typeahead) and light up
+    // leading avatars for both views; curator rows additionally swap their
+    // did-fallback for the @handle. Both views key on r.did (author for posts,
+    // curator for curators), and the profile object carries handle + avatar.
+    function resolveRowProfiles(rows) {
+      var dids = rows.map(function(r) { return r.did; })
+        .filter(function(d) { return d && !profileCache.has(d); });
+      if (dids.length === 0) { applyHandles(); applyAvatars(); return; }
       window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
         profiles.forEach(function(p, key) {
-          if (key.indexOf('did:') === 0 && p.handle) handleCache.set(key, p.handle);
+          if (key.indexOf('did:') === 0) {
+            profileCache.set(key, p);
+            if (p.handle) handleCache.set(key, p.handle);
+          }
         });
         applyHandles();
+        applyAvatars();
       });
     }
 
