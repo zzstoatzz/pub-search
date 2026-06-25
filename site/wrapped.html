@@ -566,9 +566,13 @@
           '<div class="empty">no recommendations yet.</div></div>';
       }
       var since = fmtMonthYear(c.firstAt);
-      var sub = '<div class="card-sub"><span class="hi">' + c.uniqueDocs + '</span> document' +
-        (c.uniqueDocs === 1 ? '' : 's') + ' recommended' +
-        (since ? ' · since ' + esc(since) : '') + '</div>';
+      // only surface uniqueDocs when it actually differs from the headline count
+      // (recommending the same doc twice) — otherwise it just echoes the metric.
+      var bits = [];
+      if (c.uniqueDocs < c.totalRecommends)
+        bits.push('<span class="hi">' + c.uniqueDocs + '</span> distinct document' + (c.uniqueDocs === 1 ? '' : 's'));
+      if (since) bits.push('since ' + esc(since));
+      var sub = bits.length ? '<div class="card-sub">' + bits.join(' · ') + '</div>' : '';
       // placeholder for the actual docs this curator recommended
       var reco = '<div class="card-section" id="cur-reco"><span class="sec-label">recently recommended</span>' +
         '<div class="sec-loading">gathering…</div></div>';
@@ -584,10 +588,10 @@
         return '<div class="card">' + head +
           '<div class="empty">not subscribed to any publications yet.</div></div>';
       }
+      // the metric already reads "N subscriptions" — subscriptionCount IS the
+      // count of publications followed, so the subline only adds the "since".
       var since = fmtMonthYear(r.firstAt);
-      var sub = '<div class="card-sub">following <span class="hi">' + r.subscriptionCount +
-        '</span> publication' + (r.subscriptionCount === 1 ? '' : 's') +
-        (since ? ' · since ' + esc(since) : '') + '</div>';
+      var sub = since ? '<div class="card-sub">since ' + esc(since) + '</div>' : '';
       var strip = '';
       if (r.following && r.following.length) {
         strip = '<div class="follow-strip">' + r.following.map(function(f) {
