@@ -204,10 +204,14 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
     var sub_count: i64 = 0;
     var read_first: []const u8 = "";
     {
+        // join publications so the count matches the `following` list exactly —
+        // a subscription to a publication we don't index would otherwise inflate
+        // the count past what we can render.
         var rows = try local.query(
-            \\SELECT COUNT(DISTINCT publication_uri),
-            \\  COALESCE(MIN(COALESCE(NULLIF(created_at, ''), indexed_at)), '')
-            \\FROM subscriptions WHERE did = ?
+            \\SELECT COUNT(DISTINCT s.publication_uri),
+            \\  COALESCE(MIN(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)), '')
+            \\FROM subscriptions s JOIN publications p ON p.uri = s.publication_uri
+            \\WHERE s.did = ?
         , .{did});
         defer rows.deinit();
         if (rows.next()) |row| {

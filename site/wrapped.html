@@ -521,12 +521,13 @@
         if (p) {
           if (av) {
             av.classList.remove('loading');
+            // initial first; swap to the image only once it actually loads, so
+            // a 404'd avatar keeps the initial instead of flashing/going blank.
+            av.innerHTML = '<span class="ini">' + esc((p.handle || '?').charAt(0)) + '</span>';
             if (p.avatar) {
               var img = new Image(); img.alt = '';
-              img.onerror = function() { av.innerHTML = '<span class="ini">' + esc((p.handle || '?').charAt(0)) + '</span>'; };
-              img.src = p.avatar; av.innerHTML = ''; av.appendChild(img);
-            } else {
-              av.innerHTML = '<span class="ini">' + esc((p.handle || '?').charAt(0)) + '</span>';
+              img.onload = function() { av.innerHTML = ''; av.appendChild(img); };
+              img.src = p.avatar;
             }
           }
           if (nameEl && p.displayName) nameEl.textContent = p.displayName;
@@ -535,14 +536,17 @@
           av.classList.remove('loading');
           av.innerHTML = '<span class="ini">?</span>';
         }
-        // following strip
+        // following strip — only swap the initial for the image once it loads,
+        // so a missing/broken avatar (e.g. a custom-domain PDS blob that 404s)
+        // gracefully keeps the initial-letter circle instead of going blank.
         document.querySelectorAll('.follow-av[data-avatar-did]').forEach(function(el) {
           var fp = profiles.get(el.dataset.avatarDid);
-          if (fp && fp.avatar) {
-            var img = new Image(); img.alt = '';
-            img.onerror = function() {};
-            img.src = fp.avatar; el.innerHTML = ''; el.appendChild(img);
-          }
+          if (!fp || !fp.avatar) return;
+          var img = new Image();
+          img.alt = '';
+          img.onload = function() { el.innerHTML = ''; el.appendChild(img); };
+          img.onerror = function() {}; // keep the initial already in the DOM
+          img.src = fp.avatar;
         });
       });
     }
