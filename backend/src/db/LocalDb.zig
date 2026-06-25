@@ -321,6 +321,10 @@ fn createSchema(self: *LocalDb) !void {
     // index for base_path join (documents → publications via publication_uri)
     c.exec("CREATE INDEX IF NOT EXISTS idx_documents_publication_uri ON documents(publication_uri)", .{}) catch {};
 
+    // index for per-author lookups (/wrapped author lens). without this every
+    // author query full-scans the whole documents table — 13s on /wrapped.
+    c.exec("CREATE INDEX IF NOT EXISTS idx_documents_did ON documents(did)", .{}) catch {};
+
     // sync metadata table
     c.exec(
         \\CREATE TABLE IF NOT EXISTS sync_meta (
