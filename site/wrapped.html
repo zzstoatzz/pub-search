@@ -836,55 +836,25 @@
       });
     }
 
-    // ----- ambient: the network's pulse, made of light --------------------
-    // Not decoration — a reading of real data. The 30-day indexing histogram
-    // (/api/timeline) is mapped left→right (30 days ago → today). Glints drift
-    // in a slow, coherent simplex current; their DENSITY and BRIGHTNESS follow
-    // the actual activity, so busy days surface as brighter, denser bands you
-    // can read at a glance. Soft round glints (no tails), gentle motion, cursor
-    // parts the field, click sends a pulse. Respects prefers-reduced-motion.
+    // ----- ambient: a faint reading of the real atlas --------------------
+    // The backdrop IS our network. atlas-mini.json is a downsampled snapshot of
+    // the /atlas embedding — every dot a real document, at its true galaxy
+    // coordinate, colored by platform. Dim behind the cards, it twinkles and
+    // slowly breathes; the cursor parts the field like a lens and a click
+    // ripples it. Concrete, not abstract. Respects prefers-reduced-motion.
     var ambientStarted = false;
-    var ambientIntensity = null; // normalized [0..1] per day, oldest → newest
+    var ambientGalaxy = null; // { pts:[[x,y,platformIdx]], bounds:[x0,y0,x1,y1] }
+
+    // platform palette mirrors site/atlas.js (core colors), dark + light
+    var GALAXY_DARK  = ['#4ade80', '#60a5fa', '#fbbf24', '#fb7185', '#2dd4bf', '#9ca3af'];
+    var GALAXY_LIGHT = ['#16a34a', '#2563eb', '#d97706', '#e11d48', '#0d9488', '#4b5563'];
 
     function fetchAmbientData() {
-      fetch(API_BASE + '/api/timeline')
+      fetch('atlas-mini.json')
         .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (!d || !Array.isArray(d.points) || !d.points.length) return;
-          // points come newest→oldest; reverse so index 0 = oldest (left edge)
-          var counts = d.points.map(function (p) { return p.count || 0; }).reverse();
-          var max = Math.max.apply(null, counts) || 1;
-          ambientIntensity = counts.map(function (c) { return 0.16 + 0.84 * (c / max); });
-        })
+        .then(function (g) { if (g && Array.isArray(g.pts) && g.pts.length) ambientGalaxy = g; })
         .catch(function () {});
     }
-
-    // compact 2d simplex (adapted from the prefect-labs landing)
-    var noise2 = (function () {
-      var grad = [1,1,-1,1,1,-1,-1,-1,1,0,-1,0,0,1,0,-1];
-      var perm = new Uint8Array(512), p = new Uint8Array(256), seed = 1337, i;
-      for (i = 0; i < 256; i++) p[i] = i;
-      for (i = 255; i > 0; i--) {
-        seed = (seed * 16807) % 2147483647;
-        var j = seed % (i + 1), t = p[i]; p[i] = p[j]; p[j] = t;
-      }
-      for (i = 0; i < 512; i++) perm[i] = p[i & 255];
-      var F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
-      return function (x, y) {
-        var s = (x + y) * F2, ii = Math.floor(x + s), jj = Math.floor(y + s);
-        var t = (ii + jj) * G2, x0 = x - (ii - t), y0 = y - (jj - t);
-        var i1 = x0 > y0 ? 1 : 0, j1 = 1 - i1;
-        var x1 = x0 - i1 + G2, y1 = y0 - j1 + G2, x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
-        var gi = ii & 255, gj = jj & 255, n = 0, g, tt;
-        tt = 0.5 - x0 * x0 - y0 * y0;
-        if (tt > 0) { tt *= tt; g = (perm[gi + perm[gj]] & 7) * 2; n += tt * tt * (grad[g] * x0 + grad[g + 1] * y0); }
-        tt = 0.5 - x1 * x1 - y1 * y1;
-        if (tt > 0) { tt *= tt; g = (perm[gi + i1 + perm[gj + j1]] & 7) * 2; n += tt * tt * (grad[g] * x1 + grad[g + 1] * y1); }
-        tt = 0.5 - x2 * x2 - y2 * y2;
-        if (tt > 0) { tt *= tt; g = (perm[gi + 1 + perm[gj + 1]] & 7) * 2; n += tt * tt * (grad[g] * x2 + grad[g + 1] * y2); }
-        return 70 * n;
-      };
-    })();
 
     function startAmbient() {
       if (ambientStarted) return;
@@ -894,80 +864,68 @@
       var ctx = c.getContext('2d');
       var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
       var dpr = Math.min(2, window.devicePixelRatio || 1);
-      var W = 0, H = 0, parts = [];
+      var W = 0, H = 0, stars = [];
+      var mx = -9999, my = -9999, pulse = 0, builtFor = -1;
+      var MR = 150;
 
-      var SCALE = 0.0011;   // noise zoom — broad, coherent current
-      var TDRIFT = 0.00004; // slow field evolution
-      var SWIRL = 1.15;     // gentle turning (low = laminar lanes, not chaos)
-      var SPEED = 0.34;     // calm drift
-      var FADE = 0.055;     // soft motion-glow without long tails
-      var MR = 160, PUSH = 2.4;
-      var mx = -9999, my = -9999, pulse = 0;
-
-      var bg = '#050505', accent = '#2a9d5c';
+      var bg = '#050505', pal = GALAXY_DARK;
       function readColors() {
         var s = getComputedStyle(document.documentElement);
         bg = (s.getPropertyValue('--bg') || '#050505').trim();
-        accent = (s.getPropertyValue('--accent') || '#2a9d5c').trim();
+        pal = document.documentElement.getAttribute('data-theme') === 'light' ? GALAXY_LIGHT : GALAXY_DARK;
       }
-      // activity at a horizontal position (0=oldest day, 1=today)
-      function intensityAt(xf) {
-        var arr = ambientIntensity;
-        if (!arr || !arr.length) return 0.55;
-        var tt = Math.max(0, Math.min(0.9999, xf)) * (arr.length - 1);
-        var i = Math.floor(tt), f = tt - i;
-        return arr[i] + ((arr[Math.min(arr.length - 1, i + 1)] - arr[i]) * f);
-      }
-      // sample an x weighted by activity → denser glints on busy days
-      function sampleXf() {
-        for (var k = 0; k < 6; k++) { var xf = Math.random(); if (Math.random() < intensityAt(xf)) return xf; }
-        return Math.random();
-      }
-      function seed(p2, firstFill) {
-        p2.x = sampleXf() * W;
-        p2.y = Math.random() * H;
-        p2.ph = Math.random() * 6.283;
-        p2.sp = 0.5 + Math.random() * 0.8;
-        p2.life = (firstFill ? Math.random() : 1) * 360 + 140;
+      // project normalized galaxy coords to a cover-fit over the viewport
+      function build() {
+        stars = [];
+        if (!ambientGalaxy) return;
+        var b = ambientGalaxy.bounds || [0, 0, 1, 1];
+        var bw = (b[2] - b[0]) || 1, bh = (b[3] - b[1]) || 1;
+        var scale = Math.max(W / bw, H / bh) * 1.04; // cover + slight bleed
+        var ox = W / 2 - ((b[0] + b[2]) / 2) * scale;
+        var oy = H / 2 - ((b[1] + b[3]) / 2) * scale;
+        var pts = ambientGalaxy.pts;
+        for (var i = 0; i < pts.length; i++) {
+          var p = pts[i];
+          stars.push({
+            x: p[0] * scale + ox, y: p[1] * scale + oy, pi: p[2],
+            ph: Math.random() * 6.283, sp: 0.3 + Math.random() * 0.8,
+            r: 0.9 + Math.random() * 0.9
+          });
+        }
+        builtFor = pts.length;
       }
       function resize() {
         W = c.clientWidth; H = c.clientHeight;
         c.width = Math.max(1, W * dpr); c.height = Math.max(1, H * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-        var n = Math.max(120, Math.min(400, Math.round((W * H) / 5200)));
-        parts = []; for (var i = 0; i < n; i++) { var pt = {}; seed(pt, true); parts.push(pt); }
+        build();
       }
       function frame(t) {
-        // soft fade pass — gentle glow, not a hard clear
-        ctx.globalAlpha = FADE; ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-        ctx.globalAlpha = 1;
-        var time = t * TDRIFT;
-        ctx.fillStyle = accent;
-        for (var i = 0; i < parts.length; i++) {
-          var p2 = parts[i];
-          var ang = noise2(p2.x * SCALE, p2.y * SCALE + time) * Math.PI * SWIRL;
-          var vx = Math.cos(ang) * SPEED;
-          var vy = Math.sin(ang) * SPEED + Math.sin(t * 0.0006 * p2.sp + p2.ph) * 0.07;
-          var dx = p2.x - mx, dy = p2.y - my, d2 = dx * dx + dy * dy;
-          if (d2 < MR * MR) {
-            var d = Math.sqrt(d2) || 1, f = (1 - d / MR) * PUSH * (1 + pulse * 3);
-            vx += dx / d * f; vy += dy / d * f;
+        if (ambientGalaxy && builtFor !== ambientGalaxy.pts.length) build();
+        ctx.clearRect(0, 0, W, H);
+        if (!stars.length) { if (!reduce) requestAnimationFrame(frame); return; }
+        // gentle autonomous sway + cursor parallax (depth)
+        var hasM = mx > -9000;
+        var parX = Math.sin(t * 0.00018) * 9 + (hasM ? (W / 2 - mx) * 0.018 : 0);
+        var parY = Math.cos(t * 0.00015) * 7 + (hasM ? (H / 2 - my) * 0.018 : 0);
+        for (var i = 0; i < stars.length; i++) {
+          var s = stars[i];
+          var x = s.x + parX, y = s.y + parY;
+          // cursor lens — the field parts around the pointer (and on click)
+          if (hasM) {
+            var dx = x - mx, dy = y - my, d2 = dx * dx + dy * dy, R = MR * (1 + pulse);
+            if (d2 < R * R) {
+              var d = Math.sqrt(d2) || 1, push = (1 - d / R) * 26 * (1 + pulse * 2.5);
+              x += dx / d * push; y += dy / d * push;
+            }
           }
-          p2.x += vx; p2.y += vy; p2.life--;
-          if (p2.x < -20 || p2.x > W + 20 || p2.y < -20 || p2.y > H + 20 || p2.life < 0) { seed(p2); continue; }
-          var inten = intensityAt(p2.x / W);
-          var r = 1.1 + inten * 2.2;
-          ctx.globalAlpha = 0.10 + inten * 0.5;
-          ctx.beginPath(); ctx.arc(p2.x, p2.y, r, 0, 6.283); ctx.fill();
-          // halo on the busiest glints — the peaks of activity glow
-          if (inten > 0.62) {
-            ctx.globalAlpha = (0.10 + inten * 0.5) * 0.22;
-            ctx.beginPath(); ctx.arc(p2.x, p2.y, r * 2.8, 0, 6.283); ctx.fill();
-          }
+          var tw = 0.45 + 0.55 * Math.sin(t * 0.001 * s.sp + s.ph);
+          ctx.globalAlpha = 0.18 + 0.42 * tw;
+          ctx.fillStyle = pal[s.pi] || pal[5];
+          ctx.beginPath(); ctx.arc(x, y, s.r, 0, 6.283); ctx.fill();
         }
         ctx.globalAlpha = 1;
-        if (pulse > 0) pulse = Math.max(0, pulse - 0.04);
+        if (pulse > 0) pulse = Math.max(0, pulse - 0.03);
         if (!reduce) requestAnimationFrame(frame);
       }
 
@@ -979,9 +937,8 @@
       document.addEventListener('mousedown', function (e) { mx = e.clientX; my = e.clientY; pulse = 1; });
       var tg = document.getElementById('theme-toggle');
       if (tg) tg.addEventListener('click', function () { setTimeout(readColors, 0); });
-      setInterval(fetchAmbientData, 180000); // keep the pulse live
 
-      if (reduce) { for (var k = 0; k < 120; k++) frame(k * 16); }
+      if (reduce) { var iv = setInterval(function () { if (stars.length) { frame(0); clearInterval(iv); } }, 200); }
       else requestAnimationFrame(frame);
     }
 
