@@ -225,6 +225,30 @@ async function handleSubscribed(context, url) {
   return rewriteMeta(response, { title, description, ogUrl: url.toString(), ogImageUrl: ogImageUrl.toString() });
 }
 
+// ---------- /wrapped (one identity's standing) ----------
+
+async function handleWrapped(context, url) {
+  const did = url.searchParams.get('did');
+  const handle = url.searchParams.get('handle');
+  const actor = did || handle;
+
+  // bare /wrapped → static OG (branded intro card) is fine.
+  if (!actor) return context.next();
+
+  const label = handle ? '@' + handle.replace(/^@/, '') : '@' + shortDid(did);
+  const title = `${label}'s long-form atmosphere · pub search`;
+  const description =
+    `${label}'s standing across standard.site — what they publish, who reads it, and what they recommend`;
+
+  const ogImageUrl = new URL('/og-image', url.origin);
+  ogImageUrl.searchParams.set('page', 'wrapped');
+  if (did) ogImageUrl.searchParams.set('did', did);
+  else if (handle) ogImageUrl.searchParams.set('handle', handle);
+
+  const response = await context.next();
+  return rewriteMeta(response, { title, description, ogUrl: url.toString(), ogImageUrl: ogImageUrl.toString() });
+}
+
 // ---------- shared rewrite ----------
 
 function rewriteMeta(response, { title, description, ogUrl, ogImageUrl }) {
@@ -274,6 +298,9 @@ export async function onRequest(context) {
   }
   if (path === '/subscribed' || path === '/subscribed.html' || path === '/subscribed/') {
     return handleSubscribed(context, url);
+  }
+  if (path === '/wrapped' || path === '/wrapped.html' || path === '/wrapped/') {
+    return handleWrapped(context, url);
   }
   return context.next();
 }

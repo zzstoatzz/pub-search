@@ -307,6 +307,28 @@
   object-fit: cover;
 }
 
+/* external client logos ship as transparent marks in arbitrary colors. instead
+ * of a white tile (looks bad, breaks at the rounded corners), trace each mark
+ * with a thin theme-aware keyline so it clears the WCAG 1.4.11 non-text contrast
+ * bar (3:1) against the surface — light on dark, dark on light. crisp hard-edge
+ * outline (no blur) so fine marks like blacksky's black starburst stay legible
+ * without bleeding into their negative space. */
+.lf-client-btn img,
+.lf-menu-icon {
+  filter: drop-shadow(0.5px 0 0 rgba(255, 255, 255, 0.5))
+    drop-shadow(-0.5px 0 0 rgba(255, 255, 255, 0.5))
+    drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.5))
+    drop-shadow(0 -0.5px 0 rgba(255, 255, 255, 0.5));
+}
+
+[data-theme="light"] .lf-client-btn img,
+[data-theme="light"] .lf-menu-icon {
+  filter: drop-shadow(0.5px 0 0 rgba(0, 0, 0, 0.4))
+    drop-shadow(-0.5px 0 0 rgba(0, 0, 0, 0.4))
+    drop-shadow(0 0.5px 0 rgba(0, 0, 0, 0.4))
+    drop-shadow(0 -0.5px 0 rgba(0, 0, 0, 0.4));
+}
+
 /* ---------- settings gear button ---------- */
 
 /* clean SVG icon, no border. desktop: 16px icon + 6px padding (28pt hit).

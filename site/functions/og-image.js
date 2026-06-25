@@ -1024,6 +1024,243 @@ function buildConstellationImage(docCount) {
   };
 }
 
+// ---------- /wrapped (one identity's long-form atmosphere) ----------
+
+async function fetchWrapped(didOrHandle) {
+  if (!didOrHandle) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
+  const key = didOrHandle.startsWith("did:") ? "did" : "handle";
+  try {
+    const res = await fetch(
+      `${API_URL}/wrapped?${key}=${encodeURIComponent(didOrHandle)}`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
+// full profile (handle + displayName) for the header, via typeahead getProfiles.
+async function resolveProfile(didOrHandle) {
+  if (!didOrHandle) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+  try {
+    const res = await fetch(
+      `${TYPEAHEAD_BASE}/xrpc/app.bsky.actor.getProfiles?actors=${encodeURIComponent(didOrHandle)}`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const d = await res.json();
+    const p = d && Array.isArray(d.profiles) ? d.profiles[0] : null;
+    return p ? { handle: p.handle || null, displayName: p.displayName || null } : null;
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
+function buildWrappedImage(data, profile) {
+  const accent = "#2a9d5c";
+  const pub = (data && data.publisher) || {};
+  const cur = (data && data.curator) || {};
+  const rdr = (data && data.reader) || {};
+
+  const handle = profile && profile.handle ? profile.handle : null;
+  const displayName = profile && profile.displayName ? profile.displayName : null;
+  const headline = displayName || (handle ? "@" + handle : "your") + "";
+  const subhandle = displayName && handle ? "@" + handle : null;
+
+  const rankStr = (rank, total) =>
+    rank ? `#${rank}${total ? " of " + total.toLocaleString() : ""}` : null;
+
+  const lenses = [
+    {
+      label: "as a publisher",
+      value: pub.totalSubscribers || 0,
+      unit: (pub.totalSubscribers === 1 ? "subscriber" : "subscribers"),
+      rank: rankStr(pub.rank, pub.totalOwners),
+    },
+    {
+      label: "as a curator",
+      value: cur.totalRecommends || 0,
+      unit: (cur.totalRecommends === 1 ? "recommend" : "recommends"),
+      rank: rankStr(cur.rank, cur.totalCurators),
+    },
+    {
+      label: "as a reader",
+      value: rdr.subscriptionCount || 0,
+      unit: (rdr.subscriptionCount === 1 ? "subscription" : "subscriptions"),
+      rank: null,
+    },
+  ];
+
+  const lensCard = (l) => ({
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        flex: "1",
+        gap: "8px",
+        padding: "28px 26px",
+        background: "#0d0d0d",
+        border: "1px solid #1d1d1d",
+        borderRadius: "14px",
+      },
+      children: [
+        {
+          type: "div",
+          props: {
+            style: { color: "#888", fontSize: "20px", textTransform: "uppercase", letterSpacing: "1px" },
+            children: l.label,
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: { color: accent, fontSize: "58px", lineHeight: "1", fontVariantNumeric: "tabular-nums" },
+            children: l.value.toLocaleString(),
+          },
+        },
+        {
+          type: "div",
+          props: { style: { color: "#aaa", fontSize: "22px" }, children: l.unit },
+        },
+        {
+          type: "div",
+          props: {
+            style: { color: l.rank ? "#666" : "#0d0d0d", fontSize: "18px", marginTop: "2px" },
+            children: l.rank || "·",
+          },
+        },
+      ],
+    },
+  });
+
+  const headerChildren = [
+    {
+      type: "div",
+      props: {
+        style: { display: "flex", alignItems: "center", gap: "10px", color: "#888", fontSize: "24px" },
+        children: [
+          "pub search",
+          { type: "span", props: { style: { color: "#444" }, children: "/" } },
+          { type: "span", props: { style: { color: "#555" }, children: "wrapped" } },
+        ],
+      },
+    },
+    {
+      type: "div",
+      props: {
+        style: { color: "#fff", fontSize: "48px", lineHeight: "1.05", letterSpacing: "-0.5px" },
+        children: truncate(headline, 30),
+      },
+    },
+  ];
+  if (subhandle) {
+    headerChildren.push({
+      type: "div",
+      props: { style: { color: accent, fontSize: "24px" }, children: truncate(subhandle, 36) },
+    });
+  }
+  headerChildren.push({
+    type: "div",
+    props: { style: { color: "#666", fontSize: "22px", marginTop: "2px" }, children: "their long-form atmosphere" },
+  });
+
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        width: "1200px",
+        height: "630px",
+        background: "#050505",
+        padding: "52px 56px",
+        fontFamily: '"JetBrains Mono", monospace',
+        justifyContent: "space-between",
+      },
+      children: [
+        {
+          type: "div",
+          props: { style: { display: "flex", flexDirection: "column", gap: "8px" }, children: headerChildren },
+        },
+        {
+          type: "div",
+          props: { style: { display: "flex", gap: "20px" }, children: lenses.map(lensCard) },
+        },
+        {
+          type: "div",
+          props: {
+            style: { color: "#444", fontSize: "18px" },
+            children: "what you publish, who reads it, and what you recommend · pub-search.waow.tech/wrapped",
+          },
+        },
+      ],
+    },
+  };
+}
+
+// generic, identity-free card for the bare /wrapped route.
+function buildWrappedIntroImage() {
+  const accent = "#2a9d5c";
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        width: "1200px",
+        height: "630px",
+        background: "#050505",
+        padding: "0 80px",
+        fontFamily: '"JetBrains Mono", monospace',
+        justifyContent: "center",
+        gap: "24px",
+      },
+      children: [
+        {
+          type: "div",
+          props: {
+            style: { display: "flex", alignItems: "center", gap: "10px", color: "#888", fontSize: "26px" },
+            children: [
+              "pub search",
+              { type: "span", props: { style: { color: "#444" }, children: "/" } },
+              { type: "span", props: { style: { color: "#555" }, children: "wrapped" } },
+            ],
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: { color: "#fff", fontSize: "76px", lineHeight: "1.05", letterSpacing: "-1px" },
+            children: "your long-form atmosphere",
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: { color: "#aaa", fontSize: "30px", lineHeight: "1.4", maxWidth: "900px" },
+            children: "what you publish, who reads it, your semantic neighborhoods, and what you recommend.",
+          },
+        },
+        {
+          type: "div",
+          props: { style: { color: accent, fontSize: "24px", marginTop: "8px" }, children: "pub-search.waow.tech/wrapped" },
+        },
+      ],
+    },
+  };
+}
+
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const page = url.searchParams.get("page");
@@ -1050,6 +1287,28 @@ export async function onRequest(context) {
       headers: {
         "Cache-Control": "public, max-age=3600",
       },
+    });
+  }
+
+  // wrapped — one identity's standing (or a generic intro for the bare route)
+  if (page === "wrapped") {
+    const actor = url.searchParams.get("did") || url.searchParams.get("handle");
+    if (!actor) {
+      const html = buildWrappedIntroImage();
+      return new ImageResponse(html, {
+        width: 1200,
+        height: 630,
+        fonts: [{ name: "JetBrains Mono", data: await loadGoogleFont("JetBrains Mono"), style: "normal" }],
+        headers: { "Cache-Control": "public, max-age=3600" },
+      });
+    }
+    const [data, profile] = await Promise.all([fetchWrapped(actor), resolveProfile(actor)]);
+    const html = data ? buildWrappedImage(data, profile) : buildWrappedIntroImage();
+    return new ImageResponse(html, {
+      width: 1200,
+      height: 630,
+      fonts: [{ name: "JetBrains Mono", data: await loadGoogleFont("JetBrains Mono"), style: "normal" }],
+      headers: { "Cache-Control": "public, max-age=1800" },
     });
   }
 
