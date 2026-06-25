@@ -33,6 +33,13 @@ const LEAFLET_RECOMMEND = "pub.leaflet.interactions.recommend";
 // whitewind blog entries
 const WHITEWIND_ENTRY = "com.whtwnd.blog.entry";
 
+// pckt dual-writes each publication under both site.standard.publication (which
+// we index) and this native sidecar at the same rkey. The sidecar's
+// `publication.uri` strongRef points back at the site.standard.publication. We
+// use it to platform-tag pckt blogs on custom domains, whose host lacks
+// `pckt.blog` so base_path detection alone can't recognize them.
+const PCKT_PUBLICATION = "blog.pckt.publication";
+
 fn isDocumentCollection(collection: []const u8) bool {
     return mem.eql(u8, collection, LEAFLET_DOCUMENT) or
         mem.eql(u8, collection, STANDARD_DOCUMENT) or
@@ -383,6 +390,10 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
             processPublication(allocator, uri, did.raw, rec.rkey, inner_record) catch |err| {
                 logfire.err("publication processing error: {}", .{err});
             };
+        } else if (mem.eql(u8, rec.collection, PCKT_PUBLICATION)) {
+            processPcktPublication(inner_record) catch |err| {
+                logfire.err("pckt publication processing error: {}", .{err});
+            };
         } else if (isRecommendCollection(rec.collection)) {
             processRecommend(uri, did.raw, rec.rkey, rec.collection, inner_record) catch |err| {
                 logfire.err("recommend processing error: {}", .{err});
@@ -464,6 +475,19 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 
     try indexer.insertPublication(uri, did, rkey, name, description, base_path);
     logfire.counter("tap.publications_indexed", 1);
+}
+
+/// blog.pckt.publication sidecar: tag the referenced site.standard.publication
+/// (and its already-indexed docs) as platform pckt. New docs are then tagged at
+/// index time via the publication's platform (see indexer base_path lookup).
+fn processPcktPublication(record: json.ObjectMap) !void {
+    const record_val: json.Value = .{ .object = record };
+    const target = zat.json.getString(record_val, "publication.uri") orelse {
+        logfire.span("tap.dropped", .{ .reason = "pckt_pub_missing_ref" }).end();
+        return;
+    };
+    try indexer.markPublicationPckt(target);
+    logfire.counter("tap.pckt_publications_tagged", 1);
 }
 
 fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collection: []const u8, record: json.ObjectMap) !void {
@@ -742,6 +766,16 @@ test "isBridgyPds matches bridgy hosts only" {
     try std.testing.expect(!isBridgyPds("https://notbrid.gy.example.com"));
     try std.testing.expect(!isBridgyPds("https://mybrid.gy.evil/x"));
     try std.testing.expect(!isBridgyPds("https://pds.example.com/brid.gy"));
+}
+
+test "pckt sidecar exposes the referenced publication uri" {
+    const src =
+        \\{"$type":"blog.pckt.publication","publication":{"uri":"at://did:plc:brookie/site.standard.publication/abc","cid":"bafy"}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, src, .{});
+    defer parsed.deinit();
+    const target = zat.json.getString(parsed.value, "publication.uri");
+    try std.testing.expectEqualStrings("at://did:plc:brookie/site.standard.publication/abc", target.?);
 }
 
 /// Last path segment of an AT-URI ("at://did/collection/rkey" → "rkey").

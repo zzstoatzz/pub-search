@@ -27,6 +27,9 @@ const COLLECTIONS = [_][]const u8{
     "site.standard.document",
     "site.standard.publication",
     "site.standard.graph.recommend",
+    // pckt sidecar: marks which site.standard.publication is a pckt blog so the
+    // backend can platform-tag custom-domain pckt docs (their host lacks pckt.blog).
+    "blog.pckt.publication",
     "com.whtwnd.blog.entry",
 };
 

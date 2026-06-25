@@ -110,9 +110,13 @@ pub fn insertDocument(
     // which gets freed by result.deinit()
     var base_path_buf: [256]u8 = undefined;
     var base_path: []const u8 = "";
+    // pckt blogs on custom domains carry no `pckt.blog` in their host, so we
+    // can't recognize them from base_path. The blog.pckt.publication sidecar
+    // stamps platform='pckt' on the publication row; inherit it here.
+    var pub_is_pckt = false;
 
     if (pub_uri.len > 0) {
-        if (c.query("SELECT base_path FROM publications WHERE uri = ?", &.{pub_uri})) |res| {
+        if (c.query("SELECT base_path, platform FROM publications WHERE uri = ?", &.{pub_uri})) |res| {
             var result = res;
             defer result.deinit();
             if (result.first()) |row| {
@@ -121,6 +125,7 @@ pub fn insertDocument(
                     @memcpy(base_path_buf[0..val.len], val);
                     base_path = base_path_buf[0..val.len];
                 }
+                pub_is_pckt = std.mem.eql(u8, row.text(1), "pckt");
             }
         } else |_| {}
     }
@@ -213,7 +218,9 @@ pub fn insertDocument(
     // this handles site.standard.* documents where collection doesn't indicate platform
     var actual_platform = platform;
     if (std.mem.eql(u8, platform, "unknown") or std.mem.eql(u8, platform, "other")) {
-        if (std.mem.indexOf(u8, base_path, "leaflet.pub") != null) {
+        if (pub_is_pckt) {
+            actual_platform = "pckt";
+        } else if (std.mem.indexOf(u8, base_path, "leaflet.pub") != null) {
             actual_platform = "leaflet";
         } else if (std.mem.indexOf(u8, base_path, "pckt.blog") != null) {
             actual_platform = "pckt";
@@ -354,6 +361,27 @@ pub fn insertPublication(
         "INSERT INTO publications_fts (uri, name, description, base_path) VALUES (?, ?, ?, ?)",
         &.{ uri, name, description orelse "", base_path orelse "" },
     ) catch {};
+}
+
+/// Tag a publication (and its already-indexed docs) as platform pckt, from the
+/// blog.pckt.publication sidecar. Bumps indexed_at so the frozen replica syncs.
+/// Idempotent; the `<> 'pckt'` guard keeps replays from churning indexed_at.
+pub fn markPublicationPckt(publication_uri: []const u8) !void {
+    const c = db.getClient() orelse return error.NotInitialized;
+    c.exec(
+        "UPDATE publications SET platform = 'pckt' WHERE uri = ? AND platform <> 'pckt'",
+        &.{publication_uri},
+    ) catch |err| {
+        logfire.warn("indexer: pckt publication tag failed for {s}: {}", .{ publication_uri, err });
+    };
+    c.exec(
+        \\UPDATE documents SET
+        \\  platform = 'pckt',
+        \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
+        \\WHERE publication_uri = ? AND platform <> 'pckt'
+    , &.{publication_uri}) catch |err| {
+        logfire.warn("indexer: pckt document tag failed for {s}: {}", .{ publication_uri, err });
+    };
 }
 
 fn currentTimestamp(io: Io) i64 {
