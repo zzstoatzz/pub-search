@@ -17,15 +17,25 @@ const LocalDb = @This();
 /// them after bumping this.)
 pub const SCHEMA_VERSION: u32 = 3; // v3: subscriptions table (/subscribed + /subscribers served locally)
 
-const READ_POOL_SIZE = 4;
+const READ_POOL_SIZE = 12;
 
 conn: ?zqlite.Conn = null,
 read_conn: ?zqlite.Conn = null, // legacy single read conn (kept as pool[0] alias)
-// READ POOL: WAL supports concurrent readers natively. A single shared read
-// connection serializes ALL reads — a 6s cache-refresh GROUP BY convoyed
-// every search behind it, once per refresh tick (2026-06-10, the last flap).
+// READ POOL: WAL supports concurrent readers natively, but a single SQLite
+// connection processes one statement at a time and a `query()` holds its
+// connection for the whole row iteration. The old scheme handed connections
+// out round-robin (`read_next++ % N`) with no checkout, so under concurrency
+// two requests landed on the SAME connection and the second BLOCKED behind the
+// first's iteration — a trivial PK lookup measured at 10s while a content scan
+// occupied its slot (2026-06-25). Connections are now CHECKED OUT: a query
+// acquires an idle connection, holds it exclusively until `Rows.deinit`, then
+// returns it. A slow query occupies only its own connection; everything else
+// uses the rest in true parallel. Callers blocked when all are busy is honest
+// backpressure, not a silent convoy.
 read_pool: [READ_POOL_SIZE]?zqlite.Conn = .{null} ** READ_POOL_SIZE,
-read_next: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+read_in_use: [READ_POOL_SIZE]bool = .{false} ** READ_POOL_SIZE,
+pool_mutex: Io.Mutex = Io.Mutex.init, // guards read_in_use
+pool_cond: Io.Condition = Io.Condition.init, // signaled when a connection is returned
 allocator: Allocator,
 io: Io,
 is_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -183,8 +193,10 @@ fn openDb(self: *LocalDb, path_env: []const u8, is_retry: bool) !void {
         _ = rc.exec("PRAGMA busy_timeout=1000", .{}) catch {};
         // mmap for fast reads — avoids pread() syscalls, uses OS page cache directly
         _ = rc.exec("PRAGMA mmap_size=268435456", .{}) catch {};
-        // 20MB page cache per conn — keeps FTS5 index pages hot across queries
-        _ = rc.exec("PRAGMA cache_size=-20000", .{}) catch {};
+        // 8MB page cache per conn. Smaller than before because the pool is now
+        // 12 connections (12×8=96MB heap); mmap already serves hot pages from
+        // the shared OS page cache, so the per-conn cache matters less.
+        _ = rc.exec("PRAGMA cache_size=-8000", .{}) catch {};
         slot.* = rc;
     }
     self.read_conn = self.read_pool[0];
@@ -445,6 +457,8 @@ pub const Row = struct {
 /// Iterator for query results
 pub const Rows = struct {
     inner: zqlite.Rows,
+    db: ?*LocalDb = null, // set when the connection must be returned to the pool
+    pool_idx: usize = 0,
 
     pub fn next(self: *Rows) ?Row {
         if (self.inner.next()) |r| {
@@ -455,6 +469,11 @@ pub const Rows = struct {
 
     pub fn deinit(self: *Rows) void {
         self.inner.deinit();
+        // return the checked-out connection to the pool exactly once
+        if (self.db) |d| {
+            d.releaseRead(self.pool_idx);
+            self.db = null;
+        }
     }
 
     pub fn err(self: *Rows) ?anyerror {
@@ -462,20 +481,47 @@ pub const Rows = struct {
     }
 };
 
-/// Execute a SELECT query using the read connection (never blocked by writes)
+/// Check out an idle read connection, blocking until one is free. Returns its
+/// pool index; the caller MUST releaseRead it (Rows.deinit does this).
+fn acquireRead(self: *LocalDb) usize {
+    self.pool_mutex.lockUncancelable(self.io);
+    defer self.pool_mutex.unlock(self.io);
+    while (true) {
+        for (0..READ_POOL_SIZE) |i| {
+            if (self.read_pool[i] != null and !self.read_in_use[i]) {
+                self.read_in_use[i] = true;
+                return i;
+            }
+        }
+        // all busy — wait for a release (releases the mutex while parked)
+        self.pool_cond.waitUncancelable(self.io, &self.pool_mutex);
+    }
+}
+
+fn releaseRead(self: *LocalDb, idx: usize) void {
+    self.pool_mutex.lockUncancelable(self.io);
+    self.read_in_use[idx] = false;
+    self.pool_mutex.unlock(self.io);
+    self.pool_cond.signal(self.io);
+}
+
+/// Execute a SELECT on a checked-out read connection (never blocked by writes,
+/// never sharing a connection with a concurrent reader). The returned Rows owns
+/// the connection until deinit.
 pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
     const span = logfire.span("db.local.query", .{
         .sql = truncateSql(sql),
     });
     defer span.end();
 
-    const idx = self.read_next.fetchAdd(1, .monotonic) % READ_POOL_SIZE;
-    const c = self.read_pool[idx] orelse return error.NotOpen;
+    const idx = self.acquireRead();
+    const c = self.read_pool[idx].?; // acquireRead only returns opened slots
     const rows = c.rows(sql, args) catch |e| {
+        self.releaseRead(idx); // don't leak the slot on prepare/exec failure
         logfire.err("db.local.query failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
     };
-    return .{ .inner = rows };
+    return .{ .inner = rows, .db = self, .pool_idx = idx };
 }
 
 /// Execute a statement (INSERT, UPDATE, DELETE)
@@ -510,6 +556,47 @@ fn truncateSql(sql: []const u8) []const u8 {
     return if (sql.len > max_len) sql[0..max_len] else sql;
 }
 
+
+test "read pool checkout: exclusive acquire, release frees, query returns its slot" {
+    const tio = std.Options.debug_io;
+    const zpath: [*:0]const u8 = "/tmp/leaflet-pool-test.db";
+    _ = std.c.unlink(zpath);
+    {
+        const w = try zqlite.open(zpath, zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+        defer w.close();
+        try w.exec("CREATE TABLE t(x INTEGER)", .{});
+        try w.exec("INSERT INTO t(x) VALUES (1),(2),(3)", .{});
+    }
+
+    var ldb = LocalDb.init(std.testing.allocator, tio);
+    for (&ldb.read_pool) |*slot| slot.* = try zqlite.open(zpath, zqlite.OpenFlags.ReadOnly);
+    defer for (&ldb.read_pool) |*slot| {
+        if (slot.*) |c| c.close();
+        slot.* = null;
+    };
+
+    // acquiring every slot yields DISTINCT indices, each marked in-use
+    var seen = [_]bool{false} ** READ_POOL_SIZE;
+    for (0..READ_POOL_SIZE) |_| {
+        const idx = ldb.acquireRead();
+        try std.testing.expect(!seen[idx]); // never hand the same connection out twice
+        seen[idx] = true;
+        try std.testing.expect(ldb.read_in_use[idx]);
+    }
+    // releasing frees them all
+    for (0..READ_POOL_SIZE) |i| ldb.releaseRead(i);
+    for (ldb.read_in_use) |u| try std.testing.expect(!u);
+
+    // a real query checks a slot out and Rows.deinit returns it
+    {
+        var rows = try ldb.query("SELECT x FROM t ORDER BY x", .{});
+        defer rows.deinit();
+        try std.testing.expectEqual(@as(i64, 1), rows.next().?.int(0));
+    }
+    for (ldb.read_in_use) |u| try std.testing.expect(!u); // no leak
+
+    _ = std.c.unlink(zpath);
+}
 
 test "adoptPending keeps previous snapshot and moves manifest sidecars" {
     const tio = std.Options.debug_io;
