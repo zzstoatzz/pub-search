@@ -188,6 +188,71 @@ rich dashboard data for analytics UI. includes platform counts (no separate `/pl
 }
 ```
 
+### subscribed
+
+```
+GET /subscribed?view=<publications|people>&since=<window>
+```
+
+subscription leaderboards. `view=publications` (default) ranks publications by
+distinct subscribers; `view=people` ranks publication owners. `since` windows the
+ranking: `day`, `week`, `month`, `year`, or `all` (default). Cached per (view, window).
+
+Subscriptions match publications by `(did, rkey)`, not the full at-uri — leaflet
+dual-writes each publication under both `pub.leaflet.publication` and
+`site.standard.publication` at the same rkey, so an exact-uri match would miss the
+half a subscription happens to reference. See `src/server/pubkey.zig`.
+
+**response (`publications`):**
+```json
+[{"type": "publication", "uri": "at://…", "ownerDid": "did:plc:…", "name": "…",
+  "basePath": "lab.leaflet.pub", "platform": "leaflet", "url": "https://lab.leaflet.pub",
+  "subscriberCount": 418, "totalCount": 418}]
+```
+`subscriberCount` is within the window; `totalCount` is all-time. `people` rows are
+`{"type": "person", "did", "subscriberCount", "totalCount", "pubCount"}`.
+
+### subscribers
+
+```
+GET /subscribers?publication=<at-uri>
+GET /subscribers?owner=<did>
+```
+
+the subscriber DIDs behind one publication (or every publication a DID owns).
+Collection-agnostic on the publication side (same `(did, rkey)` match as
+`/subscribed`); capped at 200, newest-subscribed first.
+
+**response:**
+```json
+[{"did": "did:plc:…", "subscribedAt": "2026-05-01T12:00:00"}]
+```
+
+### wrapped
+
+```
+GET /wrapped?did=<did>
+GET /wrapped?handle=<handle>
+```
+
+one identity's standing across the standard.site graph, in three lenses:
+publisher (distinct subscribers + rank among owners), curator (recommends + rank),
+reader (publications subscribed to + a recent slice). Local-replica only, no cache.
+
+**response:**
+```json
+{
+  "did": "did:plc:…",
+  "publisher": {"pubCount": 3, "totalSubscribers": 44, "rank": 39, "totalOwners": 1008,
+    "topPublication": {"uri": "at://…", "name": "…", "basePath": "…", "subscribers": 30},
+    "publications": ["host.example"]},
+  "curator": {"totalRecommends": 53, "uniqueDocs": 53, "rank": 5, "totalCurators": 855,
+    "firstAt": "2026-02-…", "lastAt": "2026-06-…"},
+  "reader": {"subscriptionCount": 11, "firstAt": "2026-01-…",
+    "following": [{"uri": "at://…", "ownerDid": "did:plc:…", "name": "…", "basePath": "…"}]}
+}
+```
+
 ### health
 
 ```
