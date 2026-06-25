@@ -19,19 +19,31 @@ pub const SCHEMA_VERSION: u32 = 3; // v3: subscriptions table (/subscribed + /su
 
 const READ_POOL_SIZE = 12;
 
+// Per-thread checkout state. A thread holds at most one pool connection; nested
+// and sibling queries on the same thread share it, counted by `tl_depth`. The
+// connection is acquired when depth goes 0→1 and returned when it falls 1→0.
+threadlocal var tl_conn_idx: ?usize = null;
+threadlocal var tl_depth: usize = 0;
+
 conn: ?zqlite.Conn = null,
 read_conn: ?zqlite.Conn = null, // legacy single read conn (kept as pool[0] alias)
-// READ POOL: WAL supports concurrent readers natively, but a single SQLite
-// connection processes one statement at a time and a `query()` holds its
-// connection for the whole row iteration. The old scheme handed connections
-// out round-robin (`read_next++ % N`) with no checkout, so under concurrency
-// two requests landed on the SAME connection and the second BLOCKED behind the
-// first's iteration — a trivial PK lookup measured at 10s while a content scan
-// occupied its slot (2026-06-25). Connections are now CHECKED OUT: a query
-// acquires an idle connection, holds it exclusively until `Rows.deinit`, then
-// returns it. A slow query occupies only its own connection; everything else
-// uses the rest in true parallel. Callers blocked when all are busy is honest
-// backpressure, not a silent convoy.
+// READ POOL — one connection per thread, reference-counted.
+//
+// A single SQLite connection runs one *thread's* statements; a query() holds
+// its connection open for the whole row iteration. The old round-robin scheme
+// let two threads share a connection and serialize (a PK lookup measured at 10s
+// behind a content scan, 2026-06-25). A naive per-query checkout fixed that but
+// DEADLOCKED: search holds its result rows open while running per-result
+// is_bridgyfed / content queries, so one request needs two connections at once;
+// 12 such requests each grabbed one and waited forever for a second.
+//
+// The fix removes hold-and-wait entirely: a thread checks out ONE connection on
+// its outermost query() and every nested or sibling query on that thread reuses
+// it (SQLite is happy to run several statements on one connection from one
+// thread). The connection returns to the pool when the thread's last Rows
+// closes. A thread therefore blocks (in acquireRead) only while holding zero
+// connections, so a deadlock cycle cannot form. Distinct threads get distinct
+// connections → true WAL-parallel reads.
 read_pool: [READ_POOL_SIZE]?zqlite.Conn = .{null} ** READ_POOL_SIZE,
 read_in_use: [READ_POOL_SIZE]bool = .{false} ** READ_POOL_SIZE,
 pool_mutex: Io.Mutex = Io.Mutex.init, // guards read_in_use
@@ -457,8 +469,7 @@ pub const Row = struct {
 /// Iterator for query results
 pub const Rows = struct {
     inner: zqlite.Rows,
-    db: ?*LocalDb = null, // set when the connection must be returned to the pool
-    pool_idx: usize = 0,
+    db: ?*LocalDb = null, // non-null => deinit must call endQuery() to balance beginQuery()
 
     pub fn next(self: *Rows) ?Row {
         if (self.inner.next()) |r| {
@@ -469,9 +480,9 @@ pub const Rows = struct {
 
     pub fn deinit(self: *Rows) void {
         self.inner.deinit();
-        // return the checked-out connection to the pool exactly once
+        // balance the beginQuery() that produced this Rows, exactly once
         if (self.db) |d| {
-            d.releaseRead(self.pool_idx);
+            d.endQuery();
             self.db = null;
         }
     }
@@ -481,8 +492,9 @@ pub const Rows = struct {
     }
 };
 
-/// Check out an idle read connection, blocking until one is free. Returns its
-/// pool index; the caller MUST releaseRead it (Rows.deinit does this).
+/// Check out an idle read connection, blocking until one is free. Only ever
+/// called while this thread holds NO connection (tl_depth 0→1), so a blocked
+/// thread holds nothing and no deadlock cycle can form.
 fn acquireRead(self: *LocalDb) usize {
     self.pool_mutex.lockUncancelable(self.io);
     defer self.pool_mutex.unlock(self.io);
@@ -493,8 +505,7 @@ fn acquireRead(self: *LocalDb) usize {
                 return i;
             }
         }
-        // all busy — wait for a release (releases the mutex while parked)
-        self.pool_cond.waitUncancelable(self.io, &self.pool_mutex);
+        self.pool_cond.waitUncancelable(self.io, &self.pool_mutex); // releases mutex while parked
     }
 }
 
@@ -505,23 +516,42 @@ fn releaseRead(self: *LocalDb, idx: usize) void {
     self.pool_cond.signal(self.io);
 }
 
-/// Execute a SELECT on a checked-out read connection (never blocked by writes,
-/// never sharing a connection with a concurrent reader). The returned Rows owns
-/// the connection until deinit.
+/// Begin a query on this thread's connection, acquiring one from the pool if
+/// this is the outermost query. Returns the connection to run on.
+fn beginQuery(self: *LocalDb) zqlite.Conn {
+    if (tl_depth == 0) tl_conn_idx = self.acquireRead();
+    tl_depth += 1;
+    return self.read_pool[tl_conn_idx.?].?;
+}
+
+/// End a query; return this thread's connection to the pool when its last
+/// open Rows closes (depth 1→0).
+fn endQuery(self: *LocalDb) void {
+    tl_depth -= 1;
+    if (tl_depth == 0) {
+        if (tl_conn_idx) |idx| {
+            self.releaseRead(idx);
+            tl_conn_idx = null;
+        }
+    }
+}
+
+/// Execute a SELECT on this thread's pool connection (shared across the thread's
+/// nested/sibling queries, never across threads). The returned Rows holds the
+/// connection until deinit.
 pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
     const span = logfire.span("db.local.query", .{
         .sql = truncateSql(sql),
     });
     defer span.end();
 
-    const idx = self.acquireRead();
-    const c = self.read_pool[idx].?; // acquireRead only returns opened slots
+    const c = self.beginQuery();
     const rows = c.rows(sql, args) catch |e| {
-        self.releaseRead(idx); // don't leak the slot on prepare/exec failure
+        self.endQuery(); // unwind the depth bump; release if it was the outermost
         logfire.err("db.local.query failed: {s} | sql: {s}", .{ @errorName(e), truncateSql(sql) });
         return e;
     };
-    return .{ .inner = rows, .db = self, .pool_idx = idx };
+    return .{ .inner = rows, .db = self };
 }
 
 /// Execute a statement (INSERT, UPDATE, DELETE)
@@ -557,15 +587,23 @@ fn truncateSql(sql: []const u8) []const u8 {
 }
 
 
-test "read pool checkout: exclusive acquire, release frees, query returns its slot" {
-    const tio = std.Options.debug_io;
-    const zpath: [*:0]const u8 = "/tmp/leaflet-pool-test.db";
+test "read pool: concurrent nested queries never deadlock and never leak" {
+    // Real OS threads contending for the pool, each running the NESTED pattern
+    // (outer rows held open while inner queries run) that deadlocked a per-query
+    // checkout. With far more threads than connections, a hold-and-wait design
+    // would wedge here forever; the thread-local reuse must let every thread
+    // finish. (If the design regressed, this test HANGS — that is the signal.)
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const tio = threaded.io();
+
+    const zpath: [*:0]const u8 = "/tmp/leaflet-pool-concurrency.db";
     _ = std.c.unlink(zpath);
     {
         const w = try zqlite.open(zpath, zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
         defer w.close();
         try w.exec("CREATE TABLE t(x INTEGER)", .{});
-        try w.exec("INSERT INTO t(x) VALUES (1),(2),(3)", .{});
+        try w.exec("INSERT INTO t(x) VALUES (1),(2),(3),(4),(5)", .{});
     }
 
     var ldb = LocalDb.init(std.testing.allocator, tio);
@@ -575,25 +613,36 @@ test "read pool checkout: exclusive acquire, release frees, query returns its sl
         slot.* = null;
     };
 
-    // acquiring every slot yields DISTINCT indices, each marked in-use
-    var seen = [_]bool{false} ** READ_POOL_SIZE;
-    for (0..READ_POOL_SIZE) |_| {
-        const idx = ldb.acquireRead();
-        try std.testing.expect(!seen[idx]); // never hand the same connection out twice
-        seen[idx] = true;
-        try std.testing.expect(ldb.read_in_use[idx]);
-    }
-    // releasing frees them all
-    for (0..READ_POOL_SIZE) |i| ldb.releaseRead(i);
-    for (ldb.read_in_use) |u| try std.testing.expect(!u);
+    const Worker = struct {
+        fn run(db_: *LocalDb, ok: *std.atomic.Value(u32)) void {
+            var iter: usize = 0;
+            while (iter < 25) : (iter += 1) {
+                var outer = db_.query("SELECT x FROM t ORDER BY x", .{}) catch return;
+                defer outer.deinit();
+                var count: usize = 0;
+                while (outer.next()) |row| {
+                    const x = row.int(0);
+                    // nested query while `outer` is still open
+                    var inner = db_.query("SELECT x FROM t WHERE x = ?", .{x}) catch return;
+                    defer inner.deinit();
+                    if (inner.next()) |r2| {
+                        if (r2.int(0) == x) count += 1;
+                    }
+                }
+                if (count != 5) return; // wrong result → leave ok unbumped, test fails
+            }
+            _ = ok.fetchAdd(1, .monotonic);
+        }
+    };
 
-    // a real query checks a slot out and Rows.deinit returns it
-    {
-        var rows = try ldb.query("SELECT x FROM t ORDER BY x", .{});
-        defer rows.deinit();
-        try std.testing.expectEqual(@as(i64, 1), rows.next().?.int(0));
-    }
-    for (ldb.read_in_use) |u| try std.testing.expect(!u); // no leak
+    const N = 4 * READ_POOL_SIZE; // 4× more nesting threads than connections
+    var ok = std.atomic.Value(u32).init(0);
+    var threads: [N]std.Thread = undefined;
+    for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Worker.run, .{ &ldb, &ok });
+    for (threads) |t| t.join();
+
+    try std.testing.expectEqual(@as(u32, N), ok.load(.monotonic)); // all finished correctly
+    for (ldb.read_in_use) |u| try std.testing.expect(!u); // every connection returned
 
     _ = std.c.unlink(zpath);
 }
