@@ -17,7 +17,7 @@ const curators = @import("server/curators.zig");
 const recommenders = @import("server/recommenders.zig");
 const subscribed = @import("server/subscribed.zig");
 const subscribers = @import("server/subscribers.zig");
-const wrapped = @import("server/wrapped.zig");
+const wrapped_ep = @import("server/wrapped.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
@@ -635,7 +635,7 @@ fn handleWrapped(request: *http.Server.Request, target: []const u8, io: Io) !voi
     }
     span.setAttribute("did", did.?);
 
-    const body = try wrapped.fetch(alloc, did.?);
+    const body = try wrapped_ep.fetch(alloc, did.?);
     try sendJson(request, body);
 }
 

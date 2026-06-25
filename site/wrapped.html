@@ -107,8 +107,9 @@
     }
     .entry .sub { color: var(--text-secondary); margin-bottom: 1.25rem; }
     .entry form { display: flex; gap: 0.5rem; }
+    .entry .ta-wrap { position: relative; flex: 1; min-width: 0; }
     .entry input {
-      flex: 1; min-width: 0; font: inherit; padding: 0.7rem 0.8rem;
+      width: 100%; min-width: 0; font: inherit; padding: 0.7rem 0.8rem;
       background: var(--bg-subtle); border: 1px solid var(--border);
       border-radius: 8px; color: var(--text-bright);
     }
@@ -293,6 +294,14 @@
     }
 
     // ----- entry screen -------------------------------------------------
+    function go(handle) {
+      var v = String(handle || '').trim().replace(/^@/, '');
+      if (!v) return;
+      var key = v.indexOf('did:') === 0 ? 'did' : 'handle';
+      history.pushState({}, '', '/wrapped?' + key + '=' + encodeURIComponent(v));
+      load();
+    }
+
     function renderEntry() {
       root.innerHTML =
         '<div class="entry">' +
@@ -300,22 +309,96 @@
           '<div class="sub">a snapshot of how you show up across the network — ' +
             'what you publish, what you recommend, what you read.</div>' +
           '<form id="entry-form">' +
-            '<input id="entry-input" type="text" autocapitalize="off" autocorrect="off" ' +
-              'spellcheck="false" placeholder="enter a handle (e.g. alice.bsky.social)">' +
+            '<div class="ta-wrap">' +
+              '<input id="entry-input" type="text" autocapitalize="off" autocorrect="off" ' +
+                'spellcheck="false" autocomplete="off" placeholder="enter a handle (e.g. alice.bsky.social)">' +
+            '</div>' +
             '<button type="submit">go</button>' +
           '</form>' +
         '</div>';
       var form = document.getElementById('entry-form');
       var input = document.getElementById('entry-input');
       input.focus();
+      setupHandleTypeahead(input, function(actor) {
+        input.value = actor.handle;
+        go(actor.did || actor.handle);
+      });
       form.addEventListener('submit', function(e) {
         e.preventDefault();
-        var v = input.value.trim().replace(/^@/, '');
-        if (!v) return;
-        var key = v.indexOf('did:') === 0 ? 'did' : 'handle';
-        history.pushState({}, '', '/wrapped?' + key + '=' + encodeURIComponent(v));
-        load();
+        go(input.value);
       });
+    }
+
+    // Handle typeahead against nate's community service (typeahead.waow.tech),
+    // reusing the shared .lf-typeahead-* dropdown styles from components.css.
+    // Unlike the homepage search box this triggers on the bare handle (no '@'
+    // prefix) since the whole field IS the handle. We report ourselves via the
+    // X-Client header so this shows up by name in the service's traffic stats.
+    var TYPEAHEAD_BASE = 'https://typeahead.waow.tech';
+    var TYPEAHEAD_CLIENT = 'pub-search.waow.tech/wrapped';
+
+    function setupHandleTypeahead(input, onPick) {
+      var DEBOUNCE_MS = 150, LIMIT = 8;
+      var dd = document.createElement('div');
+      dd.className = 'lf-typeahead-dropdown';
+      dd.setAttribute('role', 'listbox');
+      input.parentNode.appendChild(dd);
+
+      var timer = null, items = [], sel = -1, last = '';
+
+      function hide() { dd.classList.remove('open'); dd.innerHTML = ''; items = []; sel = -1; }
+      function render() {
+        dd.innerHTML = items.map(function(a, i) {
+          var dn = a.displayName ? '<span class="lf-typeahead-name">' + esc(a.displayName) + '</span>' : '';
+          var av = a.avatar
+            ? '<img class="lf-typeahead-avatar" src="' + esc(a.avatar) + '" loading="lazy" alt="">'
+            : '<span class="lf-typeahead-avatar lf-typeahead-avatar-ph"></span>';
+          return '<div class="lf-typeahead-item' + (i === sel ? ' active' : '') +
+            '" data-i="' + i + '" role="option">' + av +
+            '<div class="lf-typeahead-text"><span class="lf-typeahead-handle">@' + esc(a.handle) + '</span>' + dn + '</div></div>';
+        }).join('');
+        dd.classList.toggle('open', items.length > 0);
+      }
+      function curVal() { return input.value.trim().replace(/^@/, ''); }
+      function fetchNow() {
+        var q = curVal();
+        if (q.length < 1) { hide(); return; }
+        if (q === last) return;
+        last = q;
+        fetch(TYPEAHEAD_BASE + '/xrpc/app.bsky.actor.searchActorsTypeahead?q=' +
+          encodeURIComponent(q) + '&limit=' + LIMIT, { headers: { 'X-Client': TYPEAHEAD_CLIENT } })
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(d) {
+            if (!d || curVal() !== q) return;
+            items = (d.actors || []).slice(0, LIMIT);
+            sel = items.length ? 0 : -1;
+            render();
+          })
+          .catch(function() {});
+      }
+      function choose(i) { var a = items[i]; if (!a) return; hide(); onPick(a); }
+
+      input.addEventListener('input', function() {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(fetchNow, DEBOUNCE_MS);
+      });
+      input.addEventListener('keydown', function(e) {
+        if (!dd.classList.contains('open') || !items.length) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % items.length; render(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; render(); }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); choose(sel); }
+        else if (e.key === 'Escape') { e.preventDefault(); hide(); }
+      });
+      dd.addEventListener('mousedown', function(e) {
+        var t = e.target.closest('.lf-typeahead-item');
+        if (!t) return;
+        e.preventDefault();
+        choose(parseInt(t.getAttribute('data-i'), 10));
+      });
+      document.addEventListener('click', function(e) {
+        if (!input.contains(e.target) && !dd.contains(e.target)) hide();
+      });
+      input.addEventListener('blur', function() { setTimeout(hide, 150); });
     }
 
     // ----- rank badge ---------------------------------------------------

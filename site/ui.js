@@ -421,7 +421,8 @@
       lastFetched = info.partial;
       var query = info.partial;
       fetch(TYPEAHEAD_BASE + '/xrpc/app.bsky.actor.searchActorsTypeahead?q=' +
-        encodeURIComponent(query) + '&limit=' + LIMIT)
+        encodeURIComponent(query) + '&limit=' + LIMIT,
+        { headers: { 'X-Client': 'pub-search.waow.tech' } })
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(d) {
           if (!d || !matchInfo || matchInfo.partial !== query) return;

@@ -42,7 +42,8 @@
 
     return Promise.all(chunks.map(function (chunk) {
       var qs = chunk.map(function (a) { return 'actors=' + encodeURIComponent(a); }).join('&');
-      return fetch(BASE + '/xrpc/app.bsky.actor.getProfiles?' + qs)
+      return fetch(BASE + '/xrpc/app.bsky.actor.getProfiles?' + qs,
+        { headers: { 'X-Client': 'pub-search.waow.tech' } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .catch(function () { return null; });
     })).then(function (results) {
