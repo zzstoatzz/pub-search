@@ -432,12 +432,6 @@
             '</div>' +
             '<button type="submit">go</button>' +
           '</form>' +
-          '<div class="explore" id="explore">' +
-            '<div class="explore-col"><span class="sec-label">top curators</span>' +
-              '<div class="lb-loading" id="lb-curators">loading…</div></div>' +
-            '<div class="explore-col"><span class="sec-label">most subscribed</span>' +
-              '<div class="lb-loading" id="lb-people">loading…</div></div>' +
-          '</div>' +
         '</div>';
       var form = document.getElementById('entry-form');
       var input = document.getElementById('entry-input');
@@ -450,52 +444,6 @@
         e.preventDefault();
         go(input.value);
       });
-      renderExplore();
-    }
-
-    // entry-screen teaser: two mini-leaderboards of the most active people on
-    // standard.site. each row dives into that person's wrapped — discovery +
-    // a reason to linger instead of a blank input.
-    function renderExplore() {
-      loadLeaderboard('lb-curators', API_BASE + '/curators?limit=6',
-        function(r) { return { did: r.did, stat: (r.totalRecommends || 0) + ' recommends' }; });
-      loadLeaderboard('lb-people', API_BASE + '/subscribed?view=people&limit=6',
-        function(r) { return { did: r.did, stat: (r.totalCount || 0) + ' subscribers' }; });
-    }
-
-    function loadLeaderboard(elId, url, mapRow) {
-      var box = document.getElementById(elId);
-      if (!box) return;
-      fetch(url).then(function(r) { return r.json(); }).then(function(rows) {
-        if (!Array.isArray(rows) || !rows.length) { box.textContent = ''; return; }
-        var items = rows.map(mapRow).filter(function(x) { return x.did; });
-        box.className = 'lb';
-        box.innerHTML = items.map(function(it, i) {
-          return '<button type="button" class="lb-row" data-did="' + esc(it.did) + '">' +
-            '<span class="lb-rank">' + (i + 1) + '</span>' +
-            '<span class="lb-av" data-avatar-did="' + esc(it.did) + '"><span class="ini">·</span></span>' +
-            '<span class="lb-text"><div class="lb-handle">' + esc(shortDid(it.did)) + '</div>' +
-            '<div class="lb-stat">' + esc(it.stat) + '</div></span></button>';
-        }).join('');
-        box.querySelectorAll('.lb-row').forEach(function(el) {
-          el.addEventListener('click', function() { go(el.dataset.did); });
-        });
-        var dids = items.map(function(x) { return x.did; });
-        if (!window.LeafletIdentity) return;
-        window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
-          box.querySelectorAll('.lb-row').forEach(function(row) {
-            var p = profiles.get(row.dataset.did); if (!p) return;
-            if (p.handle) { var h = row.querySelector('.lb-handle'); if (h) h.textContent = '@' + p.handle; }
-            var av = row.querySelector('.lb-av'); if (!av) return;
-            var ini = av.querySelector('.ini'); if (ini && p.handle) ini.textContent = p.handle.charAt(0);
-            if (p.avatar) {
-              var img = new Image(); img.alt = '';
-              img.onload = function() { av.innerHTML = ''; av.appendChild(img); };
-              img.src = p.avatar;
-            }
-          });
-        });
-      }).catch(function() { var b = document.getElementById(elId); if (b) b.textContent = ''; });
     }
 
     // Handle typeahead against nate's community service (typeahead.waow.tech),
@@ -951,7 +899,9 @@
       var builtFor = -1;
       // pointer state: target follows the cursor, mx/my ease toward it for a
       // gentle parallax drift; mouseOn gates the near-cursor glow.
-      var mtx = 0, mty = 0, mx = 0, my = 0, mouseOn = false;
+      var mtx = 0, mty = 0, mx = 0, my = 0, mouseOn = false, overContent = false;
+      // foreground blocks the atlas labels should never draw over (text/cards/form)
+      var CONTENT_SEL = '.lead, .sub, #entry-form, .who, .card, .lf-typeahead-dropdown';
       var clusterCentroids = []; // [{cid,label,x,y,n}] in screen space, rebuilt on build()
 
       var bg = '#050505', pal = GALAXY_DARK;
@@ -1067,10 +1017,10 @@
             ctx.beginPath(); ctx.arc(x, y, s2.r + 1.7, 0, 6.283); ctx.fill();          // bright core
           }
         }
-        // part B: when the cursor roams the atlas (outside the center card column),
-        // name the neighborhoods nearest it — a faint "you are around here" readout.
-        var colHalf = Math.min(300, W * 0.32); // the cards occupy roughly the middle band
-        if (mouseOn && litCid == null && Math.abs(mx - W / 2) > colHalf && clusterCentroids.length) {
+        // part B: when the cursor roams the atlas (anywhere not over the foreground
+        // text/cards), name the neighborhoods nearest it — a faint "you are around
+        // here" readout.
+        if (mouseOn && !overContent && litCid == null && clusterCentroids.length) {
           var LABEL_R = 240;
           var nearby = [];
           for (var k = 0; k < clusterCentroids.length; k++) {
@@ -1106,6 +1056,8 @@
           if (e.pointerType === 'touch') return;
           mtx = e.clientX; mty = e.clientY;
           if (!mouseOn) { mx = mtx; my = mty; mouseOn = true; }
+          var el = document.elementFromPoint(e.clientX, e.clientY);
+          overContent = !!(el && el.closest && el.closest(CONTENT_SEL));
         }, { passive: true });
         window.addEventListener('pointerleave', function () { mouseOn = false; });
         document.addEventListener('mouseleave', function () { mouseOn = false; });
