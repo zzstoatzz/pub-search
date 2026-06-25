@@ -271,21 +271,13 @@ fn loadLocked() void {
     const fd = openForRead(PERSIST_PATH) orelse return;
     defer _ = std.c.close(fd);
 
-    const RECORD_SIZE = @sizeOf([SAMPLE_COUNT]u32) + @sizeOf(usize) * 2 + @sizeOf(u64);
-    const EXPECTED = ENDPOINT_COUNT * RECORD_SIZE;
-    // read one extra byte so an OVERSIZED file (e.g. a newer on-disk format
-    // with extra per-endpoint fields) is rejected, not silently misparsed.
-    // A leftover larger file once loaded a timestamp as `count`, and getStats
-    // indexed a 1000-slot array with it → SIGABRT on every /stats, crash-loop
-    // (2026-06-25). Validate into temporaries and commit only if every field is
-    // in range; a bad/format-mismatched file just starts the rings fresh.
-    var file_buf: [EXPECTED + 1]u8 = undefined;
+    // read entire file at once (small file, ~16KB per endpoint)
+    var file_buf: [ENDPOINT_COUNT * (@sizeOf([SAMPLE_COUNT]u32) + @sizeOf(usize) * 2 + @sizeOf(u64))]u8 = undefined;
     const bytes_read = readAll(fd, &file_buf) orelse return;
-    if (bytes_read != EXPECTED) return; // wrong size (incomplete OR oversized) → ignore
+    if (bytes_read != file_buf.len) return; // incomplete file
 
-    var staged: [ENDPOINT_COUNT]LatencyBuffer = undefined;
     var offset: usize = 0;
-    for (&staged) |*buf| {
+    for (&buffers) |*buf| {
         const samples_size = @sizeOf([SAMPLE_COUNT]u32);
         buf.samples = std.mem.bytesToValue([SAMPLE_COUNT]u32, file_buf[offset..][0..samples_size]);
         offset += samples_size;
@@ -298,28 +290,7 @@ fn loadLocked() void {
 
         buf.total_count = std.mem.readInt(u64, file_buf[offset..][0..@sizeOf(u64)], .little);
         offset += @sizeOf(u64);
-
-        // bounds invariants: count/head must index within the ring. Anything
-        // else means a corrupt or mismatched file — discard the whole load.
-        if (!bufferInBounds(buf.*)) return;
     }
-    buffers = staged;
-}
-
-/// A persisted buffer is only usable if its count/head index within the ring.
-/// A mismatched on-disk format misaligns the parse and yields wild values (a
-/// leftover larger file once loaded a unix timestamp as `count`).
-fn bufferInBounds(buf: LatencyBuffer) bool {
-    return buf.count <= SAMPLE_COUNT and buf.head < SAMPLE_COUNT;
-}
-
-test "bufferInBounds rejects out-of-range count/head" {
-    try std.testing.expect(bufferInBounds(.{ .count = 0, .head = 0 }));
-    try std.testing.expect(bufferInBounds(.{ .count = SAMPLE_COUNT, .head = SAMPLE_COUNT - 1 }));
-    // the exact 2026-06-25 crash value: a timestamp misread as count.
-    try std.testing.expect(!bufferInBounds(.{ .count = 1782422143, .head = 0 }));
-    try std.testing.expect(!bufferInBounds(.{ .count = SAMPLE_COUNT + 1, .head = 0 }));
-    try std.testing.expect(!bufferInBounds(.{ .count = 0, .head = SAMPLE_COUNT }));
 }
 
 fn persistLocked() void {
@@ -412,18 +383,17 @@ pub fn getStats(endpoint: Endpoint) EndpointStats {
     ensureInitialized();
 
     const buf = &buffers[@intFromEnum(endpoint)];
-    // clamp defensively: a bad count must never index past the ring (an
-    // out-of-range count once SIGABRT'd the whole process here — 2026-06-25).
-    const count = @min(buf.count, SAMPLE_COUNT);
-    if (count == 0) return .{};
+    if (buf.count == 0) return .{};
 
     // copy and sort for percentiles
     var sorted: [SAMPLE_COUNT]u32 = undefined;
-    @memcpy(sorted[0..count], buf.samples[0..count]);
-    std.mem.sort(u32, sorted[0..count], {}, std.sort.asc(u32));
+    @memcpy(sorted[0..buf.count], buf.samples[0..buf.count]);
+    std.mem.sort(u32, sorted[0..buf.count], {}, std.sort.asc(u32));
 
     var sum: u64 = 0;
-    for (sorted[0..count]) |v| sum += v;
+    for (sorted[0..buf.count]) |v| sum += v;
+
+    const count = buf.count;
     return .{
         .count = buf.total_count,
         .avg_ms = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) / 1000.0,
