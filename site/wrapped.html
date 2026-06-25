@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pub search / wrapped</title>
+  <meta name="description" content="your standing across the standard.site graph — as a publisher, a curator, and a reader">
+  <meta property="og:title" content="pub search / wrapped">
+  <meta property="og:description" content="your standing across the standard.site graph — as a publisher, a curator, and a reader">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://pub-search.waow.tech/og-image?page=wrapped">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="pub search / wrapped">
+  <meta name="twitter:description" content="your standing across the standard.site graph">
+  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image?page=wrapped">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='2' fill='%231B7340'/><circle cx='8' cy='10' r='1.5' fill='%231B7340' opacity='.6'/><circle cx='24' cy='8' r='1' fill='%231B7340' opacity='.4'/><circle cx='22' cy='22' r='1.5' fill='%231B7340' opacity='.5'/><circle cx='6' cy='24' r='1' fill='%231B7340' opacity='.3'/></svg>">
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'dark';
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="components.css?v=1779507677">
+  <style>
+    :root, [data-theme="dark"] {
+      --bg: #050505;
+      --bg-subtle: #0d0d0d;
+      --bg-hover: #141414;
+      --border: #1d1d1d;
+      --border-subtle: #161616;
+      --border-focus: #2a2a2a;
+      --text: #ccc;
+      --text-bright: #fff;
+      --text-secondary: #888;
+      --text-dim: #777;
+      --text-muted: #444;
+      --accent: #2a9d5c;
+      --accent-dim: #1B7340;
+      --gold: #d9a441;
+      --podium-bg: rgba(42, 157, 92, 0.04);
+      --podium-border: rgba(42, 157, 92, 0.25);
+    }
+    [data-theme="light"] {
+      --bg: #f5f5f0;
+      --bg-subtle: #eee;
+      --bg-hover: #e4e4e0;
+      --border: #ddd;
+      --border-subtle: #ccc;
+      --border-focus: #bbb;
+      --text: #333;
+      --text-bright: #111;
+      --text-secondary: #555;
+      --text-dim: #666;
+      --text-muted: #999;
+      --accent: #1B7340;
+      --accent-dim: #2a9d5c;
+      --gold: #b8860b;
+      --podium-bg: rgba(27, 115, 64, 0.05);
+      --podium-border: rgba(27, 115, 64, 0.25);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.25rem 1rem 4rem;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .container { max-width: 600px; margin: 0 auto; }
+    a { color: var(--accent-dim); text-decoration: none; }
+    a:hover { color: var(--accent); }
+
+    h1 {
+      font-size: 12px;
+      font-weight: normal;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    h1 a.title { color: var(--text-secondary); }
+    h1 a.title:hover { color: var(--text-bright); }
+    h1 .dim { color: var(--text-dim); }
+    h1 .lf-settings-btn { margin-left: auto; }
+    .theme-toggle {
+      cursor: pointer; color: var(--text-dim); user-select: none;
+      padding: 0.3rem 0.4rem; display: inline-flex; align-items: center;
+      justify-content: center; background: none; border: none; font: inherit;
+      min-width: 44px; min-height: 44px;
+    }
+    .theme-toggle:hover { color: var(--text-secondary); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+    /* ---- entry (no handle yet) ------------------------------------------ */
+    .entry { margin-top: 2rem; }
+    .entry .lead {
+      font-size: 18px; color: var(--text-bright); line-height: 1.4;
+      margin-bottom: 0.4rem; letter-spacing: -0.01em;
+    }
+    .entry .sub { color: var(--text-secondary); margin-bottom: 1.25rem; }
+    .entry form { display: flex; gap: 0.5rem; }
+    .entry input {
+      flex: 1; min-width: 0; font: inherit; padding: 0.7rem 0.8rem;
+      background: var(--bg-subtle); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text-bright);
+    }
+    .entry input:focus { outline: none; border-color: var(--border-focus); }
+    .entry input::placeholder { color: var(--text-muted); }
+    .entry button[type=submit] {
+      font: inherit; padding: 0.7rem 1rem; cursor: pointer;
+      background: var(--accent-dim); color: #fff; border: none; border-radius: 8px;
+    }
+    .entry button[type=submit]:hover { background: var(--accent); }
+
+    /* ---- identity header ------------------------------------------------ */
+    .who {
+      display: flex; align-items: center; gap: 0.9rem;
+      margin-bottom: 1.75rem; min-height: 56px;
+    }
+    .who-avatar {
+      flex: 0 0 auto; width: 56px; height: 56px; border-radius: 50%;
+      overflow: hidden; background: var(--bg-hover);
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .who-avatar.loading {
+      background: linear-gradient(90deg, var(--bg-hover) 0%, var(--border) 50%, var(--bg-hover) 100%);
+      background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite;
+    }
+    .who-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .who-avatar .ini { font-size: 22px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
+    .who-text { min-width: 0; }
+    .who-name { font-size: 17px; color: var(--text-bright); font-weight: 600; line-height: 1.2; word-break: break-word; }
+    .who-handle { color: var(--text-secondary); }
+    .who-handle .at { color: var(--text-dim); }
+    .who-tag { color: var(--text-dim); font-size: 12px; margin-top: 0.15rem; }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ---- lens cards ----------------------------------------------------- */
+    .cards { display: flex; flex-direction: column; gap: 0.85rem; }
+    .card {
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--bg-subtle); padding: 1.1rem 1.15rem;
+      opacity: 0; transform: translateY(8px);
+      animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+    .card:nth-child(1) { animation-delay: 0.04s; }
+    .card:nth-child(2) { animation-delay: 0.12s; }
+    .card:nth-child(3) { animation-delay: 0.20s; }
+    @keyframes rise { to { opacity: 1; transform: none; } }
+
+    .card-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 0.5rem; margin-bottom: 0.6rem;
+    }
+    .card-label {
+      font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .rank-badge {
+      font-size: 12px; color: var(--text-secondary);
+      border: 1px solid var(--border-focus); border-radius: 999px;
+      padding: 0.12rem 0.5rem; white-space: nowrap;
+    }
+    .rank-badge.podium { color: var(--gold); border-color: var(--gold); }
+    .rank-badge .n { color: var(--text-bright); font-weight: 600; }
+    .rank-badge.podium .n { color: var(--gold); }
+
+    .metric { display: flex; align-items: baseline; gap: 0.5rem; }
+    .metric .num {
+      font-size: 40px; line-height: 1; color: var(--accent);
+      font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+    }
+    .metric .unit { font-size: 14px; color: var(--text-secondary); }
+    .card-sub { color: var(--text-secondary); margin-top: 0.55rem; font-size: 13px; }
+    .card-sub .hi { color: var(--text-bright); }
+
+    .toppub {
+      margin-top: 0.7rem; padding-top: 0.7rem;
+      border-top: 1px solid var(--border-subtle);
+      font-size: 13px; color: var(--text-secondary);
+    }
+    .toppub .lbl { color: var(--text-dim); }
+    .toppub a { color: var(--text-bright); }
+    .toppub a:hover { color: var(--accent); }
+
+    .empty { color: var(--text-muted); font-size: 13px; font-style: italic; }
+
+    /* following avatar strip */
+    .follow-strip {
+      margin-top: 0.8rem; display: flex; flex-wrap: wrap; gap: 0.5rem;
+    }
+    .follow-pub {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      max-width: 100%; padding: 0.25rem 0.55rem 0.25rem 0.3rem;
+      border: 1px solid var(--border); border-radius: 999px;
+      color: var(--text); background: var(--bg-hover);
+    }
+    .follow-pub:hover { border-color: var(--border-focus); color: var(--text-bright); }
+    .follow-av {
+      flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%;
+      overflow: hidden; background: var(--bg); display: inline-flex;
+      align-items: center; justify-content: center;
+    }
+    .follow-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .follow-av .ini { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
+    .follow-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+
+    .status { color: var(--text-secondary); margin-top: 1.5rem; }
+    .status.err { color: #c0563f; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .card { animation: none; opacity: 1; transform: none; }
+      .who-avatar.loading { animation: none; }
+    }
+    @media (max-width: 480px) {
+      .metric .num { font-size: 34px; }
+      .who-avatar { width: 48px; height: 48px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ wrapped</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
+
+    <div id="root"></div>
+  </div>
+
+  <script>
+    var THEME_ICONS = { dark: '☾', light: '☼', system: '◑' };
+    var THEME_CYCLE = ['dark', 'light', 'system'];
+    var currentTheme = localStorage.getItem('theme') || 'dark';
+    function applyTheme(t) {
+      currentTheme = t;
+      localStorage.setItem('theme', t);
+      var resolved = t === 'system'
+        ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : t;
+      document.documentElement.setAttribute('data-theme', resolved);
+      var el = document.getElementById('theme-toggle');
+      if (el) { el.textContent = THEME_ICONS[t]; el.title = t; }
+    }
+    document.getElementById('theme-toggle').textContent = THEME_ICONS[currentTheme];
+    document.getElementById('theme-toggle').title = currentTheme;
+    document.getElementById('theme-toggle').addEventListener('click', function() {
+      applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3]);
+    });
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
+      if (currentTheme === 'system') applyTheme('system');
+    });
+  </script>
+  <script src="clients.js"></script>
+  <script src="identity.js"></script>
+  <script src="ui.js"></script>
+  <script>
+    var API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+      ? 'http://localhost:3000'
+      : 'https://leaflet-search-backend.fly.dev';
+
+    var root = document.getElementById('root');
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function shortDid(d) {
+      if (!d) return '';
+      var p = d.split(':');
+      var tail = p[p.length - 1] || d;
+      return tail.length > 10 ? tail.slice(0, 6) + '…' + tail.slice(-4) : tail;
+    }
+    function fmtMonthYear(iso) {
+      if (!iso) return null;
+      var d = new Date(iso);
+      if (isNaN(d)) return null;
+      return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    }
+    function getParam(name) {
+      var m = new RegExp('[?&]' + name + '=([^&]*)').exec(location.search);
+      return m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : null;
+    }
+
+    // ----- entry screen -------------------------------------------------
+    function renderEntry() {
+      root.innerHTML =
+        '<div class="entry">' +
+          '<div class="lead">your standard.site, wrapped.</div>' +
+          '<div class="sub">a snapshot of how you show up across the network — ' +
+            'what you publish, what you recommend, what you read.</div>' +
+          '<form id="entry-form">' +
+            '<input id="entry-input" type="text" autocapitalize="off" autocorrect="off" ' +
+              'spellcheck="false" placeholder="enter a handle (e.g. alice.bsky.social)">' +
+            '<button type="submit">go</button>' +
+          '</form>' +
+        '</div>';
+      var form = document.getElementById('entry-form');
+      var input = document.getElementById('entry-input');
+      input.focus();
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var v = input.value.trim().replace(/^@/, '');
+        if (!v) return;
+        var key = v.indexOf('did:') === 0 ? 'did' : 'handle';
+        history.pushState({}, '', '/wrapped?' + key + '=' + encodeURIComponent(v));
+        load();
+      });
+    }
+
+    // ----- rank badge ---------------------------------------------------
+    function rankBadge(rank, total) {
+      if (rank == null) return '';
+      var podium = rank <= 3 ? ' podium' : '';
+      var medal = rank === 1 ? '🥇 ' : rank === 2 ? '🥈 ' : rank === 3 ? '🥉 ' : '';
+      return '<span class="rank-badge' + podium + '">' + medal +
+        '<span class="n">#' + rank + '</span>' +
+        (total ? ' of ' + total : '') + '</span>';
+    }
+
+    // ----- the three lens cards -----------------------------------------
+    function publisherCard(p) {
+      var head = '<div class="card-head"><span class="card-label">as a publisher</span>' +
+        rankBadge(p.rank, p.totalOwners) + '</div>';
+      if (!p.pubCount) {
+        return '<div class="card">' + head +
+          '<div class="empty">no publications on standard.site yet.</div></div>';
+      }
+      var sub = '<div class="card-sub"><span class="hi">' + p.pubCount + '</span> publication' +
+        (p.pubCount === 1 ? '' : 's') + '</div>';
+      var top = '';
+      if (p.topPublication && p.topPublication.subscribers > 0) {
+        var t = p.topPublication;
+        var url = t.basePath ? 'https://' + esc(t.basePath) : '';
+        var nm = esc(t.name || t.basePath || 'untitled');
+        top = '<div class="toppub"><span class="lbl">most subscribed · </span>' +
+          (url ? '<a href="' + url + '" target="_blank" rel="noopener">' + nm + '</a>' : nm) +
+          ' <span class="lbl">(' + t.subscribers + ')</span></div>';
+      }
+      return '<div class="card">' + head +
+        '<div class="metric"><span class="num" data-count="' + p.totalSubscribers + '">0</span>' +
+        '<span class="unit">subscriber' + (p.totalSubscribers === 1 ? '' : 's') + '</span></div>' +
+        sub + top + '</div>';
+    }
+
+    function curatorCard(c) {
+      var head = '<div class="card-head"><span class="card-label">as a curator</span>' +
+        rankBadge(c.rank, c.totalCurators) + '</div>';
+      if (!c.totalRecommends) {
+        return '<div class="card">' + head +
+          '<div class="empty">no recommendations yet.</div></div>';
+      }
+      var since = fmtMonthYear(c.firstAt);
+      var sub = '<div class="card-sub"><span class="hi">' + c.uniqueDocs + '</span> document' +
+        (c.uniqueDocs === 1 ? '' : 's') + ' recommended' +
+        (since ? ' · since ' + esc(since) : '') + '</div>';
+      return '<div class="card">' + head +
+        '<div class="metric"><span class="num" data-count="' + c.totalRecommends + '">0</span>' +
+        '<span class="unit">recommend' + (c.totalRecommends === 1 ? '' : 's') + '</span></div>' +
+        sub + '</div>';
+    }
+
+    function readerCard(r) {
+      var head = '<div class="card-head"><span class="card-label">as a reader</span></div>';
+      if (!r.subscriptionCount) {
+        return '<div class="card">' + head +
+          '<div class="empty">not subscribed to any publications yet.</div></div>';
+      }
+      var since = fmtMonthYear(r.firstAt);
+      var sub = '<div class="card-sub">following <span class="hi">' + r.subscriptionCount +
+        '</span> publication' + (r.subscriptionCount === 1 ? '' : 's') +
+        (since ? ' · since ' + esc(since) : '') + '</div>';
+      var strip = '';
+      if (r.following && r.following.length) {
+        strip = '<div class="follow-strip">' + r.following.map(function(f) {
+          var url = f.basePath ? 'https://' + esc(f.basePath) : '#';
+          var nm = esc(f.name || f.basePath || 'untitled');
+          var ini = esc((f.name || f.basePath || '?').charAt(0));
+          return '<a class="follow-pub" href="' + url + '" target="_blank" rel="noopener" title="' + nm + '">' +
+            '<span class="follow-av" data-avatar-did="' + esc(f.ownerDid || '') + '" data-ini="' + ini + '">' +
+            '<span class="ini">' + ini + '</span></span>' +
+            '<span class="follow-name">' + nm + '</span></a>';
+        }).join('') + '</div>';
+      }
+      return '<div class="card">' + head +
+        '<div class="metric"><span class="num" data-count="' + r.subscriptionCount + '">0</span>' +
+        '<span class="unit">subscription' + (r.subscriptionCount === 1 ? '' : 's') + '</span></div>' +
+        sub + strip + '</div>';
+    }
+
+    // ----- count-up flourish (respects reduced motion) ------------------
+    function animateCounts() {
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.querySelectorAll('.num[data-count]').forEach(function(el) {
+          el.textContent = el.dataset.count;
+        });
+        return;
+      }
+      document.querySelectorAll('.num[data-count]').forEach(function(el) {
+        var target = parseInt(el.dataset.count, 10) || 0;
+        if (target <= 0) { el.textContent = '0'; return; }
+        var dur = 650, start = null;
+        function step(ts) {
+          if (start === null) start = ts;
+          var t = Math.min(1, (ts - start) / dur);
+          var eased = 1 - Math.pow(1 - t, 3);
+          el.textContent = Math.round(eased * target).toLocaleString();
+          if (t < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      });
+    }
+
+    // ----- avatar resolution (identity header + following strip) --------
+    function resolveAvatars(primaryDid) {
+      var dids = [];
+      if (primaryDid) dids.push(primaryDid);
+      document.querySelectorAll('.follow-av[data-avatar-did]').forEach(function(el) {
+        if (el.dataset.avatarDid) dids.push(el.dataset.avatarDid);
+      });
+      if (!dids.length || !window.LeafletIdentity) return;
+      window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) {
+        // identity header
+        var p = primaryDid ? profiles.get(primaryDid) : null;
+        var av = document.getElementById('who-avatar');
+        var nameEl = document.getElementById('who-name');
+        var handleEl = document.getElementById('who-handle');
+        if (p) {
+          if (av) {
+            av.classList.remove('loading');
+            if (p.avatar) {
+              var img = new Image(); img.alt = '';
+              img.onerror = function() { av.innerHTML = '<span class="ini">' + esc((p.handle || '?').charAt(0)) + '</span>'; };
+              img.src = p.avatar; av.innerHTML = ''; av.appendChild(img);
+            } else {
+              av.innerHTML = '<span class="ini">' + esc((p.handle || '?').charAt(0)) + '</span>';
+            }
+          }
+          if (nameEl && p.displayName) nameEl.textContent = p.displayName;
+          if (handleEl && p.handle) handleEl.innerHTML = '<span class="at">@</span>' + esc(p.handle);
+        } else if (av) {
+          av.classList.remove('loading');
+          av.innerHTML = '<span class="ini">?</span>';
+        }
+        // following strip
+        document.querySelectorAll('.follow-av[data-avatar-did]').forEach(function(el) {
+          var fp = profiles.get(el.dataset.avatarDid);
+          if (fp && fp.avatar) {
+            var img = new Image(); img.alt = '';
+            img.onerror = function() {};
+            img.src = fp.avatar; el.innerHTML = ''; el.appendChild(img);
+          }
+        });
+      });
+    }
+
+    // ----- render the full digest ---------------------------------------
+    function renderWrapped(data) {
+      var did = data.did || '';
+      var handleGuess = getParam('handle');
+      root.innerHTML =
+        '<div class="who">' +
+          '<div class="who-avatar loading" id="who-avatar"></div>' +
+          '<div class="who-text">' +
+            '<div class="who-name" id="who-name">' + esc(handleGuess || shortDid(did)) + '</div>' +
+            '<div class="who-handle" id="who-handle">' +
+              (handleGuess ? '<span class="at">@</span>' + esc(handleGuess) : esc(shortDid(did))) +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="cards">' +
+          publisherCard(data.publisher || {}) +
+          curatorCard(data.curator || {}) +
+          readerCard(data.reader || {}) +
+        '</div>';
+      animateCounts();
+      resolveAvatars(did);
+    }
+
+    // ----- load ---------------------------------------------------------
+    function load() {
+      var did = getParam('did');
+      var handle = getParam('handle');
+      if (!did && !handle) { renderEntry(); return; }
+
+      var key = did ? 'did' : 'handle';
+      var val = did || handle;
+      root.innerHTML = '<div class="status">reading the graph…</div>';
+
+      fetch(API_BASE + '/wrapped?' + key + '=' + encodeURIComponent(val))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data || data.error) {
+            root.innerHTML = '<div class="status err">' +
+              esc((data && data.error) || 'could not load') + '</div>' +
+              '<div class="status"><a href="/wrapped">try another handle</a></div>';
+            return;
+          }
+          renderWrapped(data);
+        })
+        .catch(function() {
+          root.innerHTML = '<div class="status err">network error.</div>' +
+            '<div class="status"><a href="/wrapped">try again</a></div>';
+        });
+    }
+
+    window.addEventListener('popstate', load);
+
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      if (window.LeafletUI && window.LeafletUI.openSettings) window.LeafletUI.openSettings();
+    });
+
+    load();
+  </script>
+</body>
+</html>

@@ -17,6 +17,7 @@ const curators = @import("server/curators.zig");
 const recommenders = @import("server/recommenders.zig");
 const subscribed = @import("server/subscribed.zig");
 const subscribers = @import("server/subscribers.zig");
+const wrapped = @import("server/wrapped.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
@@ -135,6 +136,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleSubscribed(request, target, io);
     } else if (mem.eql(u8, path, "/subscribers")) {
         try handleSubscribers(request, target);
+    } else if (mem.eql(u8, path, "/wrapped")) {
+        try handleWrapped(request, target, io);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -602,6 +605,37 @@ fn handleSubscribers(request: *http.Server.Request, target: []const u8) !void {
     }
 
     const body = try subscribers.fetch(alloc, scope);
+    try sendJson(request, body);
+}
+
+/// /wrapped?did=<did> or ?handle=<handle> — one identity's standing across the
+/// standard.site graph (publisher / curator / reader lenses). Local-replica
+/// only; resolves a handle to a DID first. No cache (per-DID keyspace).
+fn handleWrapped(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const span = logfire.span("http.wrapped", .{});
+    defer span.end();
+
+    const did_param = parseQueryParam(alloc, target, "did") catch null;
+    const handle_param = parseQueryParam(alloc, target, "handle") catch null;
+
+    const did: ?[]const u8 = if (did_param != null and did_param.?.len > 0) blk: {
+        break :blk did_param;
+    } else if (handle_param != null and handle_param.?.len > 0) blk: {
+        if (mem.startsWith(u8, handle_param.?, "did:")) break :blk handle_param;
+        break :blk resolveHandle(alloc, handle_param.?, io) catch null;
+    } else null;
+
+    if (did == null or did.?.len == 0) {
+        try sendJson(request, "{\"error\":\"missing or unresolvable did/handle\"}");
+        return;
+    }
+    span.setAttribute("did", did.?);
+
+    const body = try wrapped.fetch(alloc, did.?);
     try sendJson(request, body);
 }
 
