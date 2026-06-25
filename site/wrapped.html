@@ -740,8 +740,7 @@
       ((data.reader || {}).following || []).forEach(function(f) { if (f.basePath) hosts.add(f.basePath.toLowerCase()); });
       AMBIENT_MY_HOSTS = hosts.size ? hosts : null;
 
-      lastWrappedData = data;
-      applyHoods(); // semantic-neighborhood line (needs atlas-mini; re-applied when it loads)
+      lastWrappedData = data; // applyHoods() is called after the DOM is built, below
       root.innerHTML =
         '<div class="who">' +
           '<div class="who-avatar loading" id="who-avatar"></div>' +
@@ -759,6 +758,7 @@
           readerCard(data.reader || {}) +
         '</div>';
       animateCounts();
+      applyHoods(); // who-hoods element now exists (re-applied when atlas-mini loads)
       resolveAvatars(did);
       fetchSubscribers(did);
       fetchRecommendedDocs(did);
