@@ -527,6 +527,15 @@
     };
     function platformColor(p) { return PLATFORM_COLORS[p] || PLATFORM_COLORS.other; }
 
+    // format a bare "YYYY-MM" without the UTC→local day-shift that fmtMonthYear
+    // (which parses to UTC midnight) hits — build the date in local time.
+    function fmtYM(ym) {
+      var p = String(ym).split('-');
+      if (p.length < 2) return ym;
+      var d = new Date(Number(p[0]), Number(p[1]) - 1, 1);
+      return isNaN(d) ? ym : d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    }
+
     function authorCard(a) {
       var head = '<div class="card-head"><span class="card-label">as a writer</span></div>';
       if (!a || !a.totalPosts) {
@@ -568,7 +577,7 @@
         }).join('');
         cadence = '<div class="card-section"><span class="sec-label">posting cadence</span>' +
           '<div class="spark">' + bars + '</div>' +
-          '<div class="spark-cap">most active <b>' + esc(fmtMonthYear(most.month) || most.month) +
+          '<div class="spark-cap">most active <b>' + esc(fmtYM(most.month)) +
           '</b> (' + most.count + ' post' + (most.count === 1 ? '' : 's') + ')</div></div>';
       }
 
