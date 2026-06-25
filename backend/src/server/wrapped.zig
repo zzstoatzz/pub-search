@@ -77,8 +77,35 @@ const Reader = struct {
     following: []const Follow,
 };
 
+const PlatformCount = struct { platform: []const u8, count: i64 };
+const TagCount = struct { tag: []const u8, count: i64 };
+const MonthCount = struct { month: []const u8, count: i64 };
+
+const Author = struct {
+    /// documents this DID has written that we index.
+    totalPosts: i64,
+    /// first / most-recent post (ISO 8601; empty when none).
+    firstAt: []const u8,
+    lastAt: []const u8,
+    /// how many of their posts live inside a publication (vs standalone looseleaf).
+    inPublication: i64,
+    /// how many carry a cover image.
+    withCover: i64,
+    /// space-split word-count approximation, summed and maxed over their posts.
+    totalWords: i64,
+    longestWords: i64,
+    /// posts per platform, most-published first.
+    platforms: []const PlatformCount,
+    /// their most-used tags (topics), most-used first.
+    tags: []const TagCount,
+    /// posts per calendar month (YYYY-MM), chronological — drives the cadence
+    /// sparkline + "most active month".
+    months: []const MonthCount,
+};
+
 const Wrapped = struct {
     did: []const u8,
+    author: Author,
     publisher: Publisher,
     curator: Curator,
     reader: Reader,
@@ -86,6 +113,93 @@ const Wrapped = struct {
 
 pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
     const local = db.getLocalDb() orelse return error.NotInitialized;
+
+    // ---- author lens (their actual writing) -----------------------------
+    // word count is a space-split approximation: spaces + 1 per non-empty post.
+    var author_total: i64 = 0;
+    var author_first: []const u8 = "";
+    var author_last: []const u8 = "";
+    var author_in_pub: i64 = 0;
+    var author_with_cover: i64 = 0;
+    var author_total_words: i64 = 0;
+    var author_longest_words: i64 = 0;
+    {
+        var rows = try local.query(
+            \\SELECT COUNT(*),
+            \\  COALESCE(MIN(NULLIF(created_at, '')), ''),
+            \\  COALESCE(MAX(NULLIF(created_at, '')), ''),
+            \\  COALESCE(SUM(has_publication), 0),
+            \\  COALESCE(SUM(CASE WHEN cover_image IS NOT NULL AND cover_image <> '' THEN 1 ELSE 0 END), 0),
+            \\  COALESCE(SUM(CASE WHEN content <> '' THEN LENGTH(content) - LENGTH(REPLACE(content, ' ', '')) + 1 ELSE 0 END), 0),
+            \\  COALESCE(MAX(CASE WHEN content <> '' THEN LENGTH(content) - LENGTH(REPLACE(content, ' ', '')) + 1 ELSE 0 END), 0)
+            \\FROM documents WHERE did = ?
+        , .{did});
+        defer rows.deinit();
+        if (rows.next()) |row| {
+            author_total = row.int(0);
+            author_first = try alloc.dupe(u8, row.text(1));
+            author_last = try alloc.dupe(u8, row.text(2));
+            author_in_pub = row.int(3);
+            author_with_cover = row.int(4);
+            author_total_words = row.int(5);
+            author_longest_words = row.int(6);
+        }
+        if (rows.err()) |e| return e;
+    }
+
+    var platforms: std.ArrayList(PlatformCount) = .empty;
+    if (author_total > 0) {
+        var rows = try local.query(
+            \\SELECT COALESCE(NULLIF(platform, ''), 'other'), COUNT(*)
+            \\FROM documents WHERE did = ?
+            \\GROUP BY 1 ORDER BY 2 DESC, 1
+        , .{did});
+        defer rows.deinit();
+        while (rows.next()) |row| {
+            try platforms.append(alloc, .{
+                .platform = try alloc.dupe(u8, row.text(0)),
+                .count = row.int(1),
+            });
+        }
+        if (rows.err()) |e| return e;
+    }
+
+    var author_tags: std.ArrayList(TagCount) = .empty;
+    if (author_total > 0) {
+        var rows = try local.query(
+            \\SELECT t.tag, COUNT(*) AS n
+            \\FROM document_tags t JOIN documents d ON d.uri = t.document_uri
+            \\WHERE d.did = ?
+            \\GROUP BY t.tag ORDER BY n DESC, t.tag
+            \\LIMIT 12
+        , .{did});
+        defer rows.deinit();
+        while (rows.next()) |row| {
+            try author_tags.append(alloc, .{
+                .tag = try alloc.dupe(u8, row.text(0)),
+                .count = row.int(1),
+            });
+        }
+        if (rows.err()) |e| return e;
+    }
+
+    var months: std.ArrayList(MonthCount) = .empty;
+    if (author_total > 0) {
+        var rows = try local.query(
+            \\SELECT substr(created_at, 1, 7) AS ym, COUNT(*)
+            \\FROM documents WHERE did = ? AND created_at <> ''
+            \\GROUP BY ym ORDER BY ym
+            \\LIMIT 60
+        , .{did});
+        defer rows.deinit();
+        while (rows.next()) |row| {
+            try months.append(alloc, .{
+                .month = try alloc.dupe(u8, row.text(0)),
+                .count = row.int(1),
+            });
+        }
+        if (rows.err()) |e| return e;
+    }
 
     // ---- publisher lens -------------------------------------------------
     var pub_count: i64 = 0;
@@ -277,6 +391,18 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.write(Wrapped{
         .did = did,
+        .author = .{
+            .totalPosts = author_total,
+            .firstAt = author_first,
+            .lastAt = author_last,
+            .inPublication = author_in_pub,
+            .withCover = author_with_cover,
+            .totalWords = author_total_words,
+            .longestWords = author_longest_words,
+            .platforms = platforms.items,
+            .tags = author_tags.items,
+            .months = months.items,
+        },
         .publisher = .{
             .pubCount = pub_count,
             .totalSubscribers = total_subs,

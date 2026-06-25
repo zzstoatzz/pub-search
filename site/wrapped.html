@@ -243,6 +243,23 @@
     }
     .sec-loading { color: var(--text-muted); font-size: 12px; }
 
+    /* ---- author lens: platform bar, cadence sparkline, topics ---------- */
+    .pf-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-hover); }
+    .pf-seg { height: 100%; }
+    .pf-seg:not(:last-child) { box-shadow: 1px 0 0 var(--bg-subtle); }
+    .pf-legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-top: 0.55rem; }
+    .pf-leg { font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 5px; }
+    .pf-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+    .pf-leg .pf-n { color: var(--text-bright); font-variant-numeric: tabular-nums; }
+    .spark { display: flex; align-items: flex-end; gap: 2px; height: 44px; }
+    .spark-bar { flex: 1 1 0; min-width: 3px; background: var(--accent-dim); border-radius: 2px 2px 0 0; opacity: 0.85; }
+    .spark-cap { margin-top: 0.45rem; font-size: 12px; color: var(--text-dim); }
+    .spark-cap b { color: var(--text-bright); font-weight: 600; }
+    .topic-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .topic-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+      background: var(--bg-hover); border: 1px solid var(--border); font-size: 12px; color: var(--text); }
+    .topic-chip .topic-n { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+
     /* a sea of subscriber avatars — dense wrap of small circles */
     .sea { display: flex; flex-wrap: wrap; gap: 4px; }
     .sea-av {
@@ -503,6 +520,81 @@
     }
 
     // ----- the three lens cards -----------------------------------------
+    // platform → color, mirroring the atlas/galaxy palette.
+    var PLATFORM_COLORS = {
+      leaflet: '#4ade80', whitewind: '#60a5fa', pckt: '#fbbf24',
+      offprint: '#fb7185', greengale: '#2dd4bf', other: '#9ca3af'
+    };
+    function platformColor(p) { return PLATFORM_COLORS[p] || PLATFORM_COLORS.other; }
+
+    function authorCard(a) {
+      var head = '<div class="card-head"><span class="card-label">as a writer</span></div>';
+      if (!a || !a.totalPosts) {
+        return '<div class="card">' + head + '<div class="empty">no posts indexed yet.</div></div>';
+      }
+      var since = fmtMonthYear(a.firstAt);
+      var avg = a.totalPosts ? Math.round(a.totalWords / a.totalPosts) : 0;
+      var subBits = ['<span class="hi">' + (a.totalWords || 0).toLocaleString() + '</span> words'];
+      if (avg) subBits.push('~' + avg.toLocaleString() + '/post');
+      if (since) subBits.push('since ' + esc(since));
+      var sub = '<div class="card-sub">' + subBits.join(' · ') + '</div>';
+
+      // where you publish — proportional platform bar + legend
+      var plats = a.platforms || [];
+      var bar = '';
+      if (plats.length) {
+        var segs = plats.map(function (p) {
+          var pct = (p.count / a.totalPosts * 100).toFixed(3);
+          return '<span class="pf-seg" style="width:' + pct + '%;background:' + platformColor(p.platform) +
+            '" title="' + esc(p.platform) + ' · ' + p.count + '"></span>';
+        }).join('');
+        var legend = plats.map(function (p) {
+          return '<span class="pf-leg"><span class="pf-dot" style="background:' + platformColor(p.platform) +
+            '"></span>' + esc(p.platform) + ' <span class="pf-n">' + p.count + '</span></span>';
+        }).join('');
+        bar = '<div class="card-section"><span class="sec-label">where you publish</span>' +
+          '<div class="pf-bar">' + segs + '</div><div class="pf-legend">' + legend + '</div></div>';
+      }
+
+      // posting cadence — monthly sparkline + most-active callout
+      var months = a.months || [];
+      var cadence = '';
+      if (months.length) {
+        var maxN = months.reduce(function (m, x) { return Math.max(m, x.count); }, 1);
+        var most = months.reduce(function (m, x) { return x.count > m.count ? x : m; }, months[0]);
+        var bars = months.map(function (x) {
+          var h = Math.max(8, Math.round(x.count / maxN * 100));
+          return '<span class="spark-bar" style="height:' + h + '%" title="' + esc(x.month) + ' · ' + x.count + '"></span>';
+        }).join('');
+        cadence = '<div class="card-section"><span class="sec-label">posting cadence</span>' +
+          '<div class="spark">' + bars + '</div>' +
+          '<div class="spark-cap">most active <b>' + esc(fmtMonthYear(most.month) || most.month) +
+          '</b> (' + most.count + ' post' + (most.count === 1 ? '' : 's') + ')</div></div>';
+      }
+
+      // your topics — most-used tags
+      var tags = a.tags || [];
+      var topics = tags.length
+        ? '<div class="card-section"><span class="sec-label">your topics</span><div class="topic-row">' +
+          tags.map(function (t) {
+            return '<span class="topic-chip">' + esc(t.tag) + '<span class="topic-n">' + t.count + '</span></span>';
+          }).join('') + '</div></div>'
+        : '';
+
+      // texture footnote
+      var notes = [];
+      if (a.longestWords) notes.push('longest ' + a.longestWords.toLocaleString() + ' words');
+      if (a.withCover) notes.push(a.withCover + ' with cover art');
+      var standalone = a.totalPosts - a.inPublication;
+      if (standalone > 0) notes.push(standalone + ' standalone');
+      var foot = notes.length ? '<div class="toppub"><span class="lbl">' + notes.join(' · ') + '</span></div>' : '';
+
+      return '<div class="card">' + head +
+        '<div class="metric"><span class="num" data-count="' + a.totalPosts + '">0</span>' +
+        '<span class="unit">post' + (a.totalPosts === 1 ? '' : 's') + '</span></div>' +
+        sub + bar + cadence + topics + foot + '</div>';
+    }
+
     function publisherCard(p) {
       var head = '<div class="card-head"><span class="card-label">as a publisher</span>' +
         rankBadge(p.rank, p.totalOwners) + '</div>';
@@ -684,6 +776,7 @@
           '</div>' +
         '</div>' +
         '<div class="cards">' +
+          authorCard(data.author || {}) +
           publisherCard(data.publisher || {}) +
           curatorCard(data.curator || {}) +
           readerCard(data.reader || {}) +
