@@ -1068,6 +1068,7 @@ async function resolveProfile(didOrHandle) {
 
 function buildWrappedImage(data, profile) {
   const accent = "#2a9d5c";
+  const author = (data && data.author) || {};
   const pub = (data && data.publisher) || {};
   const cur = (data && data.curator) || {};
   const rdr = (data && data.reader) || {};
@@ -1082,22 +1083,28 @@ function buildWrappedImage(data, profile) {
 
   const lenses = [
     {
+      label: "as a writer",
+      value: author.totalPosts || 0,
+      unit: (author.totalPosts === 1 ? "post" : "posts"),
+      note: author.totalWords ? author.totalWords.toLocaleString() + " words" : null,
+    },
+    {
       label: "as a publisher",
       value: pub.totalSubscribers || 0,
       unit: (pub.totalSubscribers === 1 ? "subscriber" : "subscribers"),
-      rank: rankStr(pub.rank, pub.totalOwners),
+      note: rankStr(pub.rank, pub.totalOwners),
     },
     {
       label: "as a curator",
       value: cur.totalRecommends || 0,
       unit: (cur.totalRecommends === 1 ? "recommend" : "recommends"),
-      rank: rankStr(cur.rank, cur.totalCurators),
+      note: rankStr(cur.rank, cur.totalCurators),
     },
     {
       label: "as a reader",
       value: rdr.subscriptionCount || 0,
       unit: (rdr.subscriptionCount === 1 ? "subscription" : "subscriptions"),
-      rank: null,
+      note: null,
     },
   ];
 
@@ -1108,8 +1115,8 @@ function buildWrappedImage(data, profile) {
         display: "flex",
         flexDirection: "column",
         flex: "1",
-        gap: "8px",
-        padding: "28px 26px",
+        gap: "6px",
+        padding: "24px 20px",
         background: "#0d0d0d",
         border: "1px solid #1d1d1d",
         borderRadius: "14px",
@@ -1118,26 +1125,26 @@ function buildWrappedImage(data, profile) {
         {
           type: "div",
           props: {
-            style: { color: "#888", fontSize: "20px", textTransform: "uppercase", letterSpacing: "1px" },
+            style: { color: "#888", fontSize: "16px", textTransform: "uppercase", letterSpacing: "0.8px" },
             children: l.label,
           },
         },
         {
           type: "div",
           props: {
-            style: { color: accent, fontSize: "58px", lineHeight: "1", fontVariantNumeric: "tabular-nums" },
+            style: { color: accent, fontSize: "52px", lineHeight: "1", fontVariantNumeric: "tabular-nums" },
             children: l.value.toLocaleString(),
           },
         },
         {
           type: "div",
-          props: { style: { color: "#aaa", fontSize: "22px" }, children: l.unit },
+          props: { style: { color: "#aaa", fontSize: "20px" }, children: l.unit },
         },
         {
           type: "div",
           props: {
-            style: { color: l.rank ? "#666" : "#0d0d0d", fontSize: "18px", marginTop: "2px" },
-            children: l.rank || "·",
+            style: { color: l.note ? "#666" : "#0d0d0d", fontSize: "17px", marginTop: "2px" },
+            children: l.note || "·",
           },
         },
       ],
@@ -1201,7 +1208,9 @@ function buildWrappedImage(data, profile) {
           type: "div",
           props: {
             style: { color: "#444", fontSize: "18px" },
-            children: "what you publish, who reads it, and what you recommend · pub-search.waow.tech/wrapped",
+            children: (author.tags && author.tags.length)
+              ? "writes about " + author.tags.slice(0, 4).map((t) => t.tag).join(" · ") + " · pub-search.waow.tech/wrapped"
+              : "what you publish, who reads it, and what you recommend · pub-search.waow.tech/wrapped",
           },
         },
       ],
