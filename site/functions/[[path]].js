@@ -227,6 +227,26 @@ async function handleSubscribed(context, url) {
 
 // ---------- /wrapped (one identity's standing) ----------
 
+async function resolveHandleForMeta(did) {
+  if (!did) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1200);
+  try {
+    const res = await fetch(
+      `https://typeahead.waow.tech/xrpc/app.bsky.actor.getProfiles?actors=${encodeURIComponent(did)}`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const d = await res.json();
+    const p = d && Array.isArray(d.profiles) ? d.profiles[0] : null;
+    return p && p.handle ? p.handle : null;
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
 async function handleWrapped(context, url) {
   const did = url.searchParams.get('did');
   const handle = url.searchParams.get('handle');
@@ -235,7 +255,9 @@ async function handleWrapped(context, url) {
   // bare /wrapped → static OG (branded intro card) is fine.
   if (!actor) return context.next();
 
-  const label = handle ? '@' + handle.replace(/^@/, '') : '@' + shortDid(did);
+  // prefer a real @handle in the title; fall back to the DID stem if lookup fails.
+  let resolved = handle ? handle.replace(/^@/, '') : await resolveHandleForMeta(did);
+  const label = resolved ? '@' + resolved : '@' + shortDid(did);
   const title = `${label}'s long-form atmosphere · pub search`;
   const description =
     `${label}'s standing across standard.site — what they publish, who reads it, and what they recommend`;
