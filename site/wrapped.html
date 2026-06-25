@@ -836,14 +836,28 @@
       });
     }
 
-    // ----- ambient flow field -------------------------------------------
-    // A simplex-noise flow field: threads advect along the field and leave
-    // silk trails (a low-alpha fade pass instead of a hard clear). The cursor
-    // is a stone in the stream — threads bend around it, and a click sends a
-    // pulse downstream. Inspired by nate's github.io particles + the Prefect
-    // Labs flow landing; tuned dim + brand-green so it lives behind the cards
-    // without fighting them. Respects prefers-reduced-motion.
+    // ----- ambient: the network's pulse, made of light --------------------
+    // Not decoration — a reading of real data. The 30-day indexing histogram
+    // (/api/timeline) is mapped left→right (30 days ago → today). Glints drift
+    // in a slow, coherent simplex current; their DENSITY and BRIGHTNESS follow
+    // the actual activity, so busy days surface as brighter, denser bands you
+    // can read at a glance. Soft round glints (no tails), gentle motion, cursor
+    // parts the field, click sends a pulse. Respects prefers-reduced-motion.
     var ambientStarted = false;
+    var ambientIntensity = null; // normalized [0..1] per day, oldest → newest
+
+    function fetchAmbientData() {
+      fetch(API_BASE + '/api/timeline')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d || !Array.isArray(d.points) || !d.points.length) return;
+          // points come newest→oldest; reverse so index 0 = oldest (left edge)
+          var counts = d.points.map(function (p) { return p.count || 0; }).reverse();
+          var max = Math.max.apply(null, counts) || 1;
+          ambientIntensity = counts.map(function (c) { return 0.16 + 0.84 * (c / max); });
+        })
+        .catch(function () {});
+    }
 
     // compact 2d simplex (adapted from the prefect-labs landing)
     var noise2 = (function () {
@@ -882,14 +896,13 @@
       var dpr = Math.min(2, window.devicePixelRatio || 1);
       var W = 0, H = 0, parts = [];
 
-      // flow params
-      var SCALE = 0.0017;     // noise zoom — smaller = broader sweeps
-      var TDRIFT = 0.00007;   // field evolution over time
-      var SWIRL = 2.1;        // how many turns the field can impose
-      var SPEED = 0.85;       // px/frame advection
-      var FADE = 0.072;       // trail persistence — lower = longer silk
-      var MR = 150, PUSH = 2.6; // cursor radius + push strength
-      var mx = -9999, my = -9999, pulse = 0, px = 0, py = 0;
+      var SCALE = 0.0011;   // noise zoom — broad, coherent current
+      var TDRIFT = 0.00004; // slow field evolution
+      var SWIRL = 1.15;     // gentle turning (low = laminar lanes, not chaos)
+      var SPEED = 0.34;     // calm drift
+      var FADE = 0.055;     // soft motion-glow without long tails
+      var MR = 160, PUSH = 2.4;
+      var mx = -9999, my = -9999, pulse = 0;
 
       var bg = '#050505', accent = '#2a9d5c';
       function readColors() {
@@ -897,44 +910,63 @@
         bg = (s.getPropertyValue('--bg') || '#050505').trim();
         accent = (s.getPropertyValue('--accent') || '#2a9d5c').trim();
       }
-      function seed(p2) {
-        p2.x = Math.random() * W; p2.y = Math.random() * H;
-        p2.px = p2.x; p2.py = p2.y;
-        p2.life = 80 + Math.random() * 240;
-        p2.a = 0.25 + Math.random() * 0.55;
+      // activity at a horizontal position (0=oldest day, 1=today)
+      function intensityAt(xf) {
+        var arr = ambientIntensity;
+        if (!arr || !arr.length) return 0.55;
+        var tt = Math.max(0, Math.min(0.9999, xf)) * (arr.length - 1);
+        var i = Math.floor(tt), f = tt - i;
+        return arr[i] + ((arr[Math.min(arr.length - 1, i + 1)] - arr[i]) * f);
+      }
+      // sample an x weighted by activity → denser glints on busy days
+      function sampleXf() {
+        for (var k = 0; k < 6; k++) { var xf = Math.random(); if (Math.random() < intensityAt(xf)) return xf; }
+        return Math.random();
+      }
+      function seed(p2, firstFill) {
+        p2.x = sampleXf() * W;
+        p2.y = Math.random() * H;
+        p2.ph = Math.random() * 6.283;
+        p2.sp = 0.5 + Math.random() * 0.8;
+        p2.life = (firstFill ? Math.random() : 1) * 360 + 140;
       }
       function resize() {
         W = c.clientWidth; H = c.clientHeight;
         c.width = Math.max(1, W * dpr); c.height = Math.max(1, H * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-        var n = Math.max(110, Math.min(380, Math.round((W * H) / 4600)));
-        parts = []; for (var i = 0; i < n; i++) { var pt = {}; seed(pt); parts.push(pt); }
+        var n = Math.max(120, Math.min(400, Math.round((W * H) / 5200)));
+        parts = []; for (var i = 0; i < n; i++) { var pt = {}; seed(pt, true); parts.push(pt); }
       }
       function frame(t) {
-        // fade pass — paints the bg at low alpha so prior threads dissolve
+        // soft fade pass — gentle glow, not a hard clear
         ctx.globalAlpha = FADE; ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
         ctx.globalAlpha = 1;
         var time = t * TDRIFT;
-        ctx.strokeStyle = accent; ctx.lineWidth = 1.1; ctx.lineCap = 'round';
-        ctx.beginPath();
+        ctx.fillStyle = accent;
         for (var i = 0; i < parts.length; i++) {
           var p2 = parts[i];
           var ang = noise2(p2.x * SCALE, p2.y * SCALE + time) * Math.PI * SWIRL;
-          var vx = Math.cos(ang) * SPEED, vy = Math.sin(ang) * SPEED;
-          // cursor as a stone in the stream
+          var vx = Math.cos(ang) * SPEED;
+          var vy = Math.sin(ang) * SPEED + Math.sin(t * 0.0006 * p2.sp + p2.ph) * 0.07;
           var dx = p2.x - mx, dy = p2.y - my, d2 = dx * dx + dy * dy;
           if (d2 < MR * MR) {
             var d = Math.sqrt(d2) || 1, f = (1 - d / MR) * PUSH * (1 + pulse * 3);
             vx += dx / d * f; vy += dy / d * f;
           }
-          p2.px = p2.x; p2.py = p2.y;
           p2.x += vx; p2.y += vy; p2.life--;
           if (p2.x < -20 || p2.x > W + 20 || p2.y < -20 || p2.y > H + 20 || p2.life < 0) { seed(p2); continue; }
-          ctx.globalAlpha = p2.a;
-          ctx.moveTo(p2.px, p2.py); ctx.lineTo(p2.x, p2.y);
+          var inten = intensityAt(p2.x / W);
+          var r = 1.1 + inten * 2.2;
+          ctx.globalAlpha = 0.10 + inten * 0.5;
+          ctx.beginPath(); ctx.arc(p2.x, p2.y, r, 0, 6.283); ctx.fill();
+          // halo on the busiest glints — the peaks of activity glow
+          if (inten > 0.62) {
+            ctx.globalAlpha = (0.10 + inten * 0.5) * 0.22;
+            ctx.beginPath(); ctx.arc(p2.x, p2.y, r * 2.8, 0, 6.283); ctx.fill();
+          }
         }
-        ctx.stroke(); ctx.globalAlpha = 1;
+        ctx.globalAlpha = 1;
         if (pulse > 0) pulse = Math.max(0, pulse - 0.04);
         if (!reduce) requestAnimationFrame(frame);
       }
@@ -945,11 +977,11 @@
       document.addEventListener('mousemove', function (e) { mx = e.clientX; my = e.clientY; });
       document.addEventListener('mouseleave', function () { mx = -9999; my = -9999; });
       document.addEventListener('mousedown', function (e) { mx = e.clientX; my = e.clientY; pulse = 1; });
-      // pick up theme-toggle palette changes
       var tg = document.getElementById('theme-toggle');
       if (tg) tg.addEventListener('click', function () { setTimeout(readColors, 0); });
+      setInterval(fetchAmbientData, 180000); // keep the pulse live
 
-      if (reduce) { for (var k = 0; k < 90; k++) frame(k * 16); }
+      if (reduce) { for (var k = 0; k < 120; k++) frame(k * 16); }
       else requestAnimationFrame(frame);
     }
 
@@ -986,6 +1018,7 @@
       if (window.LeafletUI && window.LeafletUI.openSettings) window.LeafletUI.openSettings();
     });
 
+    fetchAmbientData();
     startAmbient();
     load();
   </script>
