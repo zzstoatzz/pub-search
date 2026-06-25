@@ -1,0 +1,229 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""
+Re-tag pckt documents that were misclassified as `other`.
+
+pckt publishes each publication under BOTH `site.standard.publication` (the
+shared lexicon we index) and its native `blog.pckt.publication` (a sidecar at
+the same rkey holding a strongRef to the site.standard record). We detect
+platform from the publication's base_path host (`*.pckt.blog` → pckt), but a
+pckt blog on a CUSTOM domain (e.g. brookie.blog) has no `pckt` in its host, so
+its docs fall through to `other`.
+
+The authoritative signal is the sidecar: a `site.standard.publication` is pckt
+iff a `blog.pckt.publication` references it. This walks every `blog.pckt.
+publication`, follows its `publication.uri`, and re-tags that publication's
+documents to platform `pckt` (bumping indexed_at so the frozen replica syncs).
+
+This fixes EXISTING data only. New posts still need the ingester to consume
+`blog.pckt.publication` — a separate forward fix.
+
+  com.atproto.sync.listReposByCollection -> DIDs holding blog.pckt.publication
+  slingshot resolveMiniDoc                -> DID -> PDS
+  com.atproto.repo.listRecords            -> each blog.pckt.publication
+  record.publication.uri                  -> the site.standard.publication it is
+  UPDATE documents SET platform='pckt'    -> for that publication's docs
+
+Usage:
+    TURSO_URL=libsql://... TURSO_TOKEN=... ./scripts/backfill-pckt-platform
+    ./scripts/backfill-pckt-platform --dry-run
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import NamedTuple
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+SLINGSHOT = "https://slingshot.microcosm.blue"
+PCKT_COLLECTION = "blog.pckt.publication"
+
+RELAY_ENDPOINTS = [
+    "https://relay1.us-east.bsky.network",
+    "https://lightrail.microcosm.blue",
+    "https://relay.waow.tech",
+]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore")
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        return url[len("libsql://"):] if url.startswith("libsql://") else url
+
+
+def turso_pipeline(settings: Settings, requests: list[dict]) -> list[dict]:
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"https://{settings.turso_host}/v2/pipeline",
+                headers={"Authorization": f"Bearer {settings.turso_token}", "Content-Type": "application/json"},
+                json={"requests": [*requests, {"type": "close"}]},
+                timeout=180,
+            )
+            resp.raise_for_status()
+            return resp.json()["results"]
+        except (httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_err = e
+            print(f"  turso attempt {attempt + 1} failed: {type(e).__name__}; retrying", file=sys.stderr)
+            time.sleep(2 * (attempt + 1))
+    assert last_err is not None
+    raise last_err
+
+
+def enumerate_pckt_dids() -> list[str]:
+    dids: set[str] = set()
+    with httpx.Client() as client:
+        for base in RELAY_ENDPOINTS:
+            cursor: str | None = None
+            while True:
+                params: dict = {"collection": PCKT_COLLECTION, "limit": 1000}
+                if cursor:
+                    params["cursor"] = cursor
+                try:
+                    r = client.get(f"{base}/xrpc/com.atproto.sync.listReposByCollection", params=params, timeout=30)
+                    r.raise_for_status()
+                except Exception as e:
+                    print(f"  {base}: {type(e).__name__}", file=sys.stderr)
+                    break
+                body = r.json()
+                for repo in body.get("repos", []):
+                    dids.add(repo["did"])
+                cursor = body.get("cursor")
+                if not cursor:
+                    break
+    return sorted(dids)
+
+
+def resolve_pds(client: httpx.Client, did: str) -> str | None:
+    try:
+        r = client.get(f"{SLINGSHOT}/xrpc/blue.microcosm.identity.resolveMiniDoc", params={"identifier": did}, timeout=15)
+        r.raise_for_status()
+        return r.json().get("pds")
+    except Exception:
+        return None
+
+
+def pckt_publication_uris(client: httpx.Client, did: str) -> list[str]:
+    """The site.standard.publication URIs that this DID's blog.pckt.publication
+    sidecars point at."""
+    pds = resolve_pds(client, did)
+    if not pds:
+        return []
+    uris: list[str] = []
+    cursor: str | None = None
+    while True:
+        params: dict = {"repo": did, "collection": PCKT_COLLECTION, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            r = client.get(f"{pds}/xrpc/com.atproto.repo.listRecords", params=params, timeout=30)
+            r.raise_for_status()
+        except Exception:
+            break
+        body = r.json()
+        for rec in body.get("records", []):
+            pub = (rec.get("value") or {}).get("publication") or {}
+            uri = pub.get("uri")
+            if isinstance(uri, str) and uri.startswith("at://"):
+                uris.append(uri)
+        cursor = body.get("cursor")
+        if not cursor:
+            break
+    return uris
+
+
+def retag(settings: Settings, pub_uris: list[str]) -> int:
+    """Re-tag documents in the given publications to platform='pckt'."""
+    BATCH = 50
+    changed = 0
+    for i in range(0, len(pub_uris), BATCH):
+        chunk = pub_uris[i: i + BATCH]
+        reqs = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": (
+                        "UPDATE documents SET platform='pckt', "
+                        "indexed_at=strftime('%Y-%m-%dT%H:%M:%S','now') "
+                        "WHERE publication_uri = ? AND platform <> 'pckt'"
+                    ),
+                    "args": [{"type": "text", "value": u}],
+                },
+            }
+            for u in chunk
+        ]
+        for res in turso_pipeline(settings, reqs):
+            if res.get("type") != "ok":
+                print(f"  update error: {res.get('error')}", file=sys.stderr)
+                continue
+            resp = res.get("response") or {}
+            if resp.get("type") == "execute":
+                changed += int(resp.get("result", {}).get("affected_row_count", 0))
+    return changed
+
+
+class Found(NamedTuple):
+    did: str
+    pub_uris: list[str]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Re-tag misclassified pckt docs")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--limit", type=int, default=None)
+    args = parser.parse_args()
+
+    try:
+        settings = Settings()  # type: ignore
+    except Exception as e:
+        print(f"error loading settings: {e}\nrequired: TURSO_URL, TURSO_TOKEN", file=sys.stderr)
+        return 1
+
+    print(f"enumerating {PCKT_COLLECTION} holders...")
+    dids = enumerate_pckt_dids()
+    if args.limit:
+        dids = dids[: args.limit]
+    print(f"  {len(dids)} pckt DIDs")
+    if not dids:
+        return 0
+
+    all_uris: list[str] = []
+    started = time.time()
+    done = 0
+    with httpx.Client(follow_redirects=True) as client, ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(pckt_publication_uris, client, did): did for did in dids}
+        for fut in as_completed(futures):
+            uris = fut.result()
+            all_uris.extend(uris)
+            done += 1
+            if done % 25 == 0 or done == len(dids):
+                print(f"  [{done}/{len(dids)}] {len(all_uris)} pckt publications, {time.time()-started:.0f}s")
+
+    uniq = sorted(set(all_uris))
+    print(f"collected {len(uniq)} distinct pckt publications")
+    if args.dry_run:
+        print("dry-run: skipping updates")
+        return 0
+    changed = retag(settings, uniq)
+    print(f"  re-tagged {changed} documents to platform='pckt'")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
