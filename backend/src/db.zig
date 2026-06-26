@@ -4,7 +4,6 @@ const logfire = @import("logfire");
 
 const schema = @import("db/schema.zig");
 const result = @import("db/result.zig");
-const sync = @import("db/sync.zig");
 
 // re-exports
 pub const Client = @import("db/Client.zig");
@@ -16,22 +15,13 @@ pub const BatchResult = result.BatchResult;
 // global state
 const allocator = std.heap.smp_allocator;
 var client: ?Client = null;
-var sync_client: ?Client = null;
 var local_db: ?LocalDb = null;
-
-// sync liveness heartbeat (unix seconds). set at the top of each sync loop
-// iteration; watchdog thread aborts the process if it goes stale so fly
-// restarts us. zig 0.16 http.Client has no timeout, so a wedged HTTP call
-// would otherwise silently kill sync forever.
-var sync_heartbeat_s = std.atomic.Value(i64).init(0);
-var sync_interval_secs_atomic = std.atomic.Value(u64).init(300);
 
 /// Initialize Turso client only (fast, call synchronously at startup).
 /// Schema migrations run separately via initSchema() in the background thread
 /// so a slow/unreachable turso doesn't block the accept loop.
 pub fn initTurso(io: Io) !void {
     client = try Client.init(allocator, io);
-    sync_client = try Client.init(allocator, io);
 }
 
 /// Run schema migrations via zug. Call from background thread.
@@ -91,94 +81,13 @@ pub fn getLocalDbRaw() ?*LocalDb {
     return null;
 }
 
-/// Start background sync thread (call from main after db.init)
+/// Mark the local replica ready to serve. In-place Turso→replica sync was
+/// deleted (2026-06-26): the serving box's replica is refreshed only by
+/// verified snapshot adoption at boot, never by background data movement
+/// (the 2026-06-10 invariant). Kept as a named call so main.zig's startup
+/// sequence reads unchanged.
 pub fn startSync(io: Io) void {
-    // hard rule (2026-06-10): background data movement must never interrupt
-    // serving. until the snapshot-swap replica lands, in-place sync can be
-    // disabled entirely — stale-but-fast beats fresh-but-down.
-    if (std.c.getenv("SYNC_DISABLE") != null) {
-        std.debug.print("sync: DISABLED via SYNC_DISABLE — serving existing replica as-is\n", .{});
-        if (getLocalDbRaw()) |l| l.setReady(true);
-        return;
-    }
-    const c = if (sync_client) |*sc| sc else {
-        std.debug.print("sync: no sync client, skipping\n", .{});
-        return;
-    };
-    const local = getLocalDbRaw() orelse {
-        std.debug.print("sync: no local db, skipping\n", .{});
-        return;
-    };
-
-    const thread = std.Thread.spawn(.{}, syncLoop, .{ c, local, io }) catch |err| {
-        std.debug.print("sync: failed to start thread: {}\n", .{err});
-        return;
-    };
-    thread.detach();
-    std.debug.print("sync: background thread started\n", .{});
-
-    const watchdog = std.Thread.spawn(.{}, syncWatchdog, .{io}) catch |err| {
-        std.debug.print("sync: failed to start watchdog: {}\n", .{err});
-        return;
-    };
-    watchdog.detach();
-    std.debug.print("sync: watchdog thread started\n", .{});
-}
-
-fn nowSeconds(io: Io) i64 {
-    return @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
-}
-
-fn syncLoop(turso: *Client, local: *LocalDb, io: Io) void {
-    // get sync interval from env (default 5 minutes)
-    const interval_secs: u64 = blk: {
-        const env_val = if (std.c.getenv("SYNC_INTERVAL_SECS")) |p| std.mem.span(p) else "300";
-        break :blk std.fmt.parseInt(u64, env_val, 10) catch 300;
-    };
-    sync_interval_secs_atomic.store(interval_secs, .release);
-
-    // incremental sync on startup — gets new docs + cleans tombstoned deletions
-    // (falls back to full sync automatically if no last_sync exists, i.e., first boot)
-    sync_heartbeat_s.store(nowSeconds(io), .release);
-    sync.incrementalSync(turso, local) catch |err| {
-        std.debug.print("sync: initial sync failed: {}\n", .{err});
-    };
-
-    std.debug.print("sync: incremental sync every {d} seconds\n", .{interval_secs});
-
-    // periodic incremental sync
-    while (true) {
-        io.sleep(Io.Duration.fromSeconds(@intCast(interval_secs)), .awake) catch {};
-        // update heartbeat before each attempt; a hung HTTP call prevents the
-        // next iteration's update, which the watchdog will catch.
-        sync_heartbeat_s.store(nowSeconds(io), .release);
-        sync.incrementalSync(turso, local) catch |err| {
-            std.debug.print("sync: incremental sync failed: {}\n", .{err});
-        };
-    }
-}
-
-/// Watchdog: aborts the process if the sync loop hasn't updated its heartbeat
-/// within ~3x the configured sync interval. fly auto-restarts the machine.
-fn syncWatchdog(io: Io) void {
-    // wait for syncLoop to record its initial interval + heartbeat
-    io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
-
-    while (true) {
-        io.sleep(Io.Duration.fromSeconds(60), .awake) catch {};
-
-        const interval = sync_interval_secs_atomic.load(.acquire);
-        const heartbeat = sync_heartbeat_s.load(.acquire);
-        if (heartbeat == 0) continue; // not started yet
-
-        const now_s = nowSeconds(io);
-        const staleness_s: i64 = now_s - heartbeat;
-        const max_staleness_s: i64 = @intCast(interval * 3);
-
-        if (staleness_s > max_staleness_s) {
-            logfire.err("sync watchdog: heartbeat stale for {d}s (max {d}s) — aborting for restart", .{ staleness_s, max_staleness_s });
-            std.debug.print("sync watchdog: heartbeat stale for {d}s (max {d}s) — aborting for restart\n", .{ staleness_s, max_staleness_s });
-            std.process.exit(1);
-        }
-    }
+    _ = io;
+    if (getLocalDbRaw()) |l| l.setReady(true);
+    std.debug.print("sync: in-place sync removed — serving adopted snapshot as-is\n", .{});
 }
