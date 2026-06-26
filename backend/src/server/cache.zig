@@ -117,3 +117,46 @@ pub fn WindowedJsonCache(
         }
     };
 }
+
+// --- tests ---
+
+const TestSlot = enum { all };
+var test_refresh_calls: u32 = 0;
+
+fn testPreserveRefresh(slot: TestSlot, alloc: std.mem.Allocator) anyerror![]const u8 {
+    _ = slot;
+    _ = alloc;
+    test_refresh_calls += 1;
+    // first call succeeds; every later call fails — exercising the regression:
+    // a failed refresh must NOT replace the previously cached good body.
+    if (test_refresh_calls == 1) return "good";
+    return error.RefreshBoom;
+}
+
+test "WindowedJsonCache keeps the previous body when a refresh errors" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    const Cache = WindowedJsonCache(TestSlot, .{
+        .name = "test-preserve",
+        .refresh = &testPreserveRefresh,
+    });
+    test_refresh_calls = 0;
+    Cache.io_storage = threaded.io();
+
+    // first refresh succeeds → body is "good"
+    Cache.refreshSlot(.all);
+    {
+        const b = try Cache.snapshot(.all, std.testing.allocator);
+        defer if (b) |bb| std.testing.allocator.free(bb);
+        try std.testing.expectEqualStrings("good", b.?);
+    }
+
+    // second refresh errors → body must STILL be "good", not cleared/poisoned
+    Cache.refreshSlot(.all);
+    {
+        const b = try Cache.snapshot(.all, std.testing.allocator);
+        defer if (b) |bb| std.testing.allocator.free(bb);
+        try std.testing.expectEqualStrings("good", b.?);
+    }
+}

@@ -345,9 +345,12 @@ fn updateVerifiedAt(client: *db.Client, uri: []const u8) void {
     };
 }
 
-/// Mark a doc as bridgy-fed (excluded from all search paths). Bumps indexed_at so
-/// the local SQLite replica picks up the flag via incremental sync, and stamps
-/// verified_at so the doc leaves the reconcile queue.
+/// Mark a doc as bridgy-fed (excluded from all search paths) in Turso, the
+/// source of truth. Bumps indexed_at so the next snapshot build excludes it
+/// (the build is watermark-pinned on indexed_at and filters is_bridgyfed), and
+/// stamps verified_at so the doc leaves the reconcile queue. The serving
+/// replica is immutable between snapshot adoptions, so this is NOT visible
+/// in-place — it takes effect when the next snapshot is adopted.
 fn markBridgyfed(client: *db.Client, uri: []const u8) void {
     const ts: i64 = @intCast(@divFloor(Io.Timestamp.now(global_io.?, .real).nanoseconds, std.time.ns_per_s));
     const now = formatTimestamp(ts);

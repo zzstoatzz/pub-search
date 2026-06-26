@@ -4,7 +4,6 @@ primary_region = 'ewr'
 [build]
 
 [env]
-  SYNC_DISABLE = '1'
   ENABLE_SNAPSHOT_PROMOTE = '1'
   PROMOTE_CHANNEL = 'prod'
   TAP_HOST = 'leaflet-search-ingester.internal'

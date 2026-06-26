@@ -4,8 +4,10 @@
 > are live in production (snapshot builder → R2 → verified hourly adoption —
 > see [snapshot-pipeline.md](snapshot-pipeline.md) for the as-built system,
 > including the staleness/surgery model). Step 7 (otel error-path segfault)
-> also fixed. Still owed: live overlay (step 3), deleting in-place sync
-> (step 4), rowid-keyed FTS migration (step 5), then the big backfills
+> also fixed, and step 4 (deleting in-place sync) shipped 2026-06-26 — the
+> `incrementalSync`/`fullSync` code and its watchdog are gone, so the serving
+> replica is immutable by construction, not by an env flag. Still owed: live
+> overlay (step 3), rowid-keyed FTS migration (step 5), then the big backfills
 > (step 6). This doc remains the rationale of record for the invariants.
 
 Written 2026-06-10, after the cutover cascade (`retro-2026-06-10-cutover-cascade.md`).
@@ -65,8 +67,9 @@ firehose ──> ingester (verified, checkpointed) ──> backend worker ──
   watermark — hundreds, not thousands). Queries merge snapshot + overlay
   results. The overlay is dropped at each swap. Freshness ≈ firehose latency;
   snapshot cadence only bounds how big the overlay gets.
-- **In-place incremental sync is deleted**, not improved. `SYNC_DISABLE=1`
-  stays until the swap path exists, with off-box catch-up
+- **In-place incremental sync is deleted** (2026-06-26), not improved. The
+  swap path (verified snapshot adoption) is the only thing that refreshes the
+  replica; `SYNC_DISABLE` is gone from the code, with off-box catch-up
   (`scripts/offline-replica-catchup`) as the interim freshness mechanism.
 
 ## why this holds at 10x
@@ -90,7 +93,7 @@ firehose ──> ingester (verified, checkpointed) ──> backend worker ──
 2. **Snapshot builder productionized**: builder mode + R2 publish + verified
    swap in the backend. Cadence hourly to start.
 3. **Live overlay** for sub-hour freshness.
-4. **Delete in-place sync** (the code, not just the flag).
+4. **Delete in-place sync** (the code, not just the flag). ✅ done 2026-06-26.
 5. **rowid-keyed FTS migration** on turso (zug) — O(1) FTS maintenance for
    updates; prerequisite for backfill write volume.
 6. **Backfill** (drivepatents ~75k, courtdaemon, long tail): writes go to

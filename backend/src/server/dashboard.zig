@@ -367,9 +367,10 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     const searches = if (cached) |c| c.searches else 0;
     const started_at = if (cached) |c| c.started_at else 0;
     // freshness is turso-sourced via the stats cache. The local replica is
-    // snapshot-frozen (SYNC_DISABLE=1), so its MAX(indexed_at) reports the
-    // snapshot's age — stale by however long since the last adoption — and
-    // would show "last indexed" as long-ago even while ingestion is healthy.
+    // snapshot-frozen (in-place sync deleted; refreshed only by adoption), so
+    // its MAX(indexed_at) reports the snapshot's age — stale by however long
+    // since the last adoption — and would show "last indexed" as long-ago even
+    // while ingestion is healthy.
     const last_indexed_at = if (cached) |c| c.last_indexed_at else 0;
 
     // get document/publication/embedding counts from local (fast)

@@ -16,7 +16,7 @@
 - **backend** (Zig): HTTP API, FTS5 search, vector similarity; same binary runs as the snapshot builder under `BUILDER_MODE=1`
 - **ingester** (Zig): our own firehose consumer — verifies every commit (signature + MST diff via zat), drops bridgy/non-canonical repos, re-emits over a tap-compatible `/channel`
 - **site**: static frontend on Cloudflare Pages
-- **db**: Turso (source of truth) + local SQLite read replica (FTS queries; FROZEN — `SYNC_DISABLE=1` — refreshed by snapshot adoption, see docs/scaling-plan.md)
+- **db**: Turso (source of truth) + local SQLite read replica (FTS queries; FROZEN by construction — in-place sync deleted 2026-06-26 — refreshed only by snapshot adoption, see docs/scaling-plan.md)
 - **R2**: `leaflet-search-index` bucket for builder snapshots (`INDEX_R2_*` secrets on the backend app)
 
 ## platforms

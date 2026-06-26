@@ -277,11 +277,12 @@ fn handlePopular(request: *http.Server.Request, target: []const u8, io: Io) !voi
     const alloc = arena.allocator();
 
     const format = parseQueryParam(alloc, target, "format") catch "v1";
-    // background-refreshed snapshot; live only before the first refresh.
+    // background-refreshed snapshot; before the first fill, live-query and
+    // degrade to [] on a transient Turso failure (handler-only, never cached).
     const popular = if (PopularCache.snapshot(.all, alloc) catch null) |body|
         body
     else
-        try getPopular(alloc, 5);
+        getPopular(alloc, 5) catch "[]";
 
     if (mem.eql(u8, format, "v2")) {
         const wrapped = try wrapResponse(alloc, popular, "", "popular", 100, 0);
@@ -380,10 +381,11 @@ fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     var win_buf: [16]u8 = undefined;
     const window_str = std.fmt.bufPrint(&win_buf, "{d}", .{POPULAR_WINDOW_SECS}) catch "604800";
 
-    var res = c.query(PopularQuery.positional, &.{ window_str, limit_str }) catch {
-        try output.writer.writeAll("[]");
-        return try output.toOwnedSlice();
-    };
+    // Propagate query failures: the cache refresh path (refreshPopular) must
+    // see the error so WindowedJsonCache keeps the previous good body rather
+    // than poisoning it with [] for a full interval. Cold-start degradation to
+    // [] is handled at the handler call site, before the first cache fill.
+    var res = try c.query(PopularQuery.positional, &.{ window_str, limit_str });
     defer res.deinit();
 
     var jw: json.Stringify = .{ .writer = &output.writer };
