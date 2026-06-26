@@ -21,8 +21,8 @@
             .hash = "zqlite-0.0.1-RWLaY64xnAAxsD2YNT8QqPMJUuaFv2GOzFRR4aGypJv3",
         },
         .logfire = .{
-            .url = "https://tangled.sh/@zzstoatzz.io/logfire-zig/archive/v0.2.3.tar.gz",
-            .hash = "logfire_zig-0.2.3-x2yDLsGPAACLFXTQkcq_iYPKchfS45Ki8zghCPXFeiJm",
+            .url = "https://tangled.sh/@zzstoatzz.io/logfire-zig/archive/df76dac2b228945ab0a6954268cfe53d0e34a753.tar.gz",
+            .hash = "logfire_zig-0.2.4-x2yDLsGPAACfc3bIqty9Z2tMD0UlZI8pz74irecHRDDQ",
         },
         .zug = .{
             .url = "https://tangled.org/zzstoatzz.io/zug/archive/v0.1.1-alpha.0.tar.gz",
