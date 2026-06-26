@@ -97,13 +97,11 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
     _ = server;
     const target = request.head.target;
 
-    // cors preflight
     if (request.head.method == .OPTIONS) {
         try sendCorsHeaders(request, "");
         return;
     }
 
-    // extract path (before query string) for routing
     const path = if (mem.indexOf(u8, target, "?")) |qi| target[0..qi] else target;
 
     if (mem.startsWith(u8, path, "/search")) {

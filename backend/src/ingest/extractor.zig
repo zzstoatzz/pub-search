@@ -80,10 +80,8 @@ pub fn extractDocument(
     const record_val: json.Value = .{ .object = record };
     const platform = Platform.fromCollection(collection);
 
-    // extract required fields
     const title = zat.json.getString(record_val, "title") orelse return error.MissingTitle;
 
-    // extract optional fields
     const created_at = zat.json.getString(record_val, "publishedAt") orelse
         zat.json.getString(record_val, "createdAt");
 

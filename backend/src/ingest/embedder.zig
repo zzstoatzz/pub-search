@@ -65,11 +65,9 @@ fn worker(allocator: Allocator, api_key: []const u8, io: Io) void {
         if (processed > 0) {
             consecutive_errors = 0;
             logfire.counter("embedder.documents_processed", @intCast(processed));
-            // immediately check for more
             continue;
         }
 
-        // no work, sleep
         consecutive_errors = 0;
         io.sleep(Io.Duration.fromSeconds(@intCast(POLL_INTERVAL_SECS)), .awake) catch {};
     }

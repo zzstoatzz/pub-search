@@ -315,9 +315,7 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
         io.sleep(Io.Duration.fromMilliseconds(200), .awake) catch {};
     }
 
-    // batch delete from tpuf
     if (stale_ids.items.len > 0 and tpuf.isEnabled()) {
-        // build slice of pointers to the hashed IDs
         var id_ptrs = allocator.alloc([]const u8, stale_ids.items.len) catch {
             logfire.warn("reconcile: alloc failed for tpuf delete batch", .{});
             return .{ .verified = verified, .deleted = deleted };

@@ -27,9 +27,10 @@ documents, so our indexes can't collapse to capped point-lookups — but the
 5. **Every retry loop must shrink its work, never grow it.** (the 7-hour
    window)
 6. **A request may hang only as long as its timeout — and zig's http client
-   has none**, so until deadlines exist (blocked on the otel error-path
-   segfault), every remote call on a request path is a liability: cache it,
-   or serve from local state.
+   has none.** The otel error-path segfault that blocked adding deadlines was
+   fixed (2026-06-11), so timeouts are now possible; until they're wired onto
+   every request-path remote call, treat each as a liability: cache it, or
+   serve from local state.
 
 ## target architecture
 
@@ -59,7 +60,7 @@ firehose ──> ingester (verified, checkpointed) ──> backend worker ──
 - **Serving box**: downloads, verifies hash + schema + sentinels, attaches
   read-only, swaps atomically. Readers never coexist with a bulk writer.
   Rollback = keep the previous snapshot file.
-- **Live overlay**: between snapshots the backend's existing tap consumer also
+- **Live overlay**: between snapshots the backend's ingester-fed worker also
   writes fresh docs to a small overlay db (only rows newer than the snapshot
   watermark — hundreds, not thousands). Queries merge snapshot + overlay
   results. The overlay is dropped at each swap. Freshness ≈ firehose latency;
