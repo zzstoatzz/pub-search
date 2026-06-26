@@ -349,6 +349,14 @@ fn createSchema(self: *LocalDb) !void {
     // author query full-scans the whole documents table — 13s on /wrapped.
     c.exec("CREATE INDEX IF NOT EXISTS idx_documents_did ON documents(did)", .{}) catch {};
 
+    // index for the (did, rkey) publication join used by /wrapped, /subscribed,
+    // /subscribers. The join matches a publication to an at-uri by did+rkey
+    // PARSED out of the uri (collection-agnostic dual-write), so it can't use
+    // the `uri` PRIMARY KEY. Without this index every such join FULL-SCANS
+    // publications: one query is sub-ms cached, but 16 concurrent full-scans
+    // saturate the single vCPU → 45s (measured). With the index: 0.39s.
+    c.exec("CREATE INDEX IF NOT EXISTS idx_publications_did_rkey ON publications(did, rkey)", .{}) catch {};
+
     // sync metadata table
     c.exec(
         \\CREATE TABLE IF NOT EXISTS sync_meta (
