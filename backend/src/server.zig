@@ -24,6 +24,7 @@ pub const initCuratorsCache = curators.init;
 pub const initSubscribedCache = subscribed.init;
 pub const initDashboardCache = dashboard.initCache;
 pub const initTagsCache = TagsCache.init;
+pub const initPopularCache = PopularCache.init;
 
 const server_cache = @import("server/cache.zig");
 
@@ -39,6 +40,23 @@ fn refreshTags(slot: TagsSlot, alloc: Allocator) anyerror![]const u8 {
 const TagsCache = server_cache.WindowedJsonCache(TagsSlot, .{
     .name = "tags",
     .refresh = &refreshTags,
+    .interval_ms = 300_000,
+});
+
+/// /popular aggregates search_events live on Turso per request. search_events
+/// is a write-path table not carried in the frozen replica, so it can't be
+/// served locally — but a 7-day popular-query window tolerates minutes of
+/// staleness, so refresh it out of band like the leaderboards.
+const PopularSlot = enum { all };
+
+fn refreshPopular(slot: PopularSlot, alloc: Allocator) anyerror![]const u8 {
+    _ = slot;
+    return try getPopular(alloc, 5);
+}
+
+const PopularCache = server_cache.WindowedJsonCache(PopularSlot, .{
+    .name = "popular",
+    .refresh = &refreshPopular,
     .interval_ms = 300_000,
 });
 
@@ -259,7 +277,11 @@ fn handlePopular(request: *http.Server.Request, target: []const u8, io: Io) !voi
     const alloc = arena.allocator();
 
     const format = parseQueryParam(alloc, target, "format") catch "v1";
-    const popular = try getPopular(alloc, 5);
+    // background-refreshed snapshot; live only before the first refresh.
+    const popular = if (PopularCache.snapshot(.all, alloc) catch null) |body|
+        body
+    else
+        try getPopular(alloc, 5);
 
     if (mem.eql(u8, format, "v2")) {
         const wrapped = try wrapResponse(alloc, popular, "", "popular", 100, 0);
