@@ -587,6 +587,16 @@ fn truncateSql(sql: []const u8) []const u8 {
 }
 
 
+// remove a sqlite db file and its WAL/SHM sidecars (test helper)
+fn unlinkDbFiles(path: [:0]const u8) void {
+    _ = std.c.unlink(path.ptr);
+    var b: [80]u8 = undefined;
+    inline for (.{ "-wal", "-shm" }) |sfx| {
+        const z = std.fmt.bufPrintZ(&b, "{s}{s}", .{ path, sfx }) catch return;
+        _ = std.c.unlink(z.ptr);
+    }
+}
+
 test "read pool: concurrent nested queries never deadlock and never leak" {
     // Real OS threads contending for the pool, each running the NESTED pattern
     // (outer rows held open while inner queries run) that deadlocked a per-query
@@ -597,17 +607,21 @@ test "read pool: concurrent nested queries never deadlock and never leak" {
     defer threaded.deinit();
     const tio = threaded.io();
 
-    const zpath: [*:0]const u8 = "/tmp/leaflet-pool-concurrency.db";
-    _ = std.c.unlink(zpath);
+    // Per-process path + defer cleanup: never shares state with a concurrent
+    // run or a prior crashed run, and tidies up even if an assertion fails.
+    var path_buf: [64]u8 = undefined;
+    const zpath = std.fmt.bufPrintZ(&path_buf, "/tmp/leaflet-pool-{d}.db", .{std.c.getpid()}) catch unreachable;
+    unlinkDbFiles(zpath);
+    defer unlinkDbFiles(zpath);
     {
-        const w = try zqlite.open(zpath, zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+        const w = try zqlite.open(zpath.ptr, zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
         defer w.close();
         try w.exec("CREATE TABLE t(x INTEGER)", .{});
         try w.exec("INSERT INTO t(x) VALUES (1),(2),(3),(4),(5)", .{});
     }
 
     var ldb = LocalDb.init(std.testing.allocator, tio);
-    for (&ldb.read_pool) |*slot| slot.* = try zqlite.open(zpath, zqlite.OpenFlags.ReadOnly);
+    for (&ldb.read_pool) |*slot| slot.* = try zqlite.open(zpath.ptr, zqlite.OpenFlags.ReadOnly);
     defer for (&ldb.read_pool) |*slot| {
         if (slot.*) |c| c.close();
         slot.* = null;
@@ -643,14 +657,29 @@ test "read pool: concurrent nested queries never deadlock and never leak" {
 
     try std.testing.expectEqual(@as(u32, N), ok.load(.monotonic)); // all finished correctly
     for (ldb.read_in_use) |u| try std.testing.expect(!u); // every connection returned
-
-    _ = std.c.unlink(zpath);
 }
 
 test "adoptPending keeps previous snapshot and moves manifest sidecars" {
     const tio = std.Options.debug_io;
-    _ = std.c.mkdir("/tmp/leaflet-adopt-test", 0o755);
-    const base = "/tmp/leaflet-adopt-test/local.db";
+
+    // Per-process dir + defer cleanup: hermetic against concurrent runs, prior
+    // crashed runs, and assertion failures partway through this test.
+    var dir_buf: [64]u8 = undefined;
+    const dir = std.fmt.bufPrintZ(&dir_buf, "/tmp/leaflet-adopt-{d}", .{std.c.getpid()}) catch unreachable;
+    _ = std.c.mkdir(dir.ptr, 0o755);
+    const jp = struct {
+        fn f(buf: []u8, d: []const u8, suffix: []const u8) [:0]const u8 {
+            return std.fmt.bufPrintZ(buf, "{s}/local.db{s}", .{ d, suffix }) catch unreachable;
+        }
+    }.f;
+    defer {
+        var b: [160]u8 = undefined;
+        inline for (.{ "", ".new", ".prev", ".manifest.json", ".new.manifest.json", ".prev.manifest.json" }) |sfx| {
+            _ = std.c.unlink(jp(&b, dir, sfx).ptr);
+        }
+        _ = std.c.rmdir(dir.ptr);
+    }
+    var pb: [160]u8 = undefined; // paths are used sequentially, so one reused buffer is safe
 
     const writeStr = struct {
         fn f(io_: Io, path: []const u8, content: []const u8) !void {
@@ -674,27 +703,20 @@ test "adoptPending keeps previous snapshot and moves manifest sidecars" {
         }
     }.f;
 
-    try writeStr(tio, base, "OLD");
-    try writeStr(tio, base ++ ".manifest.json", "{\"old\":1}");
-    try writeStr(tio, base ++ ".new", "NEW");
-    try writeStr(tio, base ++ ".new.manifest.json", "{\"new\":1}");
+    try writeStr(tio, jp(&pb, dir, ""), "OLD");
+    try writeStr(tio, jp(&pb, dir, ".manifest.json"), "{\"old\":1}");
+    try writeStr(tio, jp(&pb, dir, ".new"), "NEW");
+    try writeStr(tio, jp(&pb, dir, ".new.manifest.json"), "{\"new\":1}");
 
-    adoptPending(base);
+    adoptPending(jp(&pb, dir, ""));
 
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("NEW", try readStr(tio, base, &buf));
-    try std.testing.expectEqualStrings("OLD", try readStr(tio, base ++ ".prev", &buf));
-    try std.testing.expectEqualStrings("{\"new\":1}", try readStr(tio, base ++ ".manifest.json", &buf));
-    try std.testing.expectEqualStrings("{\"old\":1}", try readStr(tio, base ++ ".prev.manifest.json", &buf));
+    try std.testing.expectEqualStrings("NEW", try readStr(tio, jp(&pb, dir, ""), &buf));
+    try std.testing.expectEqualStrings("OLD", try readStr(tio, jp(&pb, dir, ".prev"), &buf));
+    try std.testing.expectEqualStrings("{\"new\":1}", try readStr(tio, jp(&pb, dir, ".manifest.json"), &buf));
+    try std.testing.expectEqualStrings("{\"old\":1}", try readStr(tio, jp(&pb, dir, ".prev.manifest.json"), &buf));
 
     // .new is consumed
-    const fd = std.c.open(base ++ ".new", .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    const fd = std.c.open(jp(&pb, dir, ".new").ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
     try std.testing.expect(fd < 0);
-
-    // cleanup so reruns start fresh
-    inline for (.{ base, base ++ ".prev", base ++ ".manifest.json", base ++ ".prev.manifest.json" }) |path| {
-        var zbuf: [128]u8 = undefined;
-        const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{path}) catch unreachable;
-        _ = std.c.unlink(z.ptr);
-    }
 }
