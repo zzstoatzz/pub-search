@@ -3,6 +3,7 @@ const Io = std.Io;
 const logfire = @import("logfire");
 const policy = @import("../policy.zig");
 const db = @import("../db.zig");
+const pubkey = @import("../server/pubkey.zig");
 
 fn isHttpUrl(s: []const u8) bool {
     return std.mem.startsWith(u8, s, "https://") or std.mem.startsWith(u8, s, "http://");
@@ -450,17 +451,25 @@ pub fn insertSubscription(
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
+    // materialized join key (see pubkey.joinOnStored); parsed once at write time
+    // so the publication join is a sargable indexed equijoin.
+    const parsed = pubkey.parse(publication_uri);
+    const pub_did = if (parsed) |p| p.did else "";
+    const pub_rkey = if (parsed) |p| p.rkey else "";
+
     try c.exec(
-        \\INSERT INTO subscriptions (uri, did, rkey, publication_uri, created_at, indexed_at)
-        \\VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        \\INSERT INTO subscriptions (uri, did, rkey, publication_uri, publication_did, publication_rkey, created_at, indexed_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         \\ON CONFLICT(uri) DO UPDATE SET
         \\  did = excluded.did,
         \\  rkey = excluded.rkey,
         \\  publication_uri = excluded.publication_uri,
+        \\  publication_did = excluded.publication_did,
+        \\  publication_rkey = excluded.publication_rkey,
         \\  created_at = excluded.created_at,
         \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
     ,
-        &.{ uri, did, rkey, publication_uri, created_at orelse "" },
+        &.{ uri, did, rkey, publication_uri, pub_did, pub_rkey, created_at orelse "" },
     );
 }
 

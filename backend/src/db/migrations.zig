@@ -354,6 +354,25 @@ pub const migrations = [_]zug.Migration{
         \\);
         ,
     },
+    .{
+        .id = "019_subscriptions_pubkey_columns",
+        .name = "materialize (publication_did, publication_rkey) on subscriptions for a sargable publication join",
+        // The publication join matched on the (did, rkey) PARSED out of
+        // publication_uri per row (pubkey.joinOn), which defeated every index and
+        // made a 621-publication publisher full-scan the whole subscriptions table
+        // per publication. Store the parsed key once and index it so the join is
+        // an indexed equijoin (pubkey.joinOnStored). The backfill uses the same
+        // substr/instr decode the read-side expressions used.
+        .sql =
+        \\ALTER TABLE subscriptions ADD COLUMN publication_did TEXT;
+        \\ALTER TABLE subscriptions ADD COLUMN publication_rkey TEXT;
+        \\UPDATE subscriptions SET
+        \\  publication_did = substr(publication_uri, 6, instr(substr(publication_uri, 6), '/') - 1),
+        \\  publication_rkey = substr(substr(substr(publication_uri, 6), instr(substr(publication_uri, 6), '/') + 1), instr(substr(substr(publication_uri, 6), instr(substr(publication_uri, 6), '/') + 1), '/') + 1)
+        \\  WHERE publication_did IS NULL AND publication_uri LIKE 'at://%/%/%';
+        \\CREATE INDEX IF NOT EXISTS idx_subscriptions_pub_did_rkey ON subscriptions(publication_did, publication_rkey);
+        ,
+    },
 };
 
 // --- tests ---

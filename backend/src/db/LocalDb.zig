@@ -6,6 +6,7 @@ const Io = std.Io;
 const zqlite = @import("zqlite");
 const Allocator = std.mem.Allocator;
 const logfire = @import("logfire");
+const pubkey = @import("../server/pubkey.zig");
 
 const LocalDb = @This();
 
@@ -434,6 +435,20 @@ fn createSchema(self: *LocalDb) !void {
     addColumnIfMissing(c, "documents", "is_bridgyfed", "INTEGER DEFAULT 0");
     addColumnIfMissing(c, "documents", "url_dead", "INTEGER DEFAULT 0");
     addColumnIfMissing(c, "publications", "indexed_at", "TEXT");
+
+    // Materialized (did, rkey) for subscriptions so the publication join is a
+    // sargable indexed equijoin instead of parsing publication_uri per row (see
+    // pubkey.joinOnStored). createSchema runs at every boot before serving, so
+    // backfilling here makes the columns correct on the currently-adopted
+    // snapshot immediately — no multi-step rollout. New rows are populated at
+    // build time (sync.zig); this UPDATE only touches rows still NULL.
+    addColumnIfMissing(c, "subscriptions", "publication_did", "TEXT");
+    addColumnIfMissing(c, "subscriptions", "publication_rkey", "TEXT");
+    const sub_backfill_sql = comptime "UPDATE subscriptions SET publication_did = " ++ pubkey.didExpr("publication_uri") ++
+        ", publication_rkey = " ++ pubkey.rkeyExpr("publication_uri") ++
+        " WHERE publication_did IS NULL AND publication_uri LIKE 'at://%/%/%'";
+    c.exec(sub_backfill_sql, .{}) catch |err| std.debug.print("local db: subscriptions pubkey backfill failed: {}\n", .{err});
+    c.exec("CREATE INDEX IF NOT EXISTS idx_subscriptions_pub_did_rkey ON subscriptions(publication_did, publication_rkey)", .{}) catch {};
 }
 
 fn hasColumn(c: zqlite.Conn, table: []const u8, column: []const u8) bool {

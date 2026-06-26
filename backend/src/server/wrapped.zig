@@ -209,7 +209,7 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
             \\SELECT COUNT(DISTINCT p.uri), COUNT(DISTINCT s.did)
             \\FROM publications p
             \\LEFT JOIN subscriptions s ON
-        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+        ++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
             \\WHERE p.did = ?
         , .{did});
         defer rows.deinit();
@@ -228,7 +228,7 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
                 \\SELECT COUNT(*) FROM (
                 \\  SELECT p.did
                 \\  FROM subscriptions s JOIN publications p ON
-            ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+            ++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
                 \\  GROUP BY p.did
                 \\)
             , .{});
@@ -241,13 +241,13 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
                 \\SELECT COUNT(*) + 1 FROM (
                 \\  SELECT p.did AS owner, COUNT(DISTINCT s.did) AS subs
                 \\  FROM subscriptions s JOIN publications p ON
-            ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+            ++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
                 \\  GROUP BY p.did
                 \\) t
                 \\WHERE t.subs > (
                 \\  SELECT COUNT(DISTINCT s2.did)
                 \\  FROM subscriptions s2 JOIN publications p2 ON
-            ++ " " ++ pubkey.joinOn("p2", "s2.publication_uri") ++ "\n" ++
+            ++ " " ++ pubkey.joinOnStored("p2", "s2") ++ "\n" ++
                 \\  WHERE p2.did = ?
                 \\)
             , .{did});
@@ -263,7 +263,7 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
             \\SELECT p.uri, COALESCE(p.name, ''), COALESCE(p.base_path, ''),
             \\  COUNT(DISTINCT s.did) AS subs
             \\FROM publications p JOIN subscriptions s ON
-        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+        ++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
             \\WHERE p.did = ?
             \\GROUP BY p.uri
             \\ORDER BY subs DESC, p.name
@@ -350,7 +350,7 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
             \\SELECT COUNT(DISTINCT p.uri),
             \\  COALESCE(MIN(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)), '')
             \\FROM subscriptions s JOIN publications p ON
-        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+        ++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
             \\WHERE s.did = ?
         , .{did});
         defer rows.deinit();
@@ -366,7 +366,7 @@ pub fn fetch(alloc: Allocator, did: []const u8) ![]const u8 {
         var rows = try local.query(
             \\SELECT p.uri, p.did, COALESCE(p.name, ''), COALESCE(p.base_path, '')
             \\FROM subscriptions s JOIN publications p ON
-        ++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+        ++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
             \\WHERE s.did = ?
             \\GROUP BY p.uri
             \\ORDER BY MAX(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)) DESC

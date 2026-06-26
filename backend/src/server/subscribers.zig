@@ -47,7 +47,7 @@ const ByOwnerQuery = zql.Query(
     \\  MAX(COALESCE(NULLIF(s.created_at, ''), s.indexed_at)) AS subscribed_at
     \\FROM subscriptions s
     \\JOIN publications p ON
-++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
     \\WHERE p.did = ?
     \\GROUP BY s.did
     \\ORDER BY subscribed_at DESC

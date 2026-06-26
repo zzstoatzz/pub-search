@@ -69,7 +69,7 @@ const PublicationsQuery = zql.Query(
     \\  COUNT(DISTINCT s.did) AS total_count
     \\FROM subscriptions s
     \\JOIN publications p ON
-++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
     \\GROUP BY p.uri
     \\HAVING subscriber_count > 0
     \\ORDER BY subscriber_count DESC, p.name
@@ -89,7 +89,7 @@ const PeopleQuery = zql.Query(
     \\  COUNT(DISTINCT p.uri) AS pub_count
     \\FROM subscriptions s
     \\JOIN publications p ON
-++ " " ++ pubkey.joinOn("p", "s.publication_uri") ++ "\n" ++
+++ " " ++ pubkey.joinOnStored("p", "s") ++ "\n" ++
     \\GROUP BY p.did
     \\HAVING subscriber_count > 0
     \\ORDER BY subscriber_count DESC, total_count DESC

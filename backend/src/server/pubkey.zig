@@ -49,11 +49,25 @@ pub fn rkeyExpr(comptime uri_col: []const u8) []const u8 {
 }
 
 /// SQL `ON` predicate matching publication alias `<pub>` to the at-uri in
-/// `<uri_col>` by (did, rkey) — collection-agnostic. Uses the UNIQUE(did, rkey)
-/// index for the lookup.
+/// `<uri_col>` by (did, rkey) — collection-agnostic, by PARSING the uri per row.
+/// Non-sargable: the parse defeats any index on the uri side, so the join
+/// full-scans. Kept only for callers without the materialized columns; prefer
+/// `joinOnStored` against tables that carry `publication_did/_rkey`.
 pub fn joinOn(comptime pub_alias: []const u8, comptime uri_col: []const u8) []const u8 {
     return pub_alias ++ ".did = " ++ didExpr(uri_col) ++
         " AND " ++ pub_alias ++ ".rkey = " ++ rkeyExpr(uri_col);
+}
+
+/// SQL `ON` predicate matching publication alias `<pub>` to a subscriptions
+/// (or recommends) alias `<sub>` via the MATERIALIZED `publication_did` /
+/// `publication_rkey` columns — a sargable indexed equijoin. This is the same
+/// (did, rkey) `joinOn` computes at read time, but parsed once at write/build
+/// time and indexed (idx_subscriptions_pub_did_rkey), so a publisher with 621
+/// publications does index seeks instead of full-scanning 8923 subscriptions
+/// per publication (45s → 0.39s at 16-way, measured).
+pub fn joinOnStored(comptime pub_alias: []const u8, comptime sub_alias: []const u8) []const u8 {
+    return pub_alias ++ ".did = " ++ sub_alias ++ ".publication_did" ++
+        " AND " ++ pub_alias ++ ".rkey = " ++ sub_alias ++ ".publication_rkey";
 }
 
 test "parse decodes did + rkey from an at-uri" {

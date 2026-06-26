@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const Client = @import("Client.zig");
 const LocalDb = @import("LocalDb.zig");
 const policy = @import("../policy.zig");
+const pubkey = @import("../server/pubkey.zig");
 
 const BATCH_SIZE = 500;
 
@@ -392,6 +393,14 @@ pub fn buildSnapshot(turso: *Client, local: *LocalDb, watermark: []const u8) !Bu
             counts.subscriptions += 1;
         }
         conn.exec("COMMIT", .{}) catch {};
+
+        // Ship snapshots with the materialized join key already populated so a
+        // freshly-adopted replica is fast on first query (createSchema's boot
+        // backfill is the safety net for older snapshots). See pubkey.joinOnStored.
+        const sub_backfill_sql = comptime "UPDATE subscriptions SET publication_did = " ++ pubkey.didExpr("publication_uri") ++
+            ", publication_rkey = " ++ pubkey.rkeyExpr("publication_uri") ++
+            " WHERE publication_did IS NULL AND publication_uri LIKE 'at://%/%/%'";
+        conn.exec(sub_backfill_sql, .{}) catch {};
     }
 
     {
