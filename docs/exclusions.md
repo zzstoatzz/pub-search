@@ -90,3 +90,22 @@ cleanup after a ban (the stores that don't self-heal):
   authorship, owns a topic's semantic results). NHTSA's database is tens
   of thousands of recalls; trajectory said drivepatents-scale within days
 - **cleanup**: this ban (see git history for execution)
+
+### did:plc:llnmp5t7s3u4dzjqyhp76h62 — crownnote.com
+
+- **banned**: 2026-06-29
+- **what**: music-charts website (Kworb-style) auto-exporting its entire
+  site to ATProto — one `site.standard.publication` per user/chart page
+  (`/users/<name>`, `/charts/<name>`) and one `site.standard.document` per
+  daily chart. Records carry `content: null` and a templated description
+  ("A Crownnote album chart by <user> from <date>, with '<track>' at #1").
+- **evidence at ban time**: 4,801 docs across 628 publications =
+  **~12% of the 39,882-doc corpus**, all since 2026-06-14 (~300/day, bursts
+  of ~950); `charts` keyword query returned 5/10 from this DID; **0
+  recommends, 0 subscriptions** to any of its publications. Hosted on a
+  genuine bsky PDS (stinkhorn.us-west.host.bsky.network), validly signed.
+- **call**: same class as drivepatents/destinationcharged — registry mirror,
+  zero human authorship, owns a topic's results, no curation signal lost.
+  Surfaced as the 621-publication `/wrapped` latency outlier earlier the
+  same session — the latency anomaly was the first symptom of the ramp.
+- **cleanup**: this ban (see git history for execution)

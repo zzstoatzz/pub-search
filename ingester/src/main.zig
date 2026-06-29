@@ -39,6 +39,7 @@ const BANNED_DIDS = [_][]const u8{
     // registry of who/why: docs/exclusions.md (mirror of backend policy.zig)
     "did:plc:oql6ds5vnff4ugar6rruliwd", // drivepatents.com
     "did:plc:2s32mlusc66sjb256aenynfc", // destinationcharged.com NHTSA recall mirror
+    "did:plc:llnmp5t7s3u4dzjqyhp76h62", // crownnote.com music-charts mirror
 };
 
 fn isBanned(did: []const u8) bool {

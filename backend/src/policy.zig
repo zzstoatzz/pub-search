@@ -13,6 +13,7 @@ pub const BANNED_DIDS = [_][]const u8{
     // scripts/purge-banned-turso + purge-bridgyfed-vectors.
     "did:plc:oql6ds5vnff4ugar6rruliwd", // drivepatents.com patent bot
     "did:plc:2s32mlusc66sjb256aenynfc", // destinationcharged.com NHTSA recall mirror
+    "did:plc:llnmp5t7s3u4dzjqyhp76h62", // crownnote.com music-charts mirror
 };
 
 pub fn isBanned(did: []const u8) bool {
@@ -34,12 +35,13 @@ pub const banned_dids_sql = blk: {
 test "isBanned matches only the banned list" {
     try std.testing.expect(isBanned("did:plc:oql6ds5vnff4ugar6rruliwd"));
     try std.testing.expect(isBanned("did:plc:2s32mlusc66sjb256aenynfc"));
+    try std.testing.expect(isBanned("did:plc:llnmp5t7s3u4dzjqyhp76h62"));
     try std.testing.expect(!isBanned("did:plc:ragtjsm2j2vknwkz3zp4oxrd"));
 }
 
 test "banned_dids_sql is a quoted comma-separated list" {
     try std.testing.expectEqualStrings(
-        "'did:plc:oql6ds5vnff4ugar6rruliwd','did:plc:2s32mlusc66sjb256aenynfc'",
+        "'did:plc:oql6ds5vnff4ugar6rruliwd','did:plc:2s32mlusc66sjb256aenynfc','did:plc:llnmp5t7s3u4dzjqyhp76h62'",
         banned_dids_sql,
     );
 }
