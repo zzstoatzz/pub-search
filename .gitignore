@@ -15,3 +15,7 @@ zig-pkg/
 .codex/
 __pycache__/
 site/atlas-theme-cache.json
+
+# staged copies of the repo-root banned-dids.txt (deploy-time only)
+/backend/banned-dids.txt
+/ingester/banned-dids.txt

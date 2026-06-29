@@ -14,6 +14,10 @@ RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_V
     && ln -s /usr/local/zig-x86_64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig
 
 WORKDIR /app
+# shared single source of truth, staged into the build context by CI (it lives
+# at the repo root, outside this dir's context). build.zig embeds it via
+# ../banned-dids.txt, which resolves to /banned-dids.txt from WORKDIR /app.
+COPY banned-dids.txt /banned-dids.txt
 COPY build.zig build.zig.zon ./
 COPY scripts ./scripts
 COPY src ./src
