@@ -6,15 +6,27 @@
 
 const std = @import("std");
 
-/// Bulk-archive repos that never enter the corpus (purged 2026-06-10).
-pub const BANNED_DIDS = [_][]const u8{
-    // registry of who/why/evidence: docs/exclusions.md — every entry here
-    // must have one there. mirror changes into ingester/src/main.zig and
-    // scripts/purge-banned-turso + purge-bridgyfed-vectors.
-    "did:plc:oql6ds5vnff4ugar6rruliwd", // drivepatents.com patent bot
-    "did:plc:2s32mlusc66sjb256aenynfc", // destinationcharged.com NHTSA recall mirror
-    "did:plc:llnmp5t7s3u4dzjqyhp76h62", // crownnote.com music-charts mirror
-};
+/// Bulk-archive repos that never enter the corpus. The list is the single
+/// source of truth in `/banned-dids.txt` (repo root), wired in via build.zig
+/// and parsed here at comptime. Registry of who/why/evidence: docs/exclusions.md.
+pub const BANNED_DIDS = parseBannedDids(@embedFile("banned_dids"));
+
+/// Parse the shared banned-dids.txt: one DID per line, '#' starts a comment
+/// (whole-line or inline), blank lines ignored.
+fn parseBannedDids(comptime data: []const u8) []const []const u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var list: []const []const u8 = &.{};
+        var lines = std.mem.splitScalar(u8, data, '\n');
+        while (lines.next()) |raw| {
+            const code = if (std.mem.indexOfScalar(u8, raw, '#')) |h| raw[0..h] else raw;
+            const did = std.mem.trim(u8, code, " \t\r");
+            if (did.len == 0) continue;
+            list = list ++ &[_][]const u8{did};
+        }
+        return list;
+    }
+}
 
 pub fn isBanned(did: []const u8) bool {
     for (BANNED_DIDS) |banned| {

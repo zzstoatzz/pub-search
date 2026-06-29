@@ -25,6 +25,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // shared single source of truth for banned DIDs (repo root); embedded at
+    // comptime by main.zig. see banned-dids.txt + backend/src/policy.zig.
+    const banned_dids_mod = b.createModule(.{ .root_source_file = b.path("../banned-dids.txt") });
+    exe.root_module.addImport("banned_dids", banned_dids_mod);
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -43,6 +48,7 @@ pub fn build(b: *std.Build) void {
             .imports = imports,
         }),
     });
+    unit_tests.root_module.addImport("banned_dids", banned_dids_mod);
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);

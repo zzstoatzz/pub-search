@@ -21,6 +21,7 @@ Usage:
 import argparse
 import asyncio
 import os
+import pathlib
 import sys
 import time
 
@@ -175,13 +176,14 @@ async def main():
     if not args.apply:
         log("=== DRY RUN (pass --apply to delete) ===\n")
 
-    # banned bulk-archive bots — purged unconditionally (mirrors the ingester's
-    # BANNED_DIDS list)
-    # registry of who/why: docs/exclusions.md (mirror of backend policy.zig)
+    # banned bulk-archive bots — purged unconditionally. Single source of truth:
+    # /banned-dids.txt at the repo root (shared with policy.zig + ingester).
+    # registry of who/why/evidence: docs/exclusions.md
+    banned_path = pathlib.Path(__file__).resolve().parent.parent / "banned-dids.txt"
     banned = {
-        "did:plc:oql6ds5vnff4ugar6rruliwd",  # drivepatents.com
-        "did:plc:2s32mlusc66sjb256aenynfc",  # destinationcharged.com NHTSA recall mirror
-        "did:plc:llnmp5t7s3u4dzjqyhp76h62",  # crownnote.com music-charts mirror
+        did
+        for line in banned_path.read_text().splitlines()
+        if (did := line.split("#", 1)[0].strip())
     }
 
     sync_client = httpx.Client()

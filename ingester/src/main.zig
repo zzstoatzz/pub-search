@@ -33,14 +33,26 @@ const COLLECTIONS = [_][]const u8{
     "com.whtwnd.blog.entry",
 };
 
-// banned repos: bulk-archive bots that flooded the corpus (96k+ automotive
-// patents, ~44%+ of all docs). decision 2026-06-10: purge and ban entirely.
-const BANNED_DIDS = [_][]const u8{
-    // registry of who/why: docs/exclusions.md (mirror of backend policy.zig)
-    "did:plc:oql6ds5vnff4ugar6rruliwd", // drivepatents.com
-    "did:plc:2s32mlusc66sjb256aenynfc", // destinationcharged.com NHTSA recall mirror
-    "did:plc:llnmp5t7s3u4dzjqyhp76h62", // crownnote.com music-charts mirror
-};
+// banned repos: bulk-archive bots that flood the corpus. Single source of
+// truth is /banned-dids.txt (repo root), shared with backend/src/policy.zig
+// and scripts/purge-*; wired in via build.zig, parsed here at comptime.
+// registry of who/why/evidence: docs/exclusions.md.
+const BANNED_DIDS = parseBannedDids(@embedFile("banned_dids"));
+
+fn parseBannedDids(comptime data: []const u8) []const []const u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var list: []const []const u8 = &.{};
+        var lines = std.mem.splitScalar(u8, data, '\n');
+        while (lines.next()) |raw| {
+            const code = if (std.mem.indexOfScalar(u8, raw, '#')) |h| raw[0..h] else raw;
+            const did = std.mem.trim(u8, code, " \t\r");
+            if (did.len == 0) continue;
+            list = list ++ &[_][]const u8{did};
+        }
+        return list;
+    }
+}
 
 fn isBanned(did: []const u8) bool {
     for (BANNED_DIDS) |b| {

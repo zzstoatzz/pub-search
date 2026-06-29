@@ -1,0 +1,17 @@
+# Banned DIDs — the single source of truth for corpus exclusions.
+#
+# Registry of who/when/why/evidence: docs/exclusions.md (every DID here MUST
+# have an entry there).
+#
+# Consumed by:
+#   - backend/src/policy.zig      (comptime @embedFile -> isBanned / banned_dids_sql)
+#   - ingester/src/main.zig       (comptime @embedFile -> firehose drop)
+#   - scripts/purge-banned-turso  (runtime read)
+#   - scripts/purge-bridgyfed-vectors (runtime read)
+#
+# Format: one DID per line. Blank lines and lines starting with '#' are
+# ignored; an inline '# comment' after the DID is allowed.
+
+did:plc:oql6ds5vnff4ugar6rruliwd  # drivepatents.com patent bot
+did:plc:2s32mlusc66sjb256aenynfc  # destinationcharged.com NHTSA recall mirror
+did:plc:llnmp5t7s3u4dzjqyhp76h62  # crownnote.com music-charts mirror
