@@ -114,6 +114,15 @@
       margin-bottom: 0.4rem; letter-spacing: -0.01em;
     }
     .entry .sub { color: var(--text-secondary); margin-bottom: 1.25rem; }
+
+    /* freshness note: this digest is served from a periodic snapshot, so very
+       recent activity lags. derived live from /snapshot's source_watermark. */
+    .freshness {
+      margin-top: 1.5rem; text-align: center;
+      color: var(--text-secondary); font-size: 12px; opacity: 0.65;
+      line-height: 1.4;
+    }
+    .freshness .dot { color: var(--accent); }
     .entry form { display: flex; gap: 0.5rem; }
     .entry .ta-wrap { position: relative; flex: 1; min-width: 0; }
     .entry input {
@@ -789,12 +798,37 @@
           publisherCard(data.publisher || {}) +
           curatorCard(data.curator || {}) +
           readerCard(data.reader || {}) +
-        '</div>';
+        '</div>' +
+        '<div class="freshness" id="freshness"></div>';
       animateCounts();
       applyHoods(); // who-hoods element now exists (re-applied when atlas-mini loads)
       resolveAvatars(did);
       fetchSubscribers(did);
       fetchRecommendedDocs(did);
+      fetchFreshness();
+    }
+
+    // the digest is served from a periodic snapshot of the index, so activity
+    // newer than the snapshot's watermark isn't reflected yet. surface that age
+    // honestly rather than let people wonder why today's recommend is missing.
+    function fetchFreshness() {
+      var el = document.getElementById('freshness');
+      if (!el) return;
+      fetch(API_BASE + '/snapshot')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(m) {
+          if (!m || !m.source_watermark) return;
+          // source_watermark is UTC, stamped without a zone — pin it to Z.
+          var t = new Date(m.source_watermark.replace(' ', 'T') + 'Z');
+          if (isNaN(t.getTime())) return;
+          var mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+          var ago = mins < 60 ? (mins + ' min') :
+                    mins < 1440 ? (Math.round(mins / 60) + ' hr') :
+                    (Math.round(mins / 1440) + ' day');
+          el.innerHTML = '<span class="dot">↻</span> reflects activity through ~' + ago +
+            ' ago · brand-new posts &amp; recommends can take a little while to land here';
+        })
+        .catch(function() {});
     }
 
     // ----- publisher: the sea of actual subscribers ---------------------

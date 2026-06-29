@@ -54,11 +54,13 @@ cleanup after a ban (the stores that don't self-heal):
 5. verify: semantic query for the author's topic, `/snapshot` after next
    adopt, atlas point count
 
-> automation debt, acknowledged: the list lives in four places (two
-> languages) and propagation needs a deploy. if the cadence of bans picks
-> up, the next step is a single source of truth (a `banned_dids` table in
-> turso + runtime checks + builder reads it), which also makes bans a
-> data change instead of a deploy. not worth it at n=2.
+> single source of truth (2026-06-29): the DID list lives once in
+> `/banned-dids.txt` at the repo root. Zig (backend + ingester) `@embedFile`s
+> it at comptime via build.zig; the purge scripts read it at runtime. Adding a
+> ban = editing one file (+ a registry entry here). Propagation still needs a
+> deploy (the list is compiled in); the eventual next step, if bans get
+> frequent, is a `banned_dids` turso table read at runtime so a ban becomes a
+> data change instead of a deploy.
 
 ## the registry
 
