@@ -61,10 +61,15 @@ pub const Sort = enum {
     top,
     /// recommends-per-day-since-publish — surfaces recent velocity, not raw size.
     trending,
+    /// most-recently recommended first. For the curator filter this is the
+    /// curator's OWN recommend time (when THEY recommended it); for author /
+    /// unfiltered it's the doc's latest recommend by anyone.
+    recent,
 
     pub fn fromString(s: ?[]const u8) Sort {
         const str = s orelse return .top;
         if (std.mem.eql(u8, str, "trending")) return .trending;
+        if (std.mem.eql(u8, str, "recent")) return .recent;
         return .top;
     }
 
@@ -231,6 +236,80 @@ const TrendingByCuratorQuery = zql.Query(
     \\LIMIT 250
 );
 
+// Recency variants: same projection as their Top counterparts, ordered by
+// when the recommend happened rather than how many it has. Keeps the section
+// labeled "recent" honest. ORDER BY only — no new outer column, so the
+// comptime column-projection assertion still holds.
+
+// unfiltered: doc's latest recommend by anyone. `last_reco` lives in the agg
+// subquery (internal), not the outer projection.
+const RecentQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  agg.recommend_count AS recommend_count,
+    \\  agg.total_count AS total_count
+    \\FROM (
+    \\  SELECT document_uri,
+    \\    COUNT(DISTINCT CASE
+    \\      WHEN DATE(COALESCE(NULLIF(created_at, ''), indexed_at)) >= DATE('now', ?)
+    \\      THEN did END) AS recommend_count,
+    \\    COUNT(DISTINCT did) AS total_count,
+    \\    MAX(COALESCE(NULLIF(created_at, ''), indexed_at)) AS last_reco
+    \\  FROM recommends
+    \\  GROUP BY document_uri
+    \\  HAVING recommend_count > 0
+    \\) agg
+    \\JOIN documents d ON d.uri = agg.document_uri
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\ORDER BY agg.last_reco DESC, d.created_at DESC
+    \\LIMIT 250
+);
+
+// author-filtered: docs they wrote, by latest recommend received.
+const RecentByAuthorQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\WHERE d.did = ?
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY MAX(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) DESC, d.created_at DESC
+    \\LIMIT 250
+);
+
+// curator-filtered: docs THEY recommended, ordered by when THEY recommended
+// them (the CASE picks this curator's own recommend rows out of the join).
+// Params, in textual order: (1) window date-mod, (2) curator for EXISTS,
+// (3) curator for the ORDER BY CASE.
+const RecentByCuratorQuery = zql.Query(
+    \\SELECT d.uri, d.did, d.title, COALESCE(d.created_at, '') AS created_at,
+    \\  d.rkey, COALESCE(d.base_path, '') AS base_path, d.platform,
+    \\  COALESCE(d.path, '') AS path, d.has_publication,
+    \\  COALESCE(p.name, '') AS publication_name,
+    \\  COUNT(DISTINCT CASE
+    \\    WHEN DATE(COALESCE(NULLIF(r.created_at, ''), r.indexed_at)) >= DATE('now', ?)
+    \\    THEN r.did END) AS recommend_count,
+    \\  COUNT(DISTINCT r.did) AS total_count
+    \\FROM documents d
+    \\LEFT JOIN publications p ON d.publication_uri = p.uri
+    \\JOIN recommends r ON r.document_uri = d.uri
+    \\WHERE EXISTS (SELECT 1 FROM recommends r2 WHERE r2.document_uri = d.uri AND r2.did = ?)
+    \\GROUP BY d.uri
+    \\HAVING recommend_count > 0
+    \\ORDER BY MAX(CASE WHEN r.did = ? THEN COALESCE(NULLIF(r.created_at, ''), r.indexed_at) END) DESC, d.created_at DESC
+    \\LIMIT 250
+);
+
 // Top-author cascade: what have the top-N authors (by all-time recommends
 // received) themselves recommended in the requested window? Distinct signal
 // from raw popularity — surfaces the curation choices of the network's
@@ -281,8 +360,11 @@ comptime {
         TopQuery,                     TrendingQuery,
         TopByAuthorQuery,             TrendingByAuthorQuery,
         TopByCuratorQuery,            TrendingByCuratorQuery,
+        RecentQuery,                  RecentByAuthorQuery,
+        RecentByCuratorQuery,
         RecommendedByTopAuthorsQuery,
     };
+    @setEvalBranchQuota(20_000);
     for (all_queries) |Q| {
         if (Q.columns.len != TopQuery.columns.len) @compileError("recommended query column count drift");
         for (Q.columns, TopQuery.columns) |a, b| {
@@ -357,17 +439,20 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort, filter: Filter) ![]co
             break :blk switch (sort) {
                 .top => c.query(TopByCuratorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
                 .trending => c.query(TrendingByCuratorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
+                .recent => c.query(RecentByCuratorQuery.positional, &.{ date_mod, did, did }) catch return failEnvelope(&output),
             };
         }
         if (filter.author_did) |did| {
             break :blk switch (sort) {
                 .top => c.query(TopByAuthorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
                 .trending => c.query(TrendingByAuthorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
+                .recent => c.query(RecentByAuthorQuery.positional, &.{ date_mod, did }) catch return failEnvelope(&output),
             };
         }
         break :blk switch (sort) {
             .top => c.query(TopQuery.positional, &.{date_mod}) catch return failEnvelope(&output),
             .trending => c.query(TrendingQuery.positional, &.{date_mod}) catch return failEnvelope(&output),
+            .recent => c.query(RecentQuery.positional, &.{date_mod}) catch return failEnvelope(&output),
         };
     };
     defer res.deinit();
@@ -539,6 +624,9 @@ pub fn snapshot(sort: Sort, window: Window, alloc: Allocator) !?[]u8 {
     return switch (sort) {
         .top => TopCache.snapshot(window, alloc),
         .trending => TrendingCache.snapshot(window, alloc),
+        // recent isn't cached (no unfiltered surface uses it yet); the handler
+        // falls back to a live fetch on null.
+        .recent => null,
     };
 }
 

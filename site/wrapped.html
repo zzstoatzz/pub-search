@@ -252,6 +252,24 @@
     }
     .sec-loading { color: var(--text-muted); font-size: 12px; }
 
+    /* recommended-docs view tabs (recent vs most-recommended) */
+    .reco-tabs {
+      display: flex; gap: 0.4rem; margin-bottom: 0.7rem; flex-wrap: wrap;
+    }
+    .reco-tab {
+      font: inherit; font-size: 11px; letter-spacing: 0.04em;
+      text-transform: uppercase; cursor: pointer;
+      color: var(--text-secondary); background: var(--bg-subtle);
+      border: 1px solid var(--border-subtle); border-radius: 999px;
+      padding: 0.35rem 0.7rem; min-height: 30px; line-height: 1;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .reco-tab:hover { color: var(--text-bright); }
+    .reco-tab[aria-selected="true"] {
+      color: var(--accent); border-color: var(--accent-dim);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+
     /* ---- author lens: platform bar, cadence sparkline, topics ---------- */
     .pf-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-hover); }
     .pf-seg { height: 100%; }
@@ -658,7 +676,7 @@
       if (since) bits.push('since ' + esc(since));
       var sub = bits.length ? '<div class="card-sub">' + bits.join(' · ') + '</div>' : '';
       // placeholder for the actual docs this curator recommended
-      var reco = '<div class="card-section" id="cur-reco"><span class="sec-label">recently recommended</span>' +
+      var reco = '<div class="card-section" id="cur-reco"><span class="sec-label">recommended</span>' +
         '<div class="sec-loading">gathering…</div></div>';
       return '<div class="card">' + head +
         '<div class="metric"><span class="num" data-count="' + c.totalRecommends + '">0</span>' +
@@ -825,8 +843,8 @@
           var ago = mins < 60 ? (mins + ' min') :
                     mins < 1440 ? (Math.round(mins / 60) + ' hr') :
                     (Math.round(mins / 1440) + ' day');
-          el.innerHTML = '<span class="dot">↻</span> reflects activity through ~' + ago +
-            ' ago · brand-new posts &amp; recommends can take a little while to land here';
+          el.title = 'served from a periodic snapshot — very recent posts and recommends may not appear yet';
+          el.innerHTML = '<span class="dot">↻</span> updated ~' + ago + ' ago';
         })
         .catch(function() {});
     }
@@ -884,39 +902,76 @@
     }
 
     // ----- curator: the actual docs recommended ------------------------
+    // Two honest views: "recent" orders by when THEY recommended each doc;
+    // "most recommended" by the doc's global recommend count. (The old single
+    // list was labeled "recently recommended" but ordered by popularity.)
+    var RECO_TABS = [
+      { sort: 'recent', label: 'recent' },
+      { sort: 'top', label: 'most recommended' }
+    ];
+
+    function recoItemHtml(d) {
+      var title = esc(d.title || 'untitled');
+      var url = d.url || '';
+      var titleHtml = url
+        ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + title + '</a>'
+        : title;
+      var src = esc(d.publicationName || d.basePath || d.platform || '');
+      var ini = esc((d.title || d.basePath || '?').charAt(0));
+      var avDid = d.did || '';
+      return '<div class="reco">' +
+        '<a class="reco-av" href="' + esc(profileUrl(avDid)) + '" data-profile-did="' + esc(avDid) +
+          '" data-avatar-did="' + esc(avDid) + '" data-ini="' + ini + '" target="_blank" rel="noopener" title="open author profile">' +
+          '<span class="ini">' + ini + '</span></a>' +
+        '<div class="reco-body"><div class="reco-title">' + titleHtml + '</div>' +
+        (src ? '<div class="reco-meta">' + src + '</div>' : '') + '</div></div>';
+    }
+
     function fetchRecommendedDocs(did) {
       var box = document.getElementById('cur-reco');
       if (!box || !did) return;
-      fetch(API_BASE + '/recommended?curator=' + encodeURIComponent(did) + '&limit=8')
-        .then(function(r) { return r.json(); })
-        .then(function(docs) {
-          if (!Array.isArray(docs) || !docs.length) {
-            box.querySelector('.sec-loading').textContent = 'nothing indexed yet.';
-            return;
-          }
-          var html = '<span class="sec-label">recently recommended</span><div class="reco-list">' +
-            docs.map(function(d) {
-              var title = esc(d.title || 'untitled');
-              var url = d.url || '';
-              var titleHtml = url
-                ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + title + '</a>'
-                : title;
-              var src = esc(d.publicationName || d.basePath || d.platform || '');
-              var ini = esc((d.title || d.basePath || '?').charAt(0));
-              var avDid = d.did || '';
-              return '<div class="reco">' +
-                '<a class="reco-av" href="' + esc(profileUrl(avDid)) + '" data-profile-did="' + esc(avDid) +
-                  '" data-avatar-did="' + esc(avDid) + '" data-ini="' + ini + '" target="_blank" rel="noopener" title="open author profile">' +
-                  '<span class="ini">' + ini + '</span></a>' +
-                '<div class="reco-body"><div class="reco-title">' + titleHtml + '</div>' +
-                (src ? '<div class="reco-meta">' + src + '</div>' : '') + '</div></div>';
-            }).join('') + '</div>';
-          box.innerHTML = html;
-          resolveRecoAvatars(box, docs.map(function(d) { return d.did; }).filter(Boolean));
-        })
-        .catch(function() {
-          var l = box.querySelector('.sec-loading'); if (l) l.textContent = '';
+      var active = RECO_TABS[0].sort;
+
+      box.innerHTML =
+        '<span class="sec-label">recommended</span>' +
+        '<div class="reco-tabs" role="tablist" aria-label="recommendation view">' +
+          RECO_TABS.map(function(t) {
+            return '<button type="button" class="reco-tab" role="tab" data-sort="' + t.sort + '"' +
+              ' aria-selected="' + (t.sort === active) + '">' + t.label + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div class="reco-list-wrap"><div class="sec-loading">loading…</div></div>';
+
+      var wrap = box.querySelector('.reco-list-wrap');
+
+      function load(sort) {
+        wrap.innerHTML = '<div class="sec-loading">loading…</div>';
+        fetch(API_BASE + '/recommended?curator=' + encodeURIComponent(did) + '&sort=' + sort + '&limit=8')
+          .then(function(r) { return r.json(); })
+          .then(function(docs) {
+            if (!Array.isArray(docs) || !docs.length) {
+              wrap.innerHTML = '<div class="sec-loading">nothing here yet.</div>';
+              return;
+            }
+            wrap.innerHTML = '<div class="reco-list">' + docs.map(recoItemHtml).join('') + '</div>';
+            resolveRecoAvatars(wrap, docs.map(function(d) { return d.did; }).filter(Boolean));
+          })
+          .catch(function() { wrap.innerHTML = ''; });
+      }
+
+      box.querySelectorAll('.reco-tab').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var sort = btn.getAttribute('data-sort');
+          if (sort === active) return;
+          active = sort;
+          box.querySelectorAll('.reco-tab').forEach(function(b) {
+            b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+          });
+          load(sort);
         });
+      });
+
+      load(active);
     }
 
     function resolveRecoAvatars(box, dids) {
