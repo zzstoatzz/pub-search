@@ -5,7 +5,7 @@
 //! in its OWN SQLite (never turso, never the frozen replica, never blocks the
 //! firehose). When a DID crosses a volume floor it is scored in-process; if it
 //! looks like a machine-generated registry/feed mirror, the labeler emits a
-//! signed `bulk-mirror` account label — no human in the loop.
+//! signed `machine-generated` account label — no human in the loop.
 //!
 //! Scoring mirrors scripts/classify-bulk-mirror (validated offline): the
 //! decisive axis is authorship/content SHAPE (templated titles, thin/empty
@@ -38,7 +38,7 @@ const THRESHOLD: f64 = 0.50;
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
 // (heuristic flags → LLM confirms content is machine-generated before emit).
-const SCORING_VERSION: i64 = 5; // v5: capture the model's reason (re-review to populate)
+const SCORING_VERSION: i64 = 6; // v6: rename label bulk-mirror → machine-generated (re-emit)
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -137,7 +137,7 @@ pub fn bootstrap() void {
         var rows = conn.rows("SELECT did FROM author_stats WHERE labeled = 1", .{}) catch return;
         while (rows.next()) |row| prev.append(a, a.dupe(u8, row.text(0)) catch continue) catch {};
         rows.deinit();
-        for (prev.items) |did| _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, true) catch {};
+        for (prev.items) |did| _ = labeler.emit(did, labeler.LABEL_MACHINE_GENERATED, true) catch {};
         if (prev.items.len > 0)
             logfire.info("classifier: cleared {d} prior labels for re-scoring (v{d})", .{ prev.items.len, SCORING_VERSION });
         conn.execNoArgs("DELETE FROM author_stats") catch {};
@@ -475,8 +475,8 @@ fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
             const state = if (v.machine) STATE_LABELED else STATE_REJECTED;
             conn.exec("UPDATE author_stats SET state = ?, reason = ? WHERE did = ?", .{ state, v.reason, did }) catch {};
             if (v.machine) {
-                _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, false) catch {};
-                logfire.info("classifier: model CONFIRMED {s} → bulk-mirror ({s})", .{ did, v.reason });
+                _ = labeler.emit(did, labeler.LABEL_MACHINE_GENERATED, false) catch {};
+                logfire.info("classifier: model CONFIRMED {s} → machine-generated ({s})", .{ did, v.reason });
             } else {
                 logfire.info("classifier: model REJECTED {s} ({s})", .{ did, v.reason });
             }

@@ -1,5 +1,5 @@
 //! pub-search labeler — serves com.atproto.label.{queryLabels,subscribeLabels}
-//! and emits signed `bulk-mirror` account labels.
+//! and emits signed `machine-generated` account labels.
 //!
 //! This is the SAME proven serving code as labelz (label.zig + server.zig lifted
 //! verbatim; store.zig re-backed on zqlite). The backend already consumes the
@@ -25,7 +25,7 @@ const Keypair = zat.Keypair;
 const Store = store_mod.Store;
 const Server = server_mod.Server;
 
-pub const LABEL_BULK_MIRROR = "bulk-mirror";
+pub const LABEL_MACHINE_GENERATED = "machine-generated";
 
 // module-level state — emit() is called from the firehose/admin paths, the
 // ws server runs detached, so this outlives start().

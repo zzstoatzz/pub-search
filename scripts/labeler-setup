@@ -52,10 +52,10 @@ SECP256K1_MULTICODEC = b"\xe7\x01"  # varint of 0xe7 (secp256k1-pub)
 LABEL_DECLARATION = {
     "$type": "app.bsky.labeler.service",
     "policies": {
-        "labelValues": ["bulk-mirror"],
+        "labelValues": ["machine-generated"],
         "labelValueDefinitions": [
             {
-                "identifier": "bulk-mirror",
+                "identifier": "machine-generated",
                 "severity": "inform",
                 "blurs": "none",
                 "defaultSetting": "ignore",
@@ -63,12 +63,12 @@ LABEL_DECLARATION = {
                 "locales": [
                     {
                         "lang": "en",
-                        "name": "bulk mirror",
+                        "name": "machine-generated",
                         "description": (
-                            "machine-generated registry/feed mirror — bulk records "
-                            "exported from an external database, not human-authored "
-                            "writing (e.g. patent dumps, transit-alert feeds, recall "
-                            "summaries)."
+                            "this account's content is produced by an automated "
+                            "system, not written by a person — e.g. registry/feed "
+                            "mirrors, transit-alert bots, catalogs, database exports. "
+                            "pub-search excludes these from its human-writing search."
                         ),
                     }
                 ],
