@@ -244,6 +244,21 @@ fn maybeEvaluate(conn: zqlite.Conn, did: []const u8) void {
     logfire.info("classifier: queued {s} for model review (score={d:.3} docs={d})", .{ did, score, doc_count });
 }
 
+/// The account's site domain (base_path) from the replica — these are
+/// standard.site/leaflet publishers, so the domain (prideraiser.org) is the
+/// human identity, not a bsky handle (which getProfiles can't resolve).
+fn authorSite(allocator: Allocator, did: []const u8) ?[]const u8 {
+    const local = db.getLocalDbRaw() orelse return null;
+    if (!local.isReady()) return null;
+    var rows = local.query("SELECT base_path FROM documents WHERE did = ? AND base_path != '' LIMIT 1", .{did}) catch return null;
+    defer rows.deinit();
+    if (rows.next()) |row| {
+        const bp = row.text(0);
+        if (bp.len > 0) return allocator.dupe(u8, bp) catch null;
+    }
+    return null;
+}
+
 fn stateName(s: i64) []const u8 {
     return switch (s) {
         STATE_PENDING => "pending",
@@ -307,6 +322,8 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
         try jw.beginObject();
         try jw.objectField("did");
         try jw.write(row.text(0));
+        try jw.objectField("site");
+        try jw.write(authorSite(arena.allocator(), row.text(0)) orelse "");
         try jw.objectField("state");
         try jw.write(stateName(row.int(6)));
         try jw.objectField("docs");

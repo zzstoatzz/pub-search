@@ -15,8 +15,19 @@
   </script>
   <link rel="stylesheet" href="dashboard.css?v=1779507677">
   <style>
-    .lead { color: var(--text-dim); font-size: 0.8rem; line-height: 1.5; margin: -0.4rem 0 1.4rem; }
-    .lead a { color: var(--text-secondary); }
+    .lead { color: var(--text-secondary); font-size: 0.82rem; line-height: 1.55; margin: -0.4rem 0 1rem; }
+    details.how { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-subtle); margin-bottom: 1.4rem; }
+    details.how > summary { cursor: pointer; padding: 0.6rem 0.85rem; font-size: 0.8rem; color: var(--text-secondary); list-style: none; }
+    details.how > summary::-webkit-details-marker { display: none; }
+    details.how > summary::before { content: "▸ "; color: var(--text-dim); }
+    details.how[open] > summary::before { content: "▾ "; }
+    .how-body { padding: 0 0.95rem 0.9rem; font-size: 0.78rem; line-height: 1.6; color: var(--text-dim); }
+    .how-body b { color: var(--text-secondary); font-weight: normal; }
+    .how-body ol { margin: 0.5rem 0 0.7rem 1.1rem; }
+    .how-body li { margin-bottom: 0.35rem; }
+    .how-body code { background: var(--bg-hover); padding: 0.05rem 0.3rem; border-radius: 3px; color: var(--text-secondary); }
+    .legend { display: flex; flex-direction: column; gap: 0.45rem; margin: 0.6rem 0 0.2rem; }
+    .legend .row { display: flex; gap: 0.55rem; align-items: baseline; font-size: 0.76rem; color: var(--text-dim); }
     .filters { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
     .filters button {
       font-family: monospace; font-size: 0.72rem; cursor: pointer;
@@ -31,13 +42,15 @@
     .badge.rejected { color: #1f9d57; border-color: #1f9d5755; background: #1f9d5714; }
     .badge.vetoed   { color: #3b82f6; border-color: #3b82f655; background: #3b82f614; }
     .badge.pending  { color: var(--text-dim); border-color: var(--border); }
-    .handle { color: var(--text-bright); font-size: 0.92rem; text-decoration: none; }
-    .handle:hover { text-decoration: underline; }
-    .author-did { color: var(--text-muted); font-size: 0.68rem; }
-    .author-meta { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; }
+    .site { color: var(--text-bright); font-size: 0.92rem; text-decoration: none; }
+    .site:hover { text-decoration: underline; }
+    .site.nosite { color: var(--text-secondary); }
+    .author-did { color: var(--text-muted); font-size: 0.68rem; margin-top: 0.1rem; }
+    .author-meta { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; cursor: help; }
     .author-meta b { color: var(--text-secondary); font-weight: normal; }
-    .patterns { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.12rem; }
-    .patterns .p { color: var(--text-muted); font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .patterns-label { color: var(--text-muted); font-size: 0.66rem; margin-top: 0.55rem; }
+    .patterns { display: flex; flex-direction: column; gap: 0.1rem; margin-top: 0.15rem; }
+    .patterns .p { color: var(--text-dim); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .patterns .p::before { content: "↳ "; color: var(--text-muted); }
     .empty { color: var(--text-dim); font-size: 0.8rem; padding: 1rem 0; }
   </style>
@@ -46,11 +59,36 @@
   <div class="container">
     <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span></h1>
     <p class="lead">
-      the <b>bulk-mirror</b> labeler's decisions — accounts whose content is machine-generated
-      registry/feed output, not human writing. emitted autonomously: a title-pattern pre-filter
-      flags candidates, then a model reads sample content and confirms before labeling. read-only
-      heads-up; the app doesn't act on these yet. labeler: <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank">@pub-search.waow.tech</a>
+      pub-search runs a labeler that flags accounts publishing <b>machine-generated bulk content</b>
+      (registry/feed mirrors, catalogs, database exports) rather than human writing — so they can be
+      told apart from real authors. This is a read-only view of what it has decided; search doesn't act
+      on it yet. Labeler identity: <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank" rel="noopener">@pub-search.waow.tech</a>.
     </p>
+
+    <details class="how">
+      <summary>how a label is decided</summary>
+      <div class="how-body">
+        It decides in two steps, on its own:
+        <ol>
+          <li><b>title-pattern pre-filter</b> — every account's post titles are scored for how
+            <i>templated</i> they are: a repeated machine pattern like <code>S##E## …</code> or
+            <code>… presented by …</code> (digits shown as <code>#</code>). A <b>score</b> from 0–1; ≥ 0.50
+            makes the account a <i>candidate</i>. The score never labels anything by itself — it only
+            decides what's worth a closer look.</li>
+          <li><b>content review</b> — for each candidate, a model (running on
+            <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a>) reads sample post
+            <i>content</i> and judges whether it's automated output or a person writing. Only if it
+            confirms "machine" does the labeler emit the <code>bulk-mirror</code> label.</li>
+        </ol>
+        <div class="legend">
+          <div class="row"><span class="badge labeled">labeled</span> confirmed machine-generated — carries the <code>bulk-mirror</code> label.</div>
+          <div class="row"><span class="badge rejected">rejected</span> looked templated, but the model judged it human writing — not labeled.</div>
+          <div class="row"><span class="badge vetoed">vetoed</span> has reader curation (someone recommends/subscribes) — never labeled, whatever the score.</div>
+          <div class="row"><span class="badge pending">pending</span> flagged; awaiting content review.</div>
+        </div>
+        Every label is reversible (a signed negation), so a wrong call is one correction away.
+      </div>
+    </details>
 
     <section>
       <div class="metrics" id="metrics"></div>
@@ -65,42 +103,36 @@
 
   <script>
     const API_URL = 'https://leaflet-search-backend.fly.dev';
-    const TYPEAHEAD = 'https://typeahead.waow.tech';
     let AUTHORS = [];
     let FILTER = 'all';
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
 
-    async function resolveHandles(dids) {
-      const out = {};
-      for (let i = 0; i < dids.length; i += 25) {
-        const batch = dids.slice(i, i + 25);
-        try {
-          const r = await fetch(`${TYPEAHEAD}/xrpc/app.bsky.actor.getProfiles?actors=${batch.map(encodeURIComponent).join(',')}`,
-            { headers: { 'X-Client': 'pub-search/labels' } });
-          const d = await r.json();
-          (d.profiles || []).forEach(p => { out[p.did] = p.handle; });
-        } catch {}
-      }
-      return out;
-    }
+    const STATE_HELP = {
+      labeled: 'confirmed machine-generated by the content review — carries the bulk-mirror label',
+      rejected: 'looked templated, but the model judged it human-written — not labeled',
+      vetoed: 'has reader curation, so never labeled regardless of score',
+      pending: 'flagged by the pre-filter; awaiting content review',
+    };
 
     function render() {
       const list = document.getElementById('list');
       const rows = AUTHORS.filter(a => FILTER === 'all' || a.state === FILTER);
       if (!rows.length) { list.innerHTML = '<div class="empty">nothing here.</div>'; return; }
       list.innerHTML = rows.map(a => {
-        const label = a.handle ? '@' + esc(a.handle) : esc(a.did.slice(0, 24)) + '…';
-        const profile = 'https://bsky.app/profile/' + encodeURIComponent(a.handle || a.did);
+        const site = a.site
+          ? `<a class="site" href="https://${esc(a.site.replace(/^https?:\/\//, ''))}" target="_blank" rel="noopener">${esc(a.site.replace(/^https?:\/\//, ''))}</a>`
+          : `<span class="site nosite">${esc(a.did.slice(0, 22))}…</span>`;
         const pats = (a.patterns || []).map(p => `<div class="p">${esc(p)}</div>`).join('');
+        const scoreHelp = `templated-title score (0–1); ≥0.50 makes it a candidate. The score is a pre-filter, not the verdict — the content review decides.`;
         return `<div class="author">
           <div class="author-top">
-            <span class="badge ${a.state}">${a.state}</span>
-            <a class="handle" href="${profile}" target="_blank" rel="noopener">${label}</a>
-            <span class="author-meta"><b>${a.docs}</b> docs · score <b>${a.score.toFixed(2)}</b></span>
+            <span class="badge ${a.state}" title="${esc(STATE_HELP[a.state] || '')}">${a.state}</span>
+            ${site}
+            <span class="author-meta" title="${esc(scoreHelp)}"><b>${a.docs}</b> docs · pattern score <b>${a.score.toFixed(2)}</b></span>
           </div>
           <div class="author-did">${esc(a.did)}</div>
-          ${pats ? `<div class="patterns">${pats}</div>` : ''}
+          ${pats ? `<div class="patterns-label">title patterns (digits shown as #):</div><div class="patterns">${pats}</div>` : ''}
         </div>`;
       }).join('');
     }
@@ -118,14 +150,14 @@
 
     function renderMetrics(c) {
       const cards = [
-        ['labeled', c.labeled || 0, 'warn'],
-        ['pending', c.pending || 0, ''],
-        ['rejected', c.rejected || 0, ''],
-        ['vetoed', c.vetoed || 0, ''],
-        ['observing', c.observing || 0, ''],
+        ['labeled', c.labeled || 0, 'warn', 'confirmed bulk-mirror'],
+        ['pending', c.pending || 0, '', 'awaiting review'],
+        ['rejected', c.rejected || 0, '', 'cleared as human'],
+        ['vetoed', c.vetoed || 0, '', 'has curation'],
+        ['observing', c.observing || 0, '', 'tracked, below the candidate bar'],
       ];
-      document.getElementById('metrics').innerHTML = cards.map(([lbl, v, cls]) =>
-        `<div><div class="metric-value ${cls}">${v}</div><div class="metric-label">${lbl}</div></div>`).join('');
+      document.getElementById('metrics').innerHTML = cards.map(([lbl, v, cls, sub]) =>
+        `<div title="${esc(sub)}"><div class="metric-value ${cls}">${v}</div><div class="metric-label">${lbl}</div></div>`).join('');
     }
 
     (async function () {
@@ -140,10 +172,6 @@
       renderMetrics(counts);
       AUTHORS = data.authors || [];
       renderFilters(counts);
-      render();
-      // resolve handles in the background, then re-render
-      const handles = await resolveHandles(AUTHORS.map(a => a.did));
-      AUTHORS.forEach(a => { a.handle = handles[a.did] || null; });
       render();
     })();
   </script>
