@@ -27,11 +27,14 @@ const log = std.log.scoped(.classifier);
 // autonomous and there's no curation veto in the firehose path.
 const FLOOR: i64 = 50; // min docs before a DID can be judged
 const EVAL_EVERY: i64 = 25; // re-score every N docs past the floor until labeled
-const THRESHOLD: f64 = 0.55; // precision-first; signal fixes do the real work
-// bump when scoring logic changes → bootstrap negates old labels + re-scores the
-// whole corpus from a clean slate. v2 = precision fix (no date/empty-title
-// false positives, content-word scaffold only, curation veto).
-const SCORING_VERSION: i64 = 2;
+// Precision comes from the signal fixes (date/empty/non-ASCII titles score ~0.3),
+// not the threshold — so 0.50 catches genuine mirrors (transit feeds ~0.54)
+// while staying FP-safe. The curation veto is the backstop for prolific humans.
+const THRESHOLD: f64 = 0.50;
+// bump when scoring logic OR threshold changes → bootstrap negates old labels +
+// re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
+// scaffold only, curation veto). v3 = threshold 0.55→0.50.
+const SCORING_VERSION: i64 = 3;
 const SAMPLE_CAP: i64 = 64; // normalized titles kept per DID for template scoring
 
 var g_conn: ?zqlite.Conn = null;
