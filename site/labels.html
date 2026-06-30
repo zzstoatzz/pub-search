@@ -40,6 +40,9 @@
     .evidence { color: var(--text-muted); font-size: 0.68rem; margin-top: 0.45rem; cursor: help; }
     .evidence span { white-space: nowrap; }
     .did { color: var(--text-muted); font-size: 0.66rem; margin-top: 0.2rem; }
+    .draft { margin-top: 0.55rem; border-left: 2px solid var(--border-focus); padding: 0.4rem 0 0.4rem 0.6rem; }
+    .draft-label { color: var(--text-muted); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .draft-text { color: var(--text-secondary); font-size: 0.78rem; line-height: 1.45; margin-top: 0.2rem; }
     details.cleared { margin-top: 1.6rem; }
     details.cleared > summary { cursor: pointer; color: var(--text-dim); font-size: 0.78rem; list-style: none; padding: 0.3rem 0; }
     details.cleared > summary::-webkit-details-marker { display: none; }
@@ -69,7 +72,9 @@
             Only a "machine" verdict gets the <code>machine-generated</code> label.</li>
         </ol>
         The label itself is just the tag <code>machine-generated</code> (the AT Protocol label can't carry
-        free text); the reason is kept here. Every label is reversible.
+        free text); the reason is kept here. Every label is reversible. Each labeled account also gets a
+        <b>drafted</b> heads-up (shown under it) — we're <b>not posting these yet</b>, just reviewing the
+        wording before notifications go live.
       </div>
     </details>
 
@@ -92,10 +97,21 @@
       const reason = a.reason
         ? `<div class="reason${muted ? ' muted' : ''}">${esc(a.reason)}</div>`
         : `<div class="reason muted">—</div>`;
+      // would-be notification — drafted, not posted (review here first). Only for labeled.
+      let draft = '';
+      if (!muted) {
+        const target = a.site ? '@' + host(a.site) : a.did.slice(0, 18) + '…';
+        const why = a.reason ? ` (${a.reason})` : '';
+        draft = `<div class="draft">
+          <div class="draft-label">drafted notification — not posted</div>
+          <div class="draft-text">heads up ${esc(target)} — pub-search indexes human writing on atproto, and an automated review classified this account as machine-generated${esc(why)}, so it's excluded from search. think that's a mistake? reply and we'll re-review · pub-search.waow.tech/labels</div>
+        </div>`;
+      }
       return `<div class="item">
         <div class="item-top">${site}<span class="docs">${a.docs} docs</span></div>
         ${reason}
         ${evidence}
+        ${draft}
         <div class="did">${esc(a.did)}</div>
       </div>`;
     }

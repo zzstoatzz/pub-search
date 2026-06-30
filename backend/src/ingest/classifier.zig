@@ -477,6 +477,11 @@ fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
             if (v.machine) {
                 _ = labeler.emit(did, labeler.LABEL_MACHINE_GENERATED, false) catch {};
                 logfire.info("classifier: model CONFIRMED {s} → machine-generated ({s})", .{ did, v.reason });
+                // DRAFT notification — NOT posted yet. We draft to the log (review
+                // on /labels first) the heads-up the labeled account would get.
+                const site = authorSite(allocator, did);
+                defer if (site) |s| allocator.free(s);
+                logfire.info("labeler DRAFT notify (NOT posted) → @{s}: pub-search indexes human writing on atproto; this account was classified machine-generated ({s}) and excluded from search. reply to appeal · pub-search.waow.tech/labels", .{ site orelse did, v.reason });
             } else {
                 logfire.info("classifier: model REJECTED {s} ({s})", .{ did, v.reason });
             }
