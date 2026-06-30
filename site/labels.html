@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pub search / labels</title>
-  <meta name="description" content="bulk-mirror labeler — what's labeled, read-only heads-up">
+  <meta name="description" content="bulk-mirror labels — machine-generated accounts pub-search won't ingest, with reasons">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='18' width='6' height='10' fill='%231B7340'/><rect x='13' y='12' width='6' height='16' fill='%231B7340'/><rect x='22' y='6' width='6' height='22' fill='%231B7340'/></svg>">
   <script>
     (function() {
@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="dashboard.css?v=1779507677">
   <style>
     .lead { color: var(--text-secondary); font-size: 0.82rem; line-height: 1.55; margin: -0.4rem 0 1rem; }
+    .lead code { background: var(--bg-hover); padding: 0.05rem 0.3rem; border-radius: 3px; color: var(--text-secondary); }
     details.how { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-subtle); margin-bottom: 1.4rem; }
     details.how > summary { cursor: pointer; padding: 0.6rem 0.85rem; font-size: 0.8rem; color: var(--text-secondary); list-style: none; }
     details.how > summary::-webkit-details-marker { display: none; }
@@ -23,35 +24,27 @@
     details.how[open] > summary::before { content: "▾ "; }
     .how-body { padding: 0 0.95rem 0.9rem; font-size: 0.78rem; line-height: 1.6; color: var(--text-dim); }
     .how-body b { color: var(--text-secondary); font-weight: normal; }
-    .how-body ol { margin: 0.5rem 0 0.7rem 1.1rem; }
-    .how-body li { margin-bottom: 0.35rem; }
     .how-body code { background: var(--bg-hover); padding: 0.05rem 0.3rem; border-radius: 3px; color: var(--text-secondary); }
-    .legend { display: flex; flex-direction: column; gap: 0.45rem; margin: 0.6rem 0 0.2rem; }
-    .legend .row { display: flex; gap: 0.55rem; align-items: baseline; font-size: 0.76rem; color: var(--text-dim); }
-    .filters { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
-    .filters button {
-      font-family: monospace; font-size: 0.72rem; cursor: pointer;
-      background: var(--bg-subtle); color: var(--text-secondary);
-      border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.7rem;
-    }
-    .filters button.active { color: var(--text-bright); border-color: var(--border-focus); background: var(--bg-hover); }
-    .author { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.7rem 0.85rem; margin-bottom: 0.6rem; background: var(--bg-subtle); }
-    .author-top { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
-    .badge { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.12rem 0.5rem; border-radius: 999px; border: 1px solid; white-space: nowrap; }
-    .badge.labeled  { color: #f59e0b; border-color: #f59e0b55; background: #f59e0b14; }
-    .badge.rejected { color: #1f9d57; border-color: #1f9d5755; background: #1f9d5714; }
-    .badge.vetoed   { color: #3b82f6; border-color: #3b82f655; background: #3b82f614; }
-    .badge.pending  { color: var(--text-dim); border-color: var(--border); }
-    .site { color: var(--text-bright); font-size: 0.92rem; text-decoration: none; }
+    .how-body ol { margin: 0.5rem 0 0 1.1rem; }
+    .how-body li { margin-bottom: 0.35rem; }
+    .summary-line { color: var(--text-dim); font-size: 0.78rem; margin-bottom: 0.9rem; }
+    .summary-line b { color: var(--text-secondary); font-weight: normal; }
+    .item { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.75rem 0.9rem; margin-bottom: 0.6rem; background: var(--bg-subtle); }
+    .item-top { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+    .site { color: var(--text-bright); font-size: 0.95rem; text-decoration: none; }
     .site:hover { text-decoration: underline; }
-    .site.nosite { color: var(--text-secondary); }
-    .author-did { color: var(--text-muted); font-size: 0.68rem; margin-top: 0.1rem; }
-    .author-meta { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; cursor: help; }
-    .author-meta b { color: var(--text-secondary); font-weight: normal; }
-    .patterns-label { color: var(--text-muted); font-size: 0.66rem; margin-top: 0.55rem; }
-    .patterns { display: flex; flex-direction: column; gap: 0.1rem; margin-top: 0.15rem; }
-    .patterns .p { color: var(--text-dim); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .patterns .p::before { content: "↳ "; color: var(--text-muted); }
+    .site.nosite { color: var(--text-secondary); font-size: 0.8rem; }
+    .docs { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; }
+    .reason { color: var(--text); font-size: 0.85rem; line-height: 1.45; margin-top: 0.4rem; }
+    .reason.muted { color: var(--text-dim); }
+    .evidence { color: var(--text-muted); font-size: 0.68rem; margin-top: 0.45rem; cursor: help; }
+    .evidence span { white-space: nowrap; }
+    .did { color: var(--text-muted); font-size: 0.66rem; margin-top: 0.2rem; }
+    details.cleared { margin-top: 1.6rem; }
+    details.cleared > summary { cursor: pointer; color: var(--text-dim); font-size: 0.78rem; list-style: none; padding: 0.3rem 0; }
+    details.cleared > summary::-webkit-details-marker { display: none; }
+    details.cleared > summary::before { content: "▸ "; }
+    details.cleared[open] > summary::before { content: "▾ "; }
     .empty { color: var(--text-dim); font-size: 0.8rem; padding: 1rem 0; }
   </style>
 </head>
@@ -59,120 +52,77 @@
   <div class="container">
     <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span></h1>
     <p class="lead">
-      pub-search runs a labeler that flags accounts publishing <b>machine-generated bulk content</b>
-      (registry/feed mirrors, catalogs, database exports) rather than human writing — so they can be
-      told apart from real authors. This is a read-only view of what it has decided; search doesn't act
-      on it yet. Labeler identity: <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank" rel="noopener">@pub-search.waow.tech</a>.
+      Accounts pub-search has labeled <code>bulk-mirror</code> — machine-generated bulk content (feeds,
+      catalogs, database exports), not human writing. Each was confirmed by a content-review model,
+      which also gave the reason shown below. pub-search won't ingest these. Read-only.
     </p>
 
     <details class="how">
       <summary>how a label is decided</summary>
       <div class="how-body">
-        It decides in two steps, on its own:
+        Autonomously, in two steps:
         <ol>
-          <li><b>title-pattern pre-filter</b> — every account's post titles are scored for how
-            <i>templated</i> they are: a repeated machine pattern like <code>S##E## …</code> or
-            <code>… presented by …</code> (digits shown as <code>#</code>). A <b>score</b> from 0–1; ≥ 0.50
-            makes the account a <i>candidate</i>. The score never labels anything by itself — it only
-            decides what's worth a closer look.</li>
-          <li><b>content review</b> — for each candidate, a model (running on
-            <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a>) reads sample post
-            <i>content</i> and judges whether it's automated output or a person writing. Only if it
-            confirms "machine" does the labeler emit the <code>bulk-mirror</code> label.</li>
+          <li>a cheap pre-filter scans each account's post titles for a repeated machine pattern and
+            picks <b>candidates</b> worth a closer look (this is just a trigger, never the verdict);</li>
+          <li>a model (on <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a>) reads
+            sample post <b>content</b> and decides machine vs. human — and writes the one-line reason.
+            Only a "machine" verdict gets the <code>bulk-mirror</code> label.</li>
         </ol>
-        <div class="legend">
-          <div class="row"><span class="badge labeled">labeled</span> confirmed machine-generated — carries the <code>bulk-mirror</code> label.</div>
-          <div class="row"><span class="badge rejected">rejected</span> looked templated, but the model judged it human writing — not labeled.</div>
-          <div class="row"><span class="badge vetoed">vetoed</span> has reader curation (someone recommends/subscribes) — never labeled, whatever the score.</div>
-          <div class="row"><span class="badge pending">pending</span> flagged; awaiting content review.</div>
-        </div>
-        Every label is reversible (a signed negation), so a wrong call is one correction away.
+        The label itself is just the tag <code>bulk-mirror</code> (the AT Protocol label can't carry
+        free text); the reason is kept here. Every label is reversible.
       </div>
     </details>
 
-    <section>
-      <div class="metrics" id="metrics"></div>
-    </section>
-
-    <section>
-      <div class="section-title">decided accounts</div>
-      <div class="filters" id="filters"></div>
-      <div id="list"><div class="empty">loading…</div></div>
-    </section>
+    <div class="summary-line" id="summary"></div>
+    <div id="list"><div class="empty">loading…</div></div>
+    <div id="cleared-wrap"></div>
   </div>
 
   <script>
     const API_URL = 'https://leaflet-search-backend.fly.dev';
-    let AUTHORS = [];
-    let FILTER = 'all';
-
     function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+    function host(s) { return (s || '').replace(/^https?:\/\//, ''); }
 
-    const STATE_HELP = {
-      labeled: 'confirmed machine-generated by the content review — carries the bulk-mirror label',
-      rejected: 'looked templated, but the model judged it human-written — not labeled',
-      vetoed: 'has reader curation, so never labeled regardless of score',
-      pending: 'flagged by the pre-filter; awaiting content review',
-    };
-
-    function render() {
-      const list = document.getElementById('list');
-      const rows = AUTHORS.filter(a => FILTER === 'all' || a.state === FILTER);
-      if (!rows.length) { list.innerHTML = '<div class="empty">nothing here.</div>'; return; }
-      list.innerHTML = rows.map(a => {
-        const site = a.site
-          ? `<a class="site" href="https://${esc(a.site.replace(/^https?:\/\//, ''))}" target="_blank" rel="noopener">${esc(a.site.replace(/^https?:\/\//, ''))}</a>`
-          : `<span class="site nosite">${esc(a.did.slice(0, 22))}…</span>`;
-        const pats = (a.patterns || []).map(p => `<div class="p">${esc(p)}</div>`).join('');
-        const scoreHelp = `templated-title score (0–1); ≥0.50 makes it a candidate. The score is a pre-filter, not the verdict — the content review decides.`;
-        return `<div class="author">
-          <div class="author-top">
-            <span class="badge ${a.state}" title="${esc(STATE_HELP[a.state] || '')}">${a.state}</span>
-            ${site}
-            <span class="author-meta" title="${esc(scoreHelp)}"><b>${a.docs}</b> docs · pattern score <b>${a.score.toFixed(2)}</b></span>
-          </div>
-          <div class="author-did">${esc(a.did)}</div>
-          ${pats ? `<div class="patterns-label">title patterns (digits shown as #):</div><div class="patterns">${pats}</div>` : ''}
-        </div>`;
-      }).join('');
-    }
-
-    function renderFilters(counts) {
-      const order = [['all', 'all'], ['labeled', 'labeled'], ['pending', 'pending'], ['vetoed', 'vetoed'], ['rejected', 'rejected']];
-      const total = AUTHORS.length;
-      document.getElementById('filters').innerHTML = order.map(([k, lbl]) => {
-        const n = k === 'all' ? total : (counts[k] || 0);
-        return `<button data-f="${k}" class="${k === FILTER ? 'active' : ''}">${lbl} ${n}</button>`;
-      }).join('');
-      document.querySelectorAll('#filters button').forEach(b =>
-        b.onclick = () => { FILTER = b.dataset.f; renderFilters(counts); render(); });
-    }
-
-    function renderMetrics(c) {
-      const cards = [
-        ['labeled', c.labeled || 0, 'warn', 'confirmed bulk-mirror'],
-        ['pending', c.pending || 0, '', 'awaiting review'],
-        ['rejected', c.rejected || 0, '', 'cleared as human'],
-        ['vetoed', c.vetoed || 0, '', 'has curation'],
-        ['observing', c.observing || 0, '', 'tracked, below the candidate bar'],
-      ];
-      document.getElementById('metrics').innerHTML = cards.map(([lbl, v, cls, sub]) =>
-        `<div title="${esc(sub)}"><div class="metric-value ${cls}">${v}</div><div class="metric-label">${lbl}</div></div>`).join('');
+    function itemHtml(a, muted) {
+      const site = a.site
+        ? `<a class="site" href="https://${esc(host(a.site))}" target="_blank" rel="noopener">${esc(host(a.site))}</a>`
+        : `<span class="site nosite">${esc(a.did)}</span>`;
+      const pats = (a.patterns || []).slice(0, 2).map(esc).join(' · ');
+      const evidence = `<div class="evidence" title="pattern score 0–1 (≥0.50 = candidate). digits shown as #.">score ${a.score.toFixed(2)}${pats ? ' · patterns: ' + pats : ''}</div>`;
+      const reason = a.reason
+        ? `<div class="reason${muted ? ' muted' : ''}">${esc(a.reason)}</div>`
+        : `<div class="reason muted">—</div>`;
+      return `<div class="item">
+        <div class="item-top">${site}<span class="docs">${a.docs} docs</span></div>
+        ${reason}
+        ${evidence}
+        <div class="did">${esc(a.did)}</div>
+      </div>`;
     }
 
     (async function () {
       let data;
-      try {
-        data = await (await fetch(`${API_URL}/api/labeler`)).json();
-      } catch {
-        document.getElementById('list').innerHTML = '<div class="empty">failed to load.</div>';
-        return;
+      try { data = await (await fetch(`${API_URL}/api/labeler`)).json(); }
+      catch { document.getElementById('list').innerHTML = '<div class="empty">failed to load.</div>'; return; }
+
+      const authors = data.authors || [];
+      const labeled = authors.filter(a => a.state === 'labeled');
+      const cleared = authors.filter(a => a.state === 'rejected' || a.state === 'vetoed');
+      const c = data.counts || {};
+
+      document.getElementById('summary').innerHTML =
+        `<b>${labeled.length}</b> labeled${cleared.length ? ` · <b>${cleared.length}</b> reviewed and not labeled` : ''}`;
+
+      document.getElementById('list').innerHTML = labeled.length
+        ? labeled.map(a => itemHtml(a, false)).join('')
+        : '<div class="empty">nothing labeled yet.</div>';
+
+      if (cleared.length) {
+        document.getElementById('cleared-wrap').innerHTML =
+          `<details class="cleared"><summary>reviewed and not labeled (${cleared.length})</summary>
+            <div style="margin-top:0.5rem">${cleared.map(a => itemHtml(a, true)).join('')}</div>
+          </details>`;
       }
-      const counts = data.counts || {};
-      renderMetrics(counts);
-      AUTHORS = data.authors || [];
-      renderFilters(counts);
-      render();
     })();
   </script>
 </body>

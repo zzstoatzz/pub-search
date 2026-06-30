@@ -38,7 +38,7 @@ const THRESHOLD: f64 = 0.50;
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
 // (heuristic flags → LLM confirms content is machine-generated before emit).
-const SCORING_VERSION: i64 = 4;
+const SCORING_VERSION: i64 = 5; // v5: capture the model's reason (re-review to populate)
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -101,6 +101,7 @@ pub fn init() void {
     // the column already exists).
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN state INTEGER NOT NULL DEFAULT 0") catch {};
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN review_attempts INTEGER NOT NULL DEFAULT 0") catch {};
+    conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN reason TEXT NOT NULL DEFAULT ''") catch {};
     g_conn = conn;
     logfire.info("classifier: author-stats ready (floor={d} threshold={d:.2})", .{ FLOOR, THRESHOLD });
 }
@@ -303,7 +304,7 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
     try jw.objectField("authors");
     try jw.beginArray();
     var r = try conn.rows(
-        \\SELECT did, doc_count, len_sum, empty_titles, digit_titles, title_sample, state
+        \\SELECT did, doc_count, len_sum, empty_titles, digit_titles, title_sample, state, reason
         \\FROM author_stats WHERE state != 0
         \\ORDER BY CASE state WHEN 2 THEN 0 WHEN 1 THEN 1 WHEN 4 THEN 2 ELSE 3 END, doc_count DESC
         \\LIMIT 500
@@ -326,6 +327,8 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
         try jw.write(authorSite(arena.allocator(), row.text(0)) orelse "");
         try jw.objectField("state");
         try jw.write(stateName(row.int(6)));
+        try jw.objectField("reason");
+        try jw.write(row.text(7));
         try jw.objectField("docs");
         try jw.write(row.int(1));
         try jw.objectField("score");
@@ -460,19 +463,22 @@ fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
 
         // null verdict = inconclusive (empty/garbled reply, transient provider
         // error, or out of CC) → leave PENDING and retry, never reject. Only a
-        // CLEAR machine/human answer decides.
-        const verdict: ?bool = reviewAuthor(allocator, key, io, did) catch |err| blk: {
+        // CLEAR machine/human answer decides. The model's reason (free text — the
+        // protocol can't carry it on the label, so we keep it ourselves) is
+        // stored for the dashboard.
+        const verdict: ?Verdict = reviewAuthor(allocator, key, io, did) catch |err| blk: {
             logfire.warn("classifier: review error for {s}: {s} (will retry)", .{ did, @errorName(err) });
             break :blk null;
         };
-        if (verdict) |machine| {
-            if (machine) {
+        if (verdict) |v| {
+            defer allocator.free(v.reason);
+            const state = if (v.machine) STATE_LABELED else STATE_REJECTED;
+            conn.exec("UPDATE author_stats SET state = ?, reason = ? WHERE did = ?", .{ state, v.reason, did }) catch {};
+            if (v.machine) {
                 _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, false) catch {};
-                conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_LABELED, did }) catch {};
-                logfire.info("classifier: model CONFIRMED {s} → bulk-mirror", .{did});
+                logfire.info("classifier: model CONFIRMED {s} → bulk-mirror ({s})", .{ did, v.reason });
             } else {
-                conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_REJECTED, did }) catch {};
-                logfire.info("classifier: model REJECTED {s} (human-authored)", .{did});
+                logfire.info("classifier: model REJECTED {s} ({s})", .{ did, v.reason });
             }
         } else {
             // inconclusive → bump attempts; nextPending stops picking it past the
@@ -495,9 +501,12 @@ fn nextPending(allocator: Allocator, conn: zqlite.Conn) ?[]const u8 {
     return allocator.dupe(u8, row.text(0)) catch null;
 }
 
+const Verdict = struct { machine: bool, reason: []const u8 };
+
 /// Ask the LLM whether the author is a machine-generated mirror, from real
-/// sample content. Returns true=machine, false=human, null=inconclusive (retry).
-fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) !?bool {
+/// sample content. Returns a Verdict (machine + reason), or null = inconclusive
+/// (retry). The returned reason is owned by `allocator`.
+fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) !?Verdict {
     const samples = try fetchSamples(allocator, did);
     defer allocator.free(samples);
 
@@ -535,7 +544,7 @@ fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) 
 
     const reply = try callModel(allocator, key, io, prompt.written());
     defer allocator.free(reply);
-    return parseMachineVerdict(reply);
+    return parseVerdict(allocator, reply);
 }
 
 /// Build a titles+content-excerpt block from the replica (bounded).
@@ -610,11 +619,11 @@ fn callModel(allocator: Allocator, key: []const u8, io: Io, prompt: []const u8) 
     return text;
 }
 
-/// Pull the verdict out of the OpenAI envelope ({choices:[{message:{content}}]});
-/// the content is a JSON object {"machine": bool, ...}. Returns null when the
-/// reply is empty/garbled/missing (transient failure or out of CC) so the worker
-/// retries instead of falsely rejecting. Only an explicit true/false decides.
-fn parseMachineVerdict(response: []const u8) ?bool {
+/// Pull the verdict + reason out of the OpenAI envelope. The content is
+/// {"machine": bool, "reason": "..."}. Returns null when the reply is
+/// empty/garbled/missing (transient failure or out of CC) so the worker retries
+/// instead of falsely rejecting. The reason is owned by `allocator`.
+fn parseVerdict(allocator: Allocator, response: []const u8) ?Verdict {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -626,10 +635,25 @@ fn parseMachineVerdict(response: []const u8) ?bool {
     const content = msg.object.get("content") orelse return null;
     if (content != .string or content.string.len == 0) return null;
     const s = content.string;
-    // tolerate prose around the JSON — a small model may not return pure JSON.
-    if (std.mem.indexOf(u8, s, "\"machine\": true") != null or std.mem.indexOf(u8, s, "\"machine\":true") != null) return true;
-    if (std.mem.indexOf(u8, s, "\"machine\": false") != null or std.mem.indexOf(u8, s, "\"machine\":false") != null) return false;
-    return null; // model replied but not in the expected shape → retry
+
+    // machine verdict — tolerate prose; a small model may not return pure JSON.
+    const machine: bool = blk: {
+        if (std.mem.indexOf(u8, s, "\"machine\": true") != null or std.mem.indexOf(u8, s, "\"machine\":true") != null) break :blk true;
+        if (std.mem.indexOf(u8, s, "\"machine\": false") != null or std.mem.indexOf(u8, s, "\"machine\":false") != null) break :blk false;
+        return null; // unexpected shape → retry
+    };
+
+    // reason — prefer the JSON field; else the trimmed content. Best-effort.
+    var reason: []const u8 = "";
+    if (json.parseFromSliceLeaky(json.Value, a, s, .{})) |inner| {
+        if (inner == .object) {
+            if (inner.object.get("reason")) |rv| {
+                if (rv == .string) reason = rv.string;
+            }
+        }
+    } else |_| {}
+    const capped = reason[0..@min(reason.len, 280)];
+    return .{ .machine = machine, .reason = allocator.dupe(u8, capped) catch "" };
 }
 
 /// True if anyone recommends a doc by this author, or subscribes to one of
@@ -747,15 +771,24 @@ test "score: flagged vs kept separation" {
     try std.testing.expect(human.score(a) < THRESHOLD);
 }
 
-test "parseMachineVerdict: clear verdicts decide, empty/garbled retries" {
-    const machine = "{\"choices\":[{\"message\":{\"content\":\"{\\\"machine\\\": true, \\\"reason\\\":\\\"feed\\\"}\"}}]}";
-    const human = "{\"choices\":[{\"message\":{\"content\":\"{\\\"machine\\\": false}\"}}]}";
-    const empty = "{\"choices\":[{\"message\":{\"content\":\"\"}}]}";
-    try std.testing.expectEqual(@as(?bool, true), parseMachineVerdict(machine));
-    try std.testing.expectEqual(@as(?bool, false), parseMachineVerdict(human));
-    try std.testing.expectEqual(@as(?bool, null), parseMachineVerdict(empty)); // → retry, not reject
-    try std.testing.expectEqual(@as(?bool, null), parseMachineVerdict("not json")); // → retry
-    try std.testing.expectEqual(@as(?bool, null), parseMachineVerdict("{\"choices\":[]}")); // → retry
+test "parseVerdict: clear verdicts decide + carry reason, empty/garbled retries" {
+    const a = std.testing.allocator;
+    const machine = "{\"choices\":[{\"message\":{\"content\":\"{\\\"machine\\\": true, \\\"reason\\\":\\\"automated feed\\\"}\"}}]}";
+    const human = "{\"choices\":[{\"message\":{\"content\":\"{\\\"machine\\\": false, \\\"reason\\\":\\\"personal blog\\\"}\"}}]}";
+
+    const m = parseVerdict(a, machine).?;
+    defer a.free(m.reason);
+    try std.testing.expect(m.machine);
+    try std.testing.expectEqualStrings("automated feed", m.reason);
+
+    const h = parseVerdict(a, human).?;
+    defer a.free(h.reason);
+    try std.testing.expect(!h.machine);
+    try std.testing.expectEqualStrings("personal blog", h.reason);
+
+    try std.testing.expect(parseVerdict(a, "{\"choices\":[{\"message\":{\"content\":\"\"}}]}") == null); // → retry
+    try std.testing.expect(parseVerdict(a, "not json") == null); // → retry
+    try std.testing.expect(parseVerdict(a, "{\"choices\":[]}") == null); // → retry
 }
 
 test "date-titled journal is NOT flagged (precision regression: firstwaterbottle)" {
