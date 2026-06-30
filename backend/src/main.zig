@@ -135,6 +135,11 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     db.initLocalDb(io);
     db.startSync(io);
 
+    // one-time: feed the existing corpus through the classifier so it evaluates
+    // every already-indexed author, not just ones publishing after deploy.
+    // Background thread — the replica is open, this just reads it.
+    if (Thread.spawn(.{}, labeler_classifier.bootstrap, .{})) |t| t.detach() else |_| {}
+
     // snapshot promote watcher (inert unless ENABLE_SNAPSHOT_PROMOTE is set)
     promote.start(allocator, io);
 

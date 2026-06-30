@@ -17,6 +17,7 @@ const std = @import("std");
 const zqlite = @import("zqlite");
 const logfire = @import("logfire");
 const labeler = @import("../labeler.zig");
+const db = @import("../db.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.classifier);
@@ -67,6 +68,7 @@ pub fn init() void {
         logfire.err("classifier: schema failed: {s}", .{@errorName(err)});
         return;
     };
+    conn.execNoArgs("CREATE TABLE IF NOT EXISTS classifier_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)") catch {};
     g_conn = conn;
     logfire.info("classifier: author-stats ready (floor={d} threshold={d:.2})", .{ FLOOR, THRESHOLD });
 }
@@ -75,6 +77,60 @@ pub fn init() void {
 /// crosses the floor. Called from the firehose path — must never block on
 /// anything but local sqlite.
 pub fn observe(did: []const u8, title: []const u8, content: []const u8) void {
+    observeLen(did, title, content.len);
+}
+
+/// One-time backfill: feed the existing corpus through the aggregate so the
+/// classifier evaluates every author already indexed (not just ones that
+/// publish after deploy). Reads the local replica (frozen, no turso); pulls only
+/// did/title/LENGTH(content), never the content blobs. Idempotent via a marker.
+/// Runs once, in a background thread.
+pub fn bootstrap() void {
+    const conn = g_conn orelse return;
+    if (isBootstrapped(conn)) return;
+    const local = db.getLocalDbRaw() orelse return;
+    if (!local.isReady()) return;
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const Entry = struct { did: []const u8, title: []const u8, len: usize };
+    var entries: std.ArrayList(Entry) = .empty;
+
+    // materialize first so we don't hold a replica read connection across the
+    // (slower) per-row upserts below.
+    {
+        var rows = local.query("SELECT did, title, LENGTH(content) FROM documents", .{}) catch |err| {
+            logfire.err("classifier: bootstrap query failed: {s}", .{@errorName(err)});
+            return;
+        };
+        defer rows.deinit();
+        while (rows.next()) |row| {
+            entries.append(a, .{
+                .did = a.dupe(u8, row.text(0)) catch continue,
+                .title = a.dupe(u8, row.text(1)) catch continue,
+                .len = @intCast(@max(row.int(2), 0)),
+            }) catch continue;
+        }
+    }
+
+    for (entries.items) |e| observeLen(e.did, e.title, e.len);
+    markBootstrapped(conn);
+    logfire.info("classifier: bootstrap fed {d} existing docs through the aggregate", .{entries.items.len});
+}
+
+fn isBootstrapped(conn: zqlite.Conn) bool {
+    const row = (conn.row("SELECT v FROM classifier_meta WHERE k = 'bootstrapped'", .{}) catch return false) orelse return false;
+    defer row.deinit();
+    return row.int(0) != 0;
+}
+
+fn markBootstrapped(conn: zqlite.Conn) void {
+    conn.exec("INSERT OR REPLACE INTO classifier_meta (k, v) VALUES ('bootstrapped', 1)", .{}) catch {};
+}
+
+fn observeLen(did: []const u8, title: []const u8, content_len: usize) void {
     const conn = g_conn orelse return;
 
     var norm_buf: [256]u8 = undefined;
@@ -93,7 +149,7 @@ pub fn observe(did: []const u8, title: []const u8, content: []const u8) void {
         \\  digit_titles = digit_titles + excluded.digit_titles,
         \\  title_sample = CASE WHEN sample_count < ? THEN title_sample || char(10) || ? ELSE title_sample END,
         \\  sample_count = CASE WHEN sample_count < ? THEN sample_count + 1 ELSE sample_count END
-    , .{ did, @as(i64, @intCast(content.len)), is_empty, has_digit, norm, SAMPLE_CAP, norm, SAMPLE_CAP }) catch |err| {
+    , .{ did, @as(i64, @intCast(content_len)), is_empty, has_digit, norm, SAMPLE_CAP, norm, SAMPLE_CAP }) catch |err| {
         log.debug("observe upsert: {s}", .{@errorName(err)});
         return;
     };
