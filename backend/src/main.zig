@@ -9,6 +9,7 @@ const server = @import("server.zig");
 const ingest = @import("ingest.zig");
 const builder = @import("builder.zig");
 const promote = @import("promote.zig");
+const labeler = @import("labeler.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -86,6 +87,11 @@ pub fn main() !void {
     // migrations + local-db sync), every deploy served "semantic search not
     // available" for the whole startup window. keepalive (network) stays async.
     tpuf.init(io);
+
+    // labeler: serves com.atproto.label.* on its own port + emits bulk-mirror
+    // account labels. No-op unless LABELER_DID is set, so this is safe to ship
+    // before the labeler identity is provisioned.
+    labeler.start(allocator, io);
 
     // init local db and other services in background (slow)
     const init_thread = try Thread.spawn(.{}, initServices, .{ allocator, io });
@@ -191,4 +197,8 @@ test {
     _ = @import("db/LocalDb.zig");
     _ = @import("server/pubkey.zig");
     _ = @import("server/cache.zig");
+    _ = @import("labeler.zig");
+    _ = @import("labeler/label.zig");
+    _ = @import("labeler/store.zig");
+    _ = @import("labeler/server.zig");
 }

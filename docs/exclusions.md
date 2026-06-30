@@ -61,6 +61,12 @@ cleanup after a ban (the stores that don't self-heal):
 > deploy (the list is compiled in); the eventual next step, if bans get
 > frequent, is a `banned_dids` turso table read at runtime so a ban becomes a
 > data change instead of a deploy.
+>
+> the planned end-state for that "next step" is a pub-search **labeler**: a ban
+> is a signed account label (`bulk-mirror`) that backs the `banned_dids` store
+> and that other AT Protocol readers can subscribe to. detection feeds a
+> human-reviewed queue, not an auto-banner. see
+> [spam-detection-plan.md](spam-detection-plan.md).
 
 ## the registry
 

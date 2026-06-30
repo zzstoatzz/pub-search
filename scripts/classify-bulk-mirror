@@ -1,0 +1,338 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Offline bulk-mirror classifier (Phase 1 of docs/spam-detection-plan.md).
+
+Scores every publisher (DID) on whether it looks like a machine-generated
+registry/feed mirror vs human long-form writing, and validates the score
+against a hand-labeled known set. This is the *emission brain* for the planned
+pub-search labeler: it decides which DIDs should carry a `bulk-mirror` account
+label. It does NOT ban anything and does NOT write — read-only.
+
+WHAT THIS IS: the *decision function* — "given a DID's records, is this a
+bulk-mirror?" — plus an offline harness to prove it. A single record can't be
+judged ("S07E14: The Cadillac" is innocent alone); only the pattern across a
+DID's records reveals the mirror, so the decision needs a per-DID aggregate.
+
+This script feeds that aggregate from turso for two reasons: (1) validate the
+scoring against the known set offline, and (2) the one-time BACKFILL of ~40k
+docs indexed before the labeler exists. At steady state there is no batch job
+and no turso — the live labeler is a firehose listener that maintains the same
+rolling per-DID aggregate in its own store and runs this same decision function.
+
+WHY THESE SIGNALS (the data forced them — see the plan):
+- volume & burst ALONE are useless: the corpus's #1 author by doc count
+  (coryd.dev, 941) is a real human, and real blogs backfill hundreds of posts
+  in a day. so volume only *corroborates*, never decides.
+- absence of curation proves nothing (the recommend graph is too sparse —
+  coryd.dev has 0 recommends). so curation is a VETO only: if an account HAS
+  curation, never emit.
+- the real discriminator is authorship / content SHAPE: templated titles
+  ("Train #N Delayed", "I felt X"), empty/templated content, thin length.
+
+Usage:
+    scripts/classify-bulk-mirror                 # rank + validate (min 100 docs)
+    scripts/classify-bulk-mirror --min-docs 50   # widen the candidate floor
+    scripts/classify-bulk-mirror --samples       # print sample titles per row
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import math
+import os
+import re
+import sys
+import time
+from dataclasses import dataclass
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ── known set (hand-labeled, 2026-06-29) ────────────────────────────────────
+# the 3 historically-banned DIDs are purged from turso (no live rows to score),
+# so the live validation set is the 4 surfaced vs the 4 real humans.
+FLAG = {
+    "did:plc:jgg4dtdflzzemyvnybucnzdw": "chicagotransitalerts.app",
+    "did:plc:5swhfspkrynnbidlkrkch3lh": "prideraiser.org",
+    "did:plc:esvvys4mvoclui34shb23l5w": "eligundry.com",
+    "did:plc:gvudfu6dhl5cbpinhofa325s": "alekslessmann.de",
+}
+KEEP = {
+    "did:plc:sttgf52vkk46f6yuknvqxvgh": "coryd.dev",
+    "did:plc:77mn3ult3b72tpvtqqva6tat": "frankhecker.com",
+    "did:plc:rkjxbatkiros6f7pwtgsir54": "den.dev",
+    "did:plc:icpcpp5txyow3prnfgi533lj": "mikebifulco.com",
+}
+
+EMIT_THRESHOLD = 0.35  # score at/above which the labeler would emit bulk-mirror
+
+STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "for", "with",
+    "at", "by", "from", "is", "are", "was", "were", "be", "as", "it", "this",
+    "that", "i", "you", "we", "my", "your", "our", "me", "no", "not", "do",
+}
+
+CANARY_SLOW_SECS = 1.5
+
+
+def log(msg: str = "") -> None:
+    print(msg, flush=True)
+
+
+# ── turso plumbing (same shape as scripts/purge-banned-turso) ────────────────
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        return url[len("libsql://"):] if url.startswith("libsql://") else url
+
+
+def _stmt(sql: str, args: list | None = None) -> dict:
+    s: dict = {"sql": sql}
+    if args:
+        s["args"] = [{"type": "text", "value": str(a)} for a in args]
+    return s
+
+
+async def _execute(client: httpx.AsyncClient, st: Settings, sql: str, args=None) -> dict:
+    r = await client.post(
+        f"https://{st.turso_host}/v2/pipeline",
+        headers={"Authorization": f"Bearer {st.turso_token}", "Content-Type": "application/json"},
+        json={"requests": [{"type": "execute", "stmt": _stmt(sql, args)}, {"type": "close"}]},
+        timeout=120,
+    )
+    r.raise_for_status()
+    res = r.json()["results"][0]["response"]
+    if res.get("type") == "error":
+        raise RuntimeError(res["error"])
+    return res["result"]
+
+
+async def rows(client, st, sql, args=None) -> list[list]:
+    res = await _execute(client, st, sql, args)
+    return [[c.get("value") for c in row] for row in res.get("rows", [])]
+
+
+async def canary(client, st) -> None:
+    t0 = time.monotonic()
+    await _execute(client, st, "SELECT 1")
+    dt = time.monotonic() - t0
+    if dt > CANARY_SLOW_SECS:
+        log(f"ABORT: turso canary {dt:.2f}s — prod shares this db; not piling on.")
+        sys.exit(2)
+
+
+# ── feature extraction ───────────────────────────────────────────────────────
+def _norm(title: str) -> str:
+    t = title.lower()
+    t = re.sub(r"\d+", "#", t)
+    t = re.sub(r"[^\w\s#]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _toks(title: str) -> set[str]:
+    return {w for w in _norm(title).split() if len(w) > 1 and w not in STOPWORDS}
+
+
+@dataclass
+class Pub:
+    did: str
+    docs: int
+    pubs: int
+    avg_len: float
+    titles: list[str]
+    recos: int
+    subs: int
+
+    @property
+    def empty_title_frac(self) -> float:
+        return sum(1 for t in self.titles if not t.strip()) / max(1, len(self.titles))
+
+    @property
+    def digit_title_frac(self) -> float:
+        return sum(1 for t in self.titles if re.search(r"\d", t)) / max(1, len(self.titles))
+
+    @property
+    def distinct_norm_ratio(self) -> float:
+        return len({_norm(t) for t in self.titles}) / max(1, len(self.titles))
+
+    @property
+    def scaffold_coverage(self) -> float:
+        """How much of each title is shared scaffolding. Tokens appearing in
+        >=50% of titles form the scaffold; coverage = mean fraction of a
+        title's content tokens that are scaffold. High = templated."""
+        toksets = [_toks(t) for t in self.titles]
+        n = len(toksets)
+        if n == 0:
+            return 0.0
+        freq: dict[str, int] = {}
+        for ts in toksets:
+            for w in ts:
+                freq[w] = freq.get(w, 0) + 1
+        scaffold = {w for w, c in freq.items() if c >= 0.5 * n}
+        cov = []
+        for ts in toksets:
+            if not ts:
+                cov.append(1.0)  # empty/punctuation-only title is maximally templated
+            else:
+                cov.append(len(ts & scaffold) / len(ts))
+        return sum(cov) / n
+
+    @property
+    def template(self) -> float:
+        return max(1.0 - self.distinct_norm_ratio, self.scaffold_coverage)
+
+    @property
+    def thinness(self) -> float:
+        return min(max(1.0 - self.avg_len / 800.0, 0.0), 1.0)
+
+    @property
+    def structural(self) -> float:
+        return max(self.digit_title_frac, self.empty_title_frac)
+
+    @property
+    def volume(self) -> float:
+        # 100 docs → 0, 10k docs → 1 (log-scaled corroboration only)
+        return min(max((math.log10(max(self.docs, 1)) - 2.0) / 2.0, 0.0), 1.0)
+
+    @property
+    def vetoed(self) -> bool:
+        return self.recos > 0 or self.subs > 0
+
+    @property
+    def score(self) -> float:
+        raw = (
+            0.45 * self.template
+            + 0.20 * self.structural
+            + 0.20 * self.thinness
+            + 0.15 * self.volume
+        )
+        return 0.0 if self.vetoed else raw
+
+
+async def build_pubs(client, st, min_docs: int) -> list[Pub]:
+    # Q1: per-DID aggregates over the whole corpus (one GROUP BY scan).
+    agg = await rows(client, st, f"""
+        SELECT did, COUNT(*) docs, COUNT(DISTINCT publication_uri) pubs,
+               AVG(LENGTH(content)) avg_len
+        FROM documents
+        WHERE is_bridgyfed = 0
+        GROUP BY did
+        HAVING docs >= {int(min_docs)}
+        ORDER BY docs DESC
+    """)
+    cand = {r[0]: (int(r[1]), int(r[2]), float(r[3] or 0)) for r in agg}
+    if not cand:
+        return []
+
+    await canary(client, st)
+
+    # Q2: titles for candidates only (bounded by candidate count).
+    dids = list(cand)
+    ph = ",".join("?" for _ in dids)
+    title_rows = await rows(
+        client, st,
+        f"SELECT did, title FROM documents WHERE is_bridgyfed = 0 AND did IN ({ph})",
+        dids,
+    )
+    titles: dict[str, list[str]] = {d: [] for d in dids}
+    for did, title in title_rows:
+        titles[did].append(title or "")
+
+    await canary(client, st)
+
+    # Q3: curation signal (the veto) per candidate.
+    recos = {
+        r[0]: int(r[1]) for r in await rows(client, st, f"""
+            SELECT d.did, COUNT(*) FROM recommends r
+            JOIN documents d ON r.document_uri = d.uri
+            WHERE d.did IN ({ph}) GROUP BY d.did
+        """, dids)
+    }
+    subs = {
+        r[0]: int(r[1]) for r in await rows(client, st, f"""
+            SELECT p.did, COUNT(*) FROM subscriptions s
+            JOIN publications p ON s.publication_uri = p.uri
+            WHERE p.did IN ({ph}) GROUP BY p.did
+        """, dids)
+    }
+
+    out = []
+    for did, (docs, pubs, avg_len) in cand.items():
+        out.append(Pub(did, docs, pubs, avg_len, titles[did], recos.get(did, 0), subs.get(did, 0)))
+    out.sort(key=lambda p: p.score, reverse=True)
+    return out
+
+
+def validate(pubs: list[Pub]) -> int:
+    by_did = {p.did: p for p in pubs}
+    log("\nvalidation against the known set (FLAG should be ≥ %.2f, KEEP below):" % EMIT_THRESHOLD)
+    ok = True
+    worst_flag, best_keep = 1.0, 0.0
+    for did, name in FLAG.items():
+        p = by_did.get(did)
+        if not p:
+            log(f"  ?? FLAG  {name:<26} no live rows (purged or below floor)")
+            continue
+        worst_flag = min(worst_flag, p.score)
+        hit = p.score >= EMIT_THRESHOLD
+        ok &= hit
+        log(f"  {'✓' if hit else '✗'}  FLAG  {name:<26} score={p.score:.3f}")
+    for did, name in KEEP.items():
+        p = by_did.get(did)
+        if not p:
+            log(f"  ?? KEEP  {name:<26} no live rows")
+            continue
+        best_keep = max(best_keep, p.score)
+        hit = p.score < EMIT_THRESHOLD
+        ok &= hit
+        log(f"  {'✓' if hit else '✗'}  KEEP  {name:<26} score={p.score:.3f}")
+    margin = worst_flag - best_keep
+    log(f"\nseparation margin (worst FLAG − best KEEP): {margin:+.3f}")
+    log("RESULT: " + ("PASS — clean separation" if ok else "FAIL — overlap, retune weights"))
+    return 0 if ok else 1
+
+
+async def main() -> int:
+    ap = argparse.ArgumentParser(description="offline bulk-mirror classifier")
+    ap.add_argument("--min-docs", type=int, default=100, help="candidate doc floor")
+    ap.add_argument("--top", type=int, default=25, help="rows to print")
+    ap.add_argument("--samples", action="store_true", help="print sample titles")
+    args = ap.parse_args()
+
+    st = Settings()  # type: ignore
+    async with httpx.AsyncClient() as client:
+        pubs = await build_pubs(client, st, args.min_docs)
+
+    if not pubs:
+        log(f"no publishers with ≥{args.min_docs} docs")
+        return 0
+
+    known = {**FLAG, **KEEP}
+    log(f"{'score':>6} {'emit':>4} {'veto':>4} {'tmpl':>5} {'struc':>5} {'thin':>5} "
+        f"{'vol':>4} {'docs':>6}  publisher")
+    for p in pubs[:args.top]:
+        tag = known.get(p.did, "")
+        mark = "·" + tag if tag else p.did[:18]
+        log(f"{p.score:6.3f} {'YES' if p.score >= EMIT_THRESHOLD and not p.vetoed else '-':>4} "
+            f"{'V' if p.vetoed else '-':>4} {p.template:5.2f} {p.structural:5.2f} "
+            f"{p.thinness:5.2f} {p.volume:4.2f} {p.docs:6d}  {mark}")
+        if args.samples:
+            for t in p.titles[:4]:
+                log(f"          · {t[:80]}")
+
+    return validate(pubs)
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))

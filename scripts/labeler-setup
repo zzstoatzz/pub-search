@@ -1,0 +1,211 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["atproto", "cryptography", "base58", "pydantic-settings"]
+# ///
+"""Turn the pub-search.waow.tech account into an AT Protocol labeler.
+
+Mirrors what plyr.fm did for moderation.plyr.fm (did:plc:xnk7t5cvnnvzkmbf7wpss527):
+adds an `#atproto_label` secp256k1 key + `#atproto_labeler` service to the
+account's PLC DID doc, then writes the `app.bsky.labeler.service/self`
+declaration. The difference: we reuse the existing pub-search account rather than
+minting a dedicated one (we don't lean on its bsky presence the way plyr does on
+its main account).
+
+pub-search is on a bsky-hosted PDS, so we don't hold the PLC rotation key — the
+DID update goes through the PDS-mediated, email-token flow
+(requestPlcOperationSignature → signPlcOperation → submitPlcOperation).
+
+The signing key generated here is what the backend labeler signs with: its 32-byte
+private value (hex) → LABELER_SECRET_KEY; its compressed pubkey → the #atproto_label
+Multikey in the DID doc. zat.Keypair.fromSecretKey(.secp256k1, ...) reproduces the
+same pubkey, so signatures verify against the DID doc.
+
+Steps (run in order):
+    scripts/labeler-setup keygen     # generate signing key → .labeler-key (gitignored)
+    scripts/labeler-setup request    # log in, email a PLC confirmation token to the account
+    scripts/labeler-setup apply --token <TOKEN>   # add label key + labeler service to the DID  [MUTATES THE DID]
+    scripts/labeler-setup declare    # write the app.bsky.labeler.service/self record
+    scripts/labeler-setup secrets    # print the fly secrets to set on the backend
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import sys
+
+import base58
+from atproto import Client
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+KEY_FILE = pathlib.Path(__file__).resolve().parent.parent / ".labeler-key"
+LABELER_ENDPOINT = os.environ.get("LABELER_ENDPOINT", "https://labeler.pub-search.waow.tech")
+SECP256K1_MULTICODEC = b"\xe7\x01"  # varint of 0xe7 (secp256k1-pub)
+
+# bulk-mirror label definition — same shape as plyr's copyright-violation,
+# descriptive value, severity=inform, off by default (consumers opt in).
+LABEL_DECLARATION = {
+    "$type": "app.bsky.labeler.service",
+    "policies": {
+        "labelValues": ["bulk-mirror"],
+        "labelValueDefinitions": [
+            {
+                "identifier": "bulk-mirror",
+                "severity": "inform",
+                "blurs": "none",
+                "defaultSetting": "ignore",
+                "adultOnly": False,
+                "locales": [
+                    {
+                        "lang": "en",
+                        "name": "bulk mirror",
+                        "description": (
+                            "machine-generated registry/feed mirror — bulk records "
+                            "exported from an external database, not human-authored "
+                            "writing (e.g. patent dumps, transit-alert feeds, recall "
+                            "summaries)."
+                        ),
+                    }
+                ],
+            }
+        ],
+    },
+}
+
+
+def log(m: str = "") -> None:
+    print(m, flush=True)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    atproto_handle: str = ""
+    atproto_password: str = ""
+
+
+def login() -> Client:
+    s = Settings()  # type: ignore
+    if not (s.atproto_handle and s.atproto_password):
+        log("ERROR: ATPROTO_HANDLE / ATPROTO_PASSWORD not set (.env)")
+        sys.exit(1)
+    c = Client()
+    c.login(s.atproto_handle, s.atproto_password)
+    return c
+
+
+def multikey(pubkey_compressed: bytes) -> str:
+    """compressed secp256k1 pubkey → did:key Multikey multibase (zQ3sh...)."""
+    return "z" + base58.b58encode(SECP256K1_MULTICODEC + pubkey_compressed).decode()
+
+
+# ── steps ────────────────────────────────────────────────────────────────────
+def cmd_keygen(_: argparse.Namespace) -> None:
+    if KEY_FILE.exists():
+        log(f"{KEY_FILE.name} already exists — refusing to overwrite. delete it to regen.")
+        sys.exit(1)
+    priv = ec.generate_private_key(ec.SECP256K1())
+    secret_hex = format(priv.private_numbers().private_value, "064x")
+    compressed = priv.public_key().public_bytes(Encoding.X962, PublicFormat.CompressedPoint)
+    mk = multikey(compressed)
+    KEY_FILE.write_text(json.dumps({"secret_hex": secret_hex, "multikey": mk}, indent=2))
+    KEY_FILE.chmod(0o600)
+    log(f"wrote {KEY_FILE.name} (gitignored, chmod 600)")
+    log(f"  #atproto_label did:key = did:key:{mk}")
+    log("next: scripts/labeler-setup request")
+
+
+def _load_key() -> dict:
+    if not KEY_FILE.exists():
+        log("no .labeler-key — run: scripts/labeler-setup keygen")
+        sys.exit(1)
+    return json.loads(KEY_FILE.read_text())
+
+
+def cmd_request(_: argparse.Namespace) -> None:
+    c = login()
+    c.com.atproto.identity.request_plc_operation_signature()
+    log("requested a PLC operation signature.")
+    log("→ check the pub-search account's email for the confirmation token,")
+    log("  then: scripts/labeler-setup apply --token <TOKEN>")
+
+
+def cmd_apply(args: argparse.Namespace) -> None:
+    key = _load_key()
+    c = login()
+    did = c.me.did
+
+    creds = c.com.atproto.identity.get_recommended_did_credentials()
+    vms = dict(creds.verification_methods or {})
+    svcs = dict(creds.services or {})
+    vms["atproto_label"] = f"did:key:{key['multikey']}"
+    svcs["atproto_labeler"] = {"type": "AtprotoLabeler", "endpoint": LABELER_ENDPOINT}
+
+    log(f"DID:      {did}")
+    log(f"endpoint: {LABELER_ENDPOINT}")
+    log(f"label key: did:key:{key['multikey']}")
+    log("submitting PLC operation (this MUTATES the production DID)...")
+
+    signed = c.com.atproto.identity.sign_plc_operation({
+        "token": args.token,
+        "rotationKeys": creds.rotation_keys,
+        "alsoKnownAs": creds.also_known_as,
+        "verificationMethods": vms,
+        "services": svcs,
+    })
+    c.com.atproto.identity.submit_plc_operation({"operation": signed.operation})
+    log("PLC operation submitted. verify with:")
+    log(f"  curl -s https://plc.directory/{did} | jq '.service, .verificationMethod'")
+    log("next: scripts/labeler-setup declare")
+
+
+def cmd_declare(_: argparse.Namespace) -> None:
+    import datetime
+
+    c = login()
+    did = c.me.did
+    record = {
+        **LABEL_DECLARATION,
+        "createdAt": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+    }
+    c.com.atproto.repo.put_record({
+        "repo": did,
+        "collection": "app.bsky.labeler.service",
+        "rkey": "self",
+        "record": record,
+    })
+    log(f"wrote app.bsky.labeler.service/self to {did}")
+    log("next: scripts/labeler-setup secrets")
+
+
+def cmd_secrets(_: argparse.Namespace) -> None:
+    key = _load_key()
+    c = login()
+    log("set these on the backend (cd backend && fly secrets set ...):")
+    log(f"  LABELER_DID={c.me.did}")
+    log(f"  LABELER_SECRET_KEY={key['secret_hex']}")
+    log("  LABELER_PORT=3001   (then expose it: CF subdomain labeler.pub-search.waow.tech → backend:3001)")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="provision the pub-search labeler identity")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("keygen").set_defaults(fn=cmd_keygen)
+    sub.add_parser("request").set_defaults(fn=cmd_request)
+    p_apply = sub.add_parser("apply")
+    p_apply.add_argument("--token", required=True, help="email confirmation token from `request`")
+    p_apply.set_defaults(fn=cmd_apply)
+    sub.add_parser("declare").set_defaults(fn=cmd_declare)
+    sub.add_parser("secrets").set_defaults(fn=cmd_secrets)
+    args = ap.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()
