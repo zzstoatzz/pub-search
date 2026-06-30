@@ -244,6 +244,95 @@ fn maybeEvaluate(conn: zqlite.Conn, did: []const u8) void {
     logfire.info("classifier: queued {s} for model review (score={d:.3} docs={d})", .{ did, score, doc_count });
 }
 
+fn stateName(s: i64) []const u8 {
+    return switch (s) {
+        STATE_PENDING => "pending",
+        STATE_LABELED => "labeled",
+        STATE_REJECTED => "rejected",
+        STATE_VETOED => "vetoed",
+        else => "observing",
+    };
+}
+
+/// Read-only admin summary: counts by state + every decided author (state != 0)
+/// with its score and a few normalized title patterns (the "why"). JSON for the
+/// /labels heads-up page. caller owns the result.
+pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
+    const conn = g_conn orelse return allocator.dupe(u8, "{\"counts\":{},\"authors\":[]}");
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var jw: json.Stringify = .{ .writer = &out.writer, .options = .{} };
+
+    try jw.beginObject();
+
+    // counts by state
+    var counts = [_]i64{0} ** 5;
+    {
+        var r = try conn.rows("SELECT state, COUNT(*) FROM author_stats GROUP BY state", .{});
+        defer r.deinit();
+        while (r.next()) |row| {
+            const s = row.int(0);
+            if (s >= 0 and s < 5) counts[@intCast(s)] = row.int(1);
+        }
+    }
+    try jw.objectField("counts");
+    try jw.beginObject();
+    inline for (.{ .{ "observing", STATE_OBSERVING }, .{ "pending", STATE_PENDING }, .{ "labeled", STATE_LABELED }, .{ "rejected", STATE_REJECTED }, .{ "vetoed", STATE_VETOED } }) |pair| {
+        try jw.objectField(pair[0]);
+        try jw.write(counts[pair[1]]);
+    }
+    try jw.endObject();
+
+    // decided authors (labeled first, then pending, vetoed, rejected)
+    try jw.objectField("authors");
+    try jw.beginArray();
+    var r = try conn.rows(
+        \\SELECT did, doc_count, len_sum, empty_titles, digit_titles, title_sample, state
+        \\FROM author_stats WHERE state != 0
+        \\ORDER BY CASE state WHEN 2 THEN 0 WHEN 1 THEN 1 WHEN 4 THEN 2 ELSE 3 END, doc_count DESC
+        \\LIMIT 500
+    , .{});
+    defer r.deinit();
+    while (r.next()) |row| {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const stats = Stats{
+            .doc_count = row.int(1),
+            .len_sum = row.int(2),
+            .empty_titles = row.int(3),
+            .digit_titles = row.int(4),
+            .sample = row.text(5),
+        };
+        try jw.beginObject();
+        try jw.objectField("did");
+        try jw.write(row.text(0));
+        try jw.objectField("state");
+        try jw.write(stateName(row.int(6)));
+        try jw.objectField("docs");
+        try jw.write(row.int(1));
+        try jw.objectField("score");
+        try jw.write(stats.score(arena.allocator()));
+        // up to 3 normalized title patterns — shows WHY it scored as templated
+        try jw.objectField("patterns");
+        try jw.beginArray();
+        var it = std.mem.splitScalar(u8, stats.sample, '\n');
+        var n: usize = 0;
+        while (it.next()) |t| {
+            if (t.len == 0) continue;
+            try jw.write(t);
+            n += 1;
+            if (n >= 3) break;
+        }
+        try jw.endArray();
+        try jw.endObject();
+    }
+    try jw.endArray();
+
+    try jw.endObject();
+    return out.toOwnedSlice();
+}
+
 fn setDecided(conn: zqlite.Conn, did: []const u8, state: i64) void {
     conn.exec("UPDATE author_stats SET labeled = 1, state = ? WHERE did = ?", .{ state, did }) catch {};
 }

@@ -19,6 +19,7 @@ const subscribed = @import("server/subscribed.zig");
 const subscribers = @import("server/subscribers.zig");
 const wrapped_ep = @import("server/wrapped.zig");
 const labeler = @import("labeler.zig");
+const classifier = @import("ingest/classifier.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
@@ -163,6 +164,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleBackfill(request, target, io);
     } else if (mem.eql(u8, path, "/admin/label")) {
         try handleLabel(request, target);
+    } else if (mem.eql(u8, path, "/api/labeler")) {
+        try handleLabelerSummary(request);
     } else if (mem.eql(u8, path, "/snapshot")) {
         try handleSnapshot(request, io);
     } else {
@@ -810,6 +813,19 @@ fn handleLabel(request: *http.Server.Request, target: []const u8) !void {
 
     const body = try std.fmt.allocPrint(alloc, "{{\"ok\":true,\"seq\":{d},\"did\":\"{s}\",\"val\":\"{s}\",\"neg\":{}}}", .{ seq, did, val, neg });
     try request.respond(body, .{ .extra_headers = json_hdr });
+}
+
+// Read-only labeler summary for the /labels heads-up page (counts by state +
+// every decided author with score + title patterns). Public — the data is the
+// labels we already publish.
+fn handleLabelerSummary(request: *http.Server.Request) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const body = classifier.writeSummaryJson(arena.allocator()) catch {
+        try sendJson(request, "{\"counts\":{},\"authors\":[]}");
+        return;
+    };
+    try sendJson(request, body);
 }
 
 fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !void {

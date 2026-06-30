@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pub search / labels</title>
+  <meta name="description" content="bulk-mirror labeler — what's labeled, read-only heads-up">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='18' width='6' height='10' fill='%231B7340'/><rect x='13' y='12' width='6' height='16' fill='%231B7340'/><rect x='22' y='6' width='6' height='22' fill='%231B7340'/></svg>">
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'dark';
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="dashboard.css?v=1779507677">
+  <style>
+    .lead { color: var(--text-dim); font-size: 0.8rem; line-height: 1.5; margin: -0.4rem 0 1.4rem; }
+    .lead a { color: var(--text-secondary); }
+    .filters { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .filters button {
+      font-family: monospace; font-size: 0.72rem; cursor: pointer;
+      background: var(--bg-subtle); color: var(--text-secondary);
+      border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.7rem;
+    }
+    .filters button.active { color: var(--text-bright); border-color: var(--border-focus); background: var(--bg-hover); }
+    .author { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.7rem 0.85rem; margin-bottom: 0.6rem; background: var(--bg-subtle); }
+    .author-top { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+    .badge { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.12rem 0.5rem; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+    .badge.labeled  { color: #f59e0b; border-color: #f59e0b55; background: #f59e0b14; }
+    .badge.rejected { color: #1f9d57; border-color: #1f9d5755; background: #1f9d5714; }
+    .badge.vetoed   { color: #3b82f6; border-color: #3b82f655; background: #3b82f614; }
+    .badge.pending  { color: var(--text-dim); border-color: var(--border); }
+    .handle { color: var(--text-bright); font-size: 0.92rem; text-decoration: none; }
+    .handle:hover { text-decoration: underline; }
+    .author-did { color: var(--text-muted); font-size: 0.68rem; }
+    .author-meta { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; }
+    .author-meta b { color: var(--text-secondary); font-weight: normal; }
+    .patterns { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.12rem; }
+    .patterns .p { color: var(--text-muted); font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .patterns .p::before { content: "↳ "; color: var(--text-muted); }
+    .empty { color: var(--text-dim); font-size: 0.8rem; padding: 1rem 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span></h1>
+    <p class="lead">
+      the <b>bulk-mirror</b> labeler's decisions — accounts whose content is machine-generated
+      registry/feed output, not human writing. emitted autonomously: a title-pattern pre-filter
+      flags candidates, then a model reads sample content and confirms before labeling. read-only
+      heads-up; the app doesn't act on these yet. labeler: <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank">@pub-search.waow.tech</a>
+    </p>
+
+    <section>
+      <div class="metrics" id="metrics"></div>
+    </section>
+
+    <section>
+      <div class="section-title">decided accounts</div>
+      <div class="filters" id="filters"></div>
+      <div id="list"><div class="empty">loading…</div></div>
+    </section>
+  </div>
+
+  <script>
+    const API_URL = 'https://leaflet-search-backend.fly.dev';
+    const TYPEAHEAD = 'https://typeahead.waow.tech';
+    let AUTHORS = [];
+    let FILTER = 'all';
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+    async function resolveHandles(dids) {
+      const out = {};
+      for (let i = 0; i < dids.length; i += 25) {
+        const batch = dids.slice(i, i + 25);
+        try {
+          const r = await fetch(`${TYPEAHEAD}/xrpc/app.bsky.actor.getProfiles?actors=${batch.map(encodeURIComponent).join(',')}`,
+            { headers: { 'X-Client': 'pub-search/labels' } });
+          const d = await r.json();
+          (d.profiles || []).forEach(p => { out[p.did] = p.handle; });
+        } catch {}
+      }
+      return out;
+    }
+
+    function render() {
+      const list = document.getElementById('list');
+      const rows = AUTHORS.filter(a => FILTER === 'all' || a.state === FILTER);
+      if (!rows.length) { list.innerHTML = '<div class="empty">nothing here.</div>'; return; }
+      list.innerHTML = rows.map(a => {
+        const label = a.handle ? '@' + esc(a.handle) : esc(a.did.slice(0, 24)) + '…';
+        const profile = 'https://bsky.app/profile/' + encodeURIComponent(a.handle || a.did);
+        const pats = (a.patterns || []).map(p => `<div class="p">${esc(p)}</div>`).join('');
+        return `<div class="author">
+          <div class="author-top">
+            <span class="badge ${a.state}">${a.state}</span>
+            <a class="handle" href="${profile}" target="_blank" rel="noopener">${label}</a>
+            <span class="author-meta"><b>${a.docs}</b> docs · score <b>${a.score.toFixed(2)}</b></span>
+          </div>
+          <div class="author-did">${esc(a.did)}</div>
+          ${pats ? `<div class="patterns">${pats}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    function renderFilters(counts) {
+      const order = [['all', 'all'], ['labeled', 'labeled'], ['pending', 'pending'], ['vetoed', 'vetoed'], ['rejected', 'rejected']];
+      const total = AUTHORS.length;
+      document.getElementById('filters').innerHTML = order.map(([k, lbl]) => {
+        const n = k === 'all' ? total : (counts[k] || 0);
+        return `<button data-f="${k}" class="${k === FILTER ? 'active' : ''}">${lbl} ${n}</button>`;
+      }).join('');
+      document.querySelectorAll('#filters button').forEach(b =>
+        b.onclick = () => { FILTER = b.dataset.f; renderFilters(counts); render(); });
+    }
+
+    function renderMetrics(c) {
+      const cards = [
+        ['labeled', c.labeled || 0, 'warn'],
+        ['pending', c.pending || 0, ''],
+        ['rejected', c.rejected || 0, ''],
+        ['vetoed', c.vetoed || 0, ''],
+        ['observing', c.observing || 0, ''],
+      ];
+      document.getElementById('metrics').innerHTML = cards.map(([lbl, v, cls]) =>
+        `<div><div class="metric-value ${cls}">${v}</div><div class="metric-label">${lbl}</div></div>`).join('');
+    }
+
+    (async function () {
+      let data;
+      try {
+        data = await (await fetch(`${API_URL}/api/labeler`)).json();
+      } catch {
+        document.getElementById('list').innerHTML = '<div class="empty">failed to load.</div>';
+        return;
+      }
+      const counts = data.counts || {};
+      renderMetrics(counts);
+      AUTHORS = data.authors || [];
+      renderFilters(counts);
+      render();
+      // resolve handles in the background, then re-render
+      const handles = await resolveHandles(AUTHORS.map(a => a.did));
+      AUTHORS.forEach(a => { a.handle = handles[a.did] || null; });
+      render();
+    })();
+  </script>
+</body>
+</html>
