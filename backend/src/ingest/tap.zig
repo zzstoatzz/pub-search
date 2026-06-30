@@ -9,6 +9,7 @@ const logfire = @import("logfire");
 const poolio = @import("poolio");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
+const classifier = @import("classifier.zig");
 const Io = std.Io;
 const tpuf = @import("../tpuf.zig");
 
@@ -448,6 +449,11 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.cover_image,
     );
     logfire.counter("tap.documents_indexed", 1);
+
+    // feed the autonomous labeler: it keeps a rolling per-DID aggregate and
+    // emits bulk-mirror on its own when an author crosses the threshold. Local
+    // sqlite only — never blocks the firehose.
+    classifier.observe(did, doc.title, doc.content);
 }
 
 fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
@@ -534,8 +540,8 @@ fn tidToIso(buf: []u8, rkey: []const u8) ?[]const u8 {
     const md = yd.calculateMonthDay();
     const ds = es.getDaySeconds();
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
-        yd.year,                  md.month.numeric(), md.day_index + 1,
-        ds.getHoursIntoDay(),     ds.getMinutesIntoHour(), ds.getSecondsIntoMinute(),
+        yd.year,              md.month.numeric(),      md.day_index + 1,
+        ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute(),
     }) catch null;
 }
 
@@ -547,8 +553,8 @@ fn tidToIso(buf: []u8, rkey: []const u8) ?[]const u8 {
 // ---------------------------------------------------------------------------
 
 const BACKFILL_COLLECTIONS = [_][]const u8{
-    LEAFLET_DOCUMENT,    STANDARD_DOCUMENT,    WHITEWIND_ENTRY,
-    LEAFLET_PUBLICATION, STANDARD_PUBLICATION, STANDARD_RECOMMEND,
+    LEAFLET_DOCUMENT,    STANDARD_DOCUMENT,     WHITEWIND_ENTRY,
+    LEAFLET_PUBLICATION, STANDARD_PUBLICATION,  STANDARD_RECOMMEND,
     LEAFLET_RECOMMEND,   STANDARD_SUBSCRIPTION,
 };
 

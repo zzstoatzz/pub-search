@@ -10,6 +10,7 @@ const ingest = @import("ingest.zig");
 const builder = @import("builder.zig");
 const promote = @import("promote.zig");
 const labeler = @import("labeler.zig");
+const labeler_classifier = @import("ingest/classifier.zig");
 
 const SOCKET_TIMEOUT_SECS = 5;
 
@@ -92,6 +93,10 @@ pub fn main() !void {
     // account labels. No-op unless LABELER_DID is set, so this is safe to ship
     // before the labeler identity is provisioned.
     labeler.start(allocator, io);
+
+    // autonomous bulk-mirror classifier — fed per-document from the firehose
+    // (see ingest/tap.zig processDocument); emits via the labeler on its own.
+    labeler_classifier.init();
 
     // init local db and other services in background (slow)
     const init_thread = try Thread.spawn(.{}, initServices, .{ allocator, io });
@@ -201,4 +206,5 @@ test {
     _ = @import("labeler/label.zig");
     _ = @import("labeler/store.zig");
     _ = @import("labeler/server.zig");
+    _ = @import("ingest/classifier.zig");
 }
