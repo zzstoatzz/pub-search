@@ -27,7 +27,11 @@ const log = std.log.scoped(.classifier);
 // autonomous and there's no curation veto in the firehose path.
 const FLOOR: i64 = 50; // min docs before a DID can be judged
 const EVAL_EVERY: i64 = 25; // re-score every N docs past the floor until labeled
-const THRESHOLD: f64 = 0.50;
+const THRESHOLD: f64 = 0.55; // precision-first; signal fixes do the real work
+// bump when scoring logic changes → bootstrap negates old labels + re-scores the
+// whole corpus from a clean slate. v2 = precision fix (no date/empty-title
+// false positives, content-word scaffold only, curation veto).
+const SCORING_VERSION: i64 = 2;
 const SAMPLE_CAP: i64 = 64; // normalized titles kept per DID for template scoring
 
 var g_conn: ?zqlite.Conn = null;
@@ -87,13 +91,28 @@ pub fn observe(did: []const u8, title: []const u8, content: []const u8) void {
 /// Runs once, in a background thread.
 pub fn bootstrap() void {
     const conn = g_conn orelse return;
-    if (isBootstrapped(conn)) return;
+    if (getMeta(conn, "scoring_version") == SCORING_VERSION) return;
     const local = db.getLocalDbRaw() orelse return;
     if (!local.isReady()) return;
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const a = arena.allocator();
+
+    // scoring changed since last bootstrap: negate every label we previously
+    // emitted, so the corrected scoring starts from a clean slate (otherwise a
+    // now-below-threshold author would keep a stale positive label). No-op on
+    // the very first boot (nothing labeled yet).
+    {
+        var prev: std.ArrayList([]const u8) = .empty;
+        var rows = conn.rows("SELECT did FROM author_stats WHERE labeled = 1", .{}) catch return;
+        while (rows.next()) |row| prev.append(a, a.dupe(u8, row.text(0)) catch continue) catch {};
+        rows.deinit();
+        for (prev.items) |did| _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, true) catch {};
+        if (prev.items.len > 0)
+            logfire.info("classifier: cleared {d} prior labels for re-scoring (v{d})", .{ prev.items.len, SCORING_VERSION });
+        conn.execNoArgs("DELETE FROM author_stats") catch {};
+    }
 
     const Entry = struct { did: []const u8, title: []const u8, len: usize };
     var entries: std.ArrayList(Entry) = .empty;
@@ -116,18 +135,18 @@ pub fn bootstrap() void {
     }
 
     for (entries.items) |e| observeLen(e.did, e.title, e.len);
-    markBootstrapped(conn);
-    logfire.info("classifier: bootstrap fed {d} existing docs through the aggregate", .{entries.items.len});
+    setMeta(conn, "scoring_version", SCORING_VERSION);
+    logfire.info("classifier: bootstrap (re)scored {d} existing docs at v{d}", .{ entries.items.len, SCORING_VERSION });
 }
 
-fn isBootstrapped(conn: zqlite.Conn) bool {
-    const row = (conn.row("SELECT v FROM classifier_meta WHERE k = 'bootstrapped'", .{}) catch return false) orelse return false;
+fn getMeta(conn: zqlite.Conn, key: []const u8) i64 {
+    const row = (conn.row("SELECT v FROM classifier_meta WHERE k = ?", .{key}) catch return 0) orelse return 0;
     defer row.deinit();
-    return row.int(0) != 0;
+    return row.int(0);
 }
 
-fn markBootstrapped(conn: zqlite.Conn) void {
-    conn.exec("INSERT OR REPLACE INTO classifier_meta (k, v) VALUES ('bootstrapped', 1)", .{}) catch {};
+fn setMeta(conn: zqlite.Conn, key: []const u8, v: i64) void {
+    conn.exec("INSERT OR REPLACE INTO classifier_meta (k, v) VALUES (?, ?)", .{ key, v }) catch {};
 }
 
 fn observeLen(did: []const u8, title: []const u8, content_len: usize) void {
@@ -182,6 +201,15 @@ fn maybeEvaluate(conn: zqlite.Conn, did: []const u8) void {
     const score = stats.score(arena.allocator());
     if (score < THRESHOLD) return;
 
+    // curation veto: if anyone recommends or subscribes to this author, never
+    // label them — that's a human-curation signal a mirror won't have. Mark
+    // decided so we stop re-scoring.
+    if (hasCuration(did)) {
+        conn.exec("UPDATE author_stats SET labeled = 1 WHERE did = ?", .{did}) catch {};
+        logfire.info("classifier: vetoed {s} (score={d:.3} but has curation)", .{ did, score });
+        return;
+    }
+
     // emit the label (the labeler signs/stores/broadcasts), then mark decided so
     // we never emit twice. If the labeler isn't configured, leave unlabeled so a
     // later boot with a key can still emit.
@@ -220,7 +248,12 @@ const Stats = struct {
         return 0.45 * template + 0.20 * structural + 0.20 * thinness + 0.15 * volume;
     }
 
-    /// max(1 - distinct-normalized ratio, scaffold coverage) over the sample.
+    /// Scaffold coverage: how much of each title is shared CONTENT words
+    /// (tokens appearing in >=50% of titles). Titles with no content words —
+    /// dates, symbols, non-ASCII (Japanese) — contribute 0, NOT 1.0: a human
+    /// journal titled by date is not "templated spam". This is the precision
+    /// fix; the old `max(1 - distinct-ratio, …)` + `toks==0 -> 1.0` flagged real
+    /// people. Empty/date titles are caught by the structural signal instead.
     fn templateScore(self: Stats, alloc: Allocator) f64 {
         var titles: std.ArrayList([]const u8) = .empty;
         var it = std.mem.splitScalar(u8, self.sample, '\n');
@@ -230,11 +263,6 @@ const Stats = struct {
         }
         const n = titles.items.len;
         if (n == 0) return 0;
-
-        // distinct normalized ratio
-        var seen = std.StringHashMap(void).init(alloc);
-        for (titles.items) |t| seen.put(t, {}) catch {};
-        const distinct_ratio = frac(@intCast(seen.count()), @intCast(n));
 
         // scaffold: tokens appearing in >= 50% of titles
         var doc_freq = std.StringHashMap(usize).init(alloc);
@@ -262,13 +290,27 @@ const Stats = struct {
                 const f = doc_freq.get(w) orelse 0;
                 if (@as(f64, @floatFromInt(f)) >= half) scaffold_toks += 1;
             }
-            // empty/punctuation-only title is maximally templated
-            coverage_sum += if (toks == 0) 1.0 else frac(@intCast(scaffold_toks), @intCast(toks));
+            // no content words (date/symbol/non-ASCII) → NOT templated.
+            coverage_sum += if (toks == 0) 0.0 else frac(@intCast(scaffold_toks), @intCast(toks));
         }
-        const scaffold_coverage = coverage_sum / @as(f64, @floatFromInt(n));
-        return @max(1.0 - distinct_ratio, scaffold_coverage);
+        return coverage_sum / @as(f64, @floatFromInt(n));
     }
 };
+
+/// True if anyone recommends a doc by this author, or subscribes to one of
+/// their publications. Read from the frozen local replica (indexed existence
+/// checks; rare — only on a threshold crossing).
+fn hasCuration(did: []const u8) bool {
+    const local = db.getLocalDbRaw() orelse return false;
+    if (!local.isReady()) return false;
+    var rows = local.query(
+        \\SELECT EXISTS(SELECT 1 FROM recommends r JOIN documents d ON r.document_uri = d.uri WHERE d.did = ?)
+        \\    OR EXISTS(SELECT 1 FROM subscriptions s JOIN publications p ON s.publication_uri = p.uri WHERE p.did = ?)
+    , .{ did, did }) catch return false;
+    defer rows.deinit();
+    if (rows.next()) |row| return row.int(0) != 0;
+    return false;
+}
 
 fn hasDigit(s: []const u8) bool {
     for (s) |c| if (std.ascii.isDigit(c)) return true;
@@ -368,4 +410,22 @@ test "score: flagged vs kept separation" {
         .sample = "struggling with typescript\nbreaking the cycle\ntiny improvements\nwhat to do when\nserendipity isnt\nopen source your work",
     };
     try std.testing.expect(human.score(a) < THRESHOLD);
+}
+
+test "date-titled journal is NOT flagged (precision regression: firstwaterbottle)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // observe() stores normalized titles; "1/27/2026" → "# # #" (no content words).
+    const journal = Stats{
+        .doc_count = 98,
+        .len_sum = 98 * 400,
+        .empty_titles = 0,
+        .digit_titles = 98, // every title has digits
+        .sample = "# # #\n# # #\n# # #\n# # #\n# # #\n# # #",
+    };
+    // the old code scored this maximally templated (1.0) → false positive.
+    try std.testing.expectEqual(@as(f64, 0), journal.templateScore(a));
+    try std.testing.expect(journal.score(a) < THRESHOLD);
 }
