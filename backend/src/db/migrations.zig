@@ -275,7 +275,7 @@ pub const migrations = [_]zug.Migration{
         // surface a dead link in search. Reconciler will populate this column
         // via a HEAD on the destination URL.
         //
-        // Soft hide (vs delete) because tap.insertDocument doesn't consult
+        // Soft hide (vs delete) because the indexer doesn't consult
         // tombstones, so a delete-on-URL-404 strategy would flap every
         // resync. The row stays; search.zig WHERE clauses add `url_dead = 0`.
         .sql = "ALTER TABLE documents ADD COLUMN url_dead INTEGER DEFAULT 0",

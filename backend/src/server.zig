@@ -760,12 +760,12 @@ fn backfillWorker(io: Io, did: []u8, collection: ?[]u8) void {
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    _ = ingest.tap.backfillRepo(arena.allocator(), io, did, collection) catch |err| {
+    _ = ingest.ingester.backfillRepo(arena.allocator(), io, did, collection) catch |err| {
         logfire.warn("backfill: {s} failed: {s}", .{ did, @errorName(err) });
     };
 }
 
-/// On-demand backfill of a single repo, bypassing tap's serial resync queue.
+/// On-demand backfill of a single repo, bypassing the ingester's serial resync queue.
 /// `POST /admin/backfill?did=<did>[&collection=<nsid>]`. Pulls every record of
 /// our collections straight from the author's PDS through the normal
 /// extract+index path. Guarded by BACKFILL_TOKEN (?token=) when that env is set.
@@ -901,7 +901,7 @@ fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !vo
         return;
     }
 
-    const counts = ingest.tap.backfillRepo(alloc, io, did, collection) catch |err| {
+    const counts = ingest.ingester.backfillRepo(alloc, io, did, collection) catch |err| {
         const body = try std.fmt.allocPrint(alloc, "{{\"error\":\"backfill failed: {s}\"}}", .{@errorName(err)});
         try request.respond(body, .{
             .status = .internal_server_error,

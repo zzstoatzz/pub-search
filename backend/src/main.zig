@@ -89,13 +89,13 @@ pub fn main() !void {
     // available" for the whole startup window. keepalive (network) stays async.
     tpuf.init(io);
 
-    // labeler: serves com.atproto.label.* on its own port + emits bulk-mirror
+    // labeler: serves com.atproto.label.* on its own port + emits machine-generated
     // account labels. No-op unless LABELER_DID is set, so this is safe to ship
     // before the labeler identity is provisioned.
     labeler.start(allocator, io);
 
-    // autonomous bulk-mirror classifier — fed per-document from the firehose
-    // (see ingest/tap.zig processDocument); emits via the labeler on its own.
+    // autonomous machine-generated classifier — fed per-document from the firehose
+    // (see ingest/ingester.zig processDocument); emits via the labeler on its own.
     labeler_classifier.init();
 
     // init local db and other services in background (slow)
@@ -182,8 +182,8 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // start embedder (voyage-4-lite, 1024 dims, 1 worker)
     ingest.embedder.start(allocator, io);
 
-    // start tap consumer
-    ingest.tap.consumer(allocator, io);
+    // start ingester consumer
+    ingest.ingester.consumer(allocator, io);
 }
 
 fn setSocketTimeout(fd: std.posix.fd_t, secs: u32) !void {
@@ -204,7 +204,7 @@ test {
     _ = @import("db/zug_conn.zig");
     _ = @import("db/migrations.zig");
     _ = @import("ingest/extractor.zig");
-    _ = @import("ingest/tap.zig");
+    _ = @import("ingest/ingester.zig");
     _ = @import("server/search.zig");
     _ = @import("server.zig");
     _ = @import("policy.zig");

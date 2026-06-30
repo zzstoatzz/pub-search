@@ -69,17 +69,17 @@ fn recommendDocFieldName(collection: []const u8) []const u8 {
     return if (mem.eql(u8, collection, LEAFLET_RECOMMEND)) "subject" else "document";
 }
 
-fn getTapHost() []const u8 {
-    return if (std.c.getenv("TAP_HOST")) |p| std.mem.span(p) else "leaflet-search-tap.fly.dev";
+fn getIngesterHost() []const u8 {
+    return if (std.c.getenv("INGESTER_HOST")) |p| std.mem.span(p) else "leaflet-search-ingester.fly.dev";
 }
 
-fn getTapPort() u16 {
-    const port_str = if (std.c.getenv("TAP_PORT")) |p| std.mem.span(p) else "443";
+fn getIngesterPort() u16 {
+    const port_str = if (std.c.getenv("INGESTER_PORT")) |p| std.mem.span(p) else "443";
     return std.fmt.parseInt(u16, port_str, 10) catch 443;
 }
 
 fn useTls() bool {
-    return getTapPort() == 443;
+    return getIngesterPort() == 443;
 }
 
 /// Bounded queue for decoupling websocket readLoop from turso writes.
@@ -88,22 +88,22 @@ fn useTls() bool {
 /// (already ACK'd) so the freshest data wins.
 const QUEUE_CAPACITY = 256;
 
-const TapCtx = struct {
+const IngesterCtx = struct {
     allocator: Allocator,
 
-    fn process(self: *TapCtx, _: Io, frame: []u8) void {
+    fn process(self: *IngesterCtx, _: Io, frame: []u8) void {
         defer self.allocator.free(frame);
         processMessage(self.allocator, frame) catch |err| {
             logfire.err("message processing error: {}", .{err});
         };
     }
 
-    fn onDrop(self: *TapCtx, frame: []u8) void {
+    fn onDrop(self: *IngesterCtx, frame: []u8) void {
         self.allocator.free(frame);
     }
 };
 
-const TapPool = poolio.Pool([]u8, TapCtx);
+const IngesterPool = poolio.Pool([]u8, IngesterCtx);
 
 pub fn consumer(allocator: Allocator, io: Io) void {
     var backoff: u64 = 1;
@@ -114,10 +114,10 @@ pub fn consumer(allocator: Allocator, io: Io) void {
         if (connected) |_| {
             // connection succeeded then closed - reset backoff
             backoff = 1;
-            logfire.info("tap connection closed, reconnecting immediately", .{});
+            logfire.info("ingester connection closed, reconnecting immediately", .{});
         } else |err| {
             // connection failed - backoff
-            logfire.warn("tap error: {}, reconnecting in {d}s", .{ err, backoff });
+            logfire.warn("ingester error: {}, reconnecting in {d}s", .{ err, backoff });
             io.sleep(Io.Duration.fromSeconds(@intCast(backoff)), .awake) catch {};
             backoff = @min(backoff * 2, max_backoff);
         }
@@ -128,7 +128,7 @@ const Handler = struct {
     allocator: Allocator,
     io: Io,
     client: *websocket.Client,
-    pool: *TapPool,
+    pool: *IngesterPool,
     // atomic: read by the staleness watchdog thread
     msg_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     ack_count: usize = 0,
@@ -139,7 +139,7 @@ const Handler = struct {
         const count = self.msg_count.fetchAdd(1, .monotonic) + 1;
         if (count % 1000 == 0) {
             const c = self.pool.counters(self.io);
-            logfire.info("tap: recv {d}, acks {d}, accepted {d}, processed {d}, dropped {d}, queued {d}", .{
+            logfire.info("ingester: recv {d}, acks {d}, accepted {d}, processed {d}, dropped {d}, queued {d}", .{
                 count, self.ack_count, c.accepted, c.processed, c.dropped, c.queued,
             });
         }
@@ -147,21 +147,21 @@ const Handler = struct {
         // extract message ID for ACK
         const msg_id = extractMessageId(self.allocator, data);
 
-        // ACK immediately — before processing — to keep TAP outbox draining.
+        // ACK immediately — before processing — to keep ingester outbox draining.
         // processing happens asynchronously in the worker thread.
         if (msg_id) |id| {
             self.sendAck(id);
         } else {
             self.no_id_count += 1;
             if (self.no_id_count <= 5) {
-                logfire.warn("tap: message has no id, first {d} bytes: {s}", .{ @min(data.len, 100), data[0..@min(data.len, 100)] });
+                logfire.warn("ingester: message has no id, first {d} bytes: {s}", .{ @min(data.len, 100), data[0..@min(data.len, 100)] });
             }
         }
 
         // dupe message data (websocket reuses the buffer) and offer to processing pool.
         // drop_oldest shedding means full pool evicts the oldest queued frame, not the new one.
         const data_copy = self.allocator.dupe(u8, data) catch |err| {
-            logfire.err("tap: failed to dupe message: {}", .{err});
+            logfire.err("ingester: failed to dupe message: {}", .{err});
             return;
         };
         _ = self.pool.offer(self.io, data_copy);
@@ -169,15 +169,15 @@ const Handler = struct {
 
     fn sendAck(self: *Handler, msg_id: i64) void {
         const ack_json = std.fmt.bufPrint(&self.ack_buf, "{{\"type\":\"ack\",\"id\":{d}}}", .{msg_id}) catch |err| {
-            logfire.err("tap: ACK format error: {}", .{err});
+            logfire.err("ingester: ACK format error: {}", .{err});
             return;
         };
         // log before write — websocket.zig masks the buffer in-place
         if (self.ack_count < 3) {
-            logfire.info("tap: sending ACK for id={d}", .{msg_id});
+            logfire.info("ingester: sending ACK for id={d}", .{msg_id});
         }
         self.client.write(@constCast(ack_json)) catch |err| {
-            logfire.err("tap: failed to send ACK: {}", .{err});
+            logfire.err("ingester: failed to send ACK: {}", .{err});
             return;
         };
         self.ack_count += 1;
@@ -214,7 +214,7 @@ const Watchdog = struct {
             }
             stale += 1;
             if (stale >= STALE_TICKS) {
-                logfire.warn("tap: no frames for {d}s, closing connection to force reconnect", .{STALE_TICKS * TICK_SECONDS});
+                logfire.warn("ingester: no frames for {d}s, closing connection to force reconnect", .{STALE_TICKS * TICK_SECONDS});
                 self.client.close(.{}) catch {};
                 return;
             }
@@ -229,8 +229,8 @@ fn extractMessageId(allocator: Allocator, payload: []const u8) ?i64 {
 }
 
 fn connect(allocator: Allocator, io: Io) !void {
-    const host = getTapHost();
-    const port = getTapPort();
+    const host = getIngesterHost();
+    const port = getIngesterPort();
     const tls = useTls();
     const path = "/channel";
 
@@ -255,27 +255,27 @@ fn connect(allocator: Allocator, io: Io) !void {
         return err;
     };
 
-    logfire.info("tap connected", .{});
+    logfire.info("ingester connected", .{});
 
     // processing pool: decouples readLoop from turso writes so a slow/hung turso
     // request never blocks ACKs. drop_oldest shedding keeps the freshest data
-    // when turso lags (older frames have already been ACK'd to the TAP outbox).
-    var ctx = TapCtx{ .allocator = allocator };
-    var pool = TapPool.init(allocator, .{
+    // when turso lags (older frames have already been ACK'd to the ingester outbox).
+    var ctx = IngesterCtx{ .allocator = allocator };
+    var pool = IngesterPool.init(allocator, .{
         .queue_capacity = QUEUE_CAPACITY,
         .workers = 1,
         .ctx = &ctx,
-        .process = TapCtx.process,
-        .on_drop = TapCtx.onDrop,
+        .process = IngesterCtx.process,
+        .on_drop = IngesterCtx.onDrop,
         .shedding = .drop_oldest,
     }) catch |err| {
-        logfire.err("tap: failed to init pool: {}", .{err});
+        logfire.err("ingester: failed to init pool: {}", .{err});
         return err;
     };
     defer pool.deinit();
 
     pool.start(io) catch |err| {
-        logfire.err("tap: failed to start pool: {}", .{err});
+        logfire.err("ingester: failed to start pool: {}", .{err});
         return err;
     };
     defer pool.shutdown(io);
@@ -284,7 +284,7 @@ fn connect(allocator: Allocator, io: Io) !void {
 
     var watchdog = Watchdog{ .io = io, .client = &client, .handler = &handler };
     const wd_thread = std.Thread.spawn(.{}, Watchdog.run, .{&watchdog}) catch |err| {
-        logfire.err("tap: failed to spawn watchdog: {}", .{err});
+        logfire.err("ingester: failed to spawn watchdog: {}", .{err});
         return err;
     };
     defer {
@@ -300,20 +300,20 @@ fn connect(allocator: Allocator, io: Io) !void {
     };
 }
 
-/// TAP record envelope - extracted via zat.json.extractAt
-const TapRecord = struct {
+/// ingester record envelope - extracted via zat.json.extractAt
+const IngesterRecord = struct {
     collection: []const u8,
     action: []const u8, // "create", "update", "delete"
     did: []const u8,
     rkey: []const u8,
 
-    pub fn isCreate(self: TapRecord) bool {
+    pub fn isCreate(self: IngesterRecord) bool {
         return mem.eql(u8, self.action, "create");
     }
-    pub fn isUpdate(self: TapRecord) bool {
+    pub fn isUpdate(self: IngesterRecord) bool {
         return mem.eql(u8, self.action, "update");
     }
-    pub fn isDelete(self: TapRecord) bool {
+    pub fn isDelete(self: IngesterRecord) bool {
         return mem.eql(u8, self.action, "delete");
     }
 };
@@ -327,28 +327,28 @@ const LeafletPublication = struct {
 
 fn processMessage(allocator: Allocator, payload: []const u8) !void {
     const parsed = json.parseFromSlice(json.Value, allocator, payload, .{}) catch {
-        logfire.err("tap: JSON parse failed, first 100 bytes: {s}", .{payload[0..@min(payload.len, 100)]});
+        logfire.err("ingester: JSON parse failed, first 100 bytes: {s}", .{payload[0..@min(payload.len, 100)]});
         return;
     };
     defer parsed.deinit();
 
     // check message type
     const msg_type = zat.json.getString(parsed.value, "type") orelse {
-        logfire.warn("tap: no type field in message", .{});
+        logfire.warn("ingester: no type field in message", .{});
         return;
     };
 
     if (!mem.eql(u8, msg_type, "record")) return;
 
     // extract record envelope (extractAt ignores extra fields like live, rev, cid)
-    const rec = zat.json.extractAt(TapRecord, allocator, parsed.value, .{"record"}) catch |err| {
-        logfire.warn("tap: failed to extract record: {}", .{err});
+    const rec = zat.json.extractAt(IngesterRecord, allocator, parsed.value, .{"record"}) catch |err| {
+        logfire.warn("ingester: failed to extract record: {}", .{err});
         return;
     };
 
     // validate DID
     const did = zat.Did.parse(rec.did) orelse {
-        logfire.span("tap.dropped", .{ .reason = "invalid_did", .collection = rec.collection }).end();
+        logfire.span("ingest.dropped", .{ .reason = "invalid_did", .collection = rec.collection }).end();
         return;
     };
 
@@ -359,17 +359,17 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     // build AT-URI string (no allocation - uses stack buffer)
     var uri_buf: [256]u8 = undefined;
     const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse {
-        logfire.span("tap.dropped", .{ .reason = "uri_too_long", .collection = rec.collection }).end();
+        logfire.span("ingest.dropped", .{ .reason = "uri_too_long", .collection = rec.collection }).end();
         return;
     };
 
     // span for the actual indexing work
-    const span = logfire.span("tap.index_record", .{});
+    const span = logfire.span("ingest.index_record", .{});
     defer span.end();
 
     if (rec.isCreate() or rec.isUpdate()) {
         const inner_record = zat.json.getObject(parsed.value, "record.record") orelse {
-            logfire.span("tap.dropped", .{ .reason = "no_inner_record", .collection = rec.collection, .uri = uri }).end();
+            logfire.span("ingest.dropped", .{ .reason = "no_inner_record", .collection = rec.collection, .uri = uri }).end();
             return;
         };
 
@@ -379,7 +379,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
                 const record_val: json.Value = .{ .object = inner_record };
                 const visibility = zat.json.getString(record_val, "visibility") orelse "public";
                 if (mem.eql(u8, visibility, "author")) {
-                    logfire.span("tap.dropped", .{ .reason = "author_only", .collection = rec.collection, .uri = uri }).end();
+                    logfire.span("ingest.dropped", .{ .reason = "author_only", .collection = rec.collection, .uri = uri }).end();
                     return;
                 }
             }
@@ -423,11 +423,11 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
 fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8) !void {
     var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
         if (err == error.MissingTitle) {
-            logfire.span("tap.dropped", .{ .reason = "missing_title", .collection = collection, .uri = uri }).end();
+            logfire.span("ingest.dropped", .{ .reason = "missing_title", .collection = collection, .uri = uri }).end();
         } else if (err == error.NoContent) {
-            logfire.span("tap.dropped", .{ .reason = "no_content", .collection = collection, .uri = uri }).end();
+            logfire.span("ingest.dropped", .{ .reason = "no_content", .collection = collection, .uri = uri }).end();
         } else {
-            logfire.span("tap.dropped", .{ .reason = "extraction_error", .collection = collection, .uri = uri }).end();
+            logfire.span("ingest.dropped", .{ .reason = "extraction_error", .collection = collection, .uri = uri }).end();
         }
         return;
     };
@@ -448,7 +448,7 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.content_type,
         doc.cover_image,
     );
-    logfire.counter("tap.documents_indexed", 1);
+    logfire.counter("ingest.documents_indexed", 1);
 
     // feed the autonomous labeler: it keeps a rolling per-DID aggregate and
     // emits bulk-mirror on its own when an author crosses the threshold. Local
@@ -461,7 +461,7 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 
     // extract required field
     const name = zat.json.getString(record_val, "name") orelse {
-        logfire.span("tap.dropped", .{ .reason = "pub_missing_name", .uri = uri }).end();
+        logfire.span("ingest.dropped", .{ .reason = "pub_missing_name", .uri = uri }).end();
         return;
     };
     const description = zat.json.getString(record_val, "description");
@@ -474,13 +474,13 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
     // skip .test domains (dev/staging data)
     if (base_path) |bp| {
         if (mem.endsWith(u8, bp, ".test")) {
-            logfire.span("tap.dropped", .{ .reason = "test_domain", .uri = uri }).end();
+            logfire.span("ingest.dropped", .{ .reason = "test_domain", .uri = uri }).end();
             return;
         }
     }
 
     try indexer.insertPublication(uri, did, rkey, name, description, base_path);
-    logfire.counter("tap.publications_indexed", 1);
+    logfire.counter("ingest.publications_indexed", 1);
 }
 
 /// blog.pckt.publication sidecar: tag the referenced site.standard.publication
@@ -489,11 +489,11 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 fn processPcktPublication(record: json.ObjectMap) !void {
     const record_val: json.Value = .{ .object = record };
     const target = zat.json.getString(record_val, "publication.uri") orelse {
-        logfire.span("tap.dropped", .{ .reason = "pckt_pub_missing_ref" }).end();
+        logfire.span("ingest.dropped", .{ .reason = "pckt_pub_missing_ref" }).end();
         return;
     };
     try indexer.markPublicationPckt(target);
-    logfire.counter("tap.pckt_publications_tagged", 1);
+    logfire.counter("ingest.pckt_publications_tagged", 1);
 }
 
 fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collection: []const u8, record: json.ObjectMap) !void {
@@ -501,20 +501,20 @@ fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collecti
 
     const field = recommendDocFieldName(collection);
     const document_uri = zat.json.getString(record_val, field) orelse {
-        logfire.span("tap.dropped", .{ .reason = "recommend_missing_document", .uri = uri, .collection = collection }).end();
+        logfire.span("ingest.dropped", .{ .reason = "recommend_missing_document", .uri = uri, .collection = collection }).end();
         return;
     };
     const created_at = zat.json.getString(record_val, "createdAt");
 
     try indexer.insertRecommend(uri, did, rkey, document_uri, created_at);
-    logfire.counter("tap.recommends_indexed", 1);
+    logfire.counter("ingest.recommends_indexed", 1);
 }
 
 fn processSubscription(uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap) !void {
     const record_val: json.Value = .{ .object = record };
 
     const publication_uri = zat.json.getString(record_val, "publication") orelse {
-        logfire.span("tap.dropped", .{ .reason = "subscription_missing_publication", .uri = uri }).end();
+        logfire.span("ingest.dropped", .{ .reason = "subscription_missing_publication", .uri = uri }).end();
         return;
     };
     // createdAt is optional on this lexicon and usually absent. Fall back to
@@ -526,7 +526,7 @@ fn processSubscription(uri: []const u8, did: []const u8, rkey: []const u8, recor
         tidToIso(&tid_buf, rkey);
 
     try indexer.insertSubscription(uri, did, rkey, publication_uri, created_at);
-    logfire.counter("tap.subscriptions_indexed", 1);
+    logfire.counter("ingest.subscriptions_indexed", 1);
 }
 
 /// Decode an atproto TID rkey into an ISO-8601 UTC timestamp. Returns null if
@@ -549,7 +549,7 @@ fn tidToIso(buf: []u8, rkey: []const u8) ?[]const u8 {
 // Targeted backfill: pull every record of our collections for a single repo
 // directly from its PDS and run it through the SAME extract+index path the
 // firehose uses. Lets us ingest a specific author on demand without waiting
-// on tap's serial resync queue (which can sit behind a whole-network sweep).
+// on the ingester's serial resync queue (which can sit behind a whole-network sweep).
 // ---------------------------------------------------------------------------
 
 const BACKFILL_COLLECTIONS = [_][]const u8{

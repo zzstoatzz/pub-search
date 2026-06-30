@@ -4,7 +4,7 @@
 //!  1. Does the PDS record still exist? If 400/404 → delete from turso + tpuf.
 //!  2. Does the destination URL we'd link to still resolve? If 404 →
 //!     soft-hide (set documents.url_dead=1) so search excludes it without
-//!     deleting the row. We can't delete on URL-dead because tap re-adds
+//!     deleting the row. We can't delete on URL-dead because the ingester re-adds
 //!     the doc on the next resync (insertDocument doesn't consult
 //!     tombstones), which would flap.
 //!

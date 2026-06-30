@@ -220,7 +220,7 @@ pub const Data = struct {
 };
 
 fn getRelayUrl() []const u8 {
-    return if (std.c.getenv("TAP_RELAY_URL")) |p| std.mem.span(p) else "unknown";
+    return if (std.c.getenv("INGESTER_RELAY_URL")) |p| std.mem.span(p) else "unknown";
 }
 
 // all dashboard queries batched into one request

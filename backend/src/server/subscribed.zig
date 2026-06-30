@@ -14,7 +14,7 @@
 //!
 //! Same caching shape as /recommended: a WindowedJsonCache(Window) per view
 //! keeps the slow Turso GROUP BY off the hot path. No leaflet variant — the
-//! subscription lexicon is standard.site-only by design (see tap.zig).
+//! subscription lexicon is standard.site-only by design (see ingester.zig).
 
 const std = @import("std");
 const Io = std.Io;

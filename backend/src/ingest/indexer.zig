@@ -64,7 +64,7 @@ pub fn insertDocument(
     // banned bulk-archive repos: second gate behind the ingester's ban —
     // nothing reinserts these, not even replays or backfills (policy.zig).
     if (policy.isBanned(did)) {
-        logfire.span("tap.dropped", .{ .reason = "banned_did", .uri = uri }).end();
+        logfire.span("ingest.dropped", .{ .reason = "banned_did", .uri = uri }).end();
         return;
     }
 
@@ -96,7 +96,7 @@ pub fn insertDocument(
             const existing_uri = row.text(0);
             if (!std.mem.eql(u8, existing_uri, uri)) {
                 logfire.debug("indexer: skipping dupe for {s} (existing: {s})", .{ uri, existing_uri });
-                logfire.span("tap.dropped", .{ .reason = "content_hash_dupe", .uri = uri, .existing_uri = existing_uri }).end();
+                logfire.span("ingest.dropped", .{ .reason = "content_hash_dupe", .uri = uri, .existing_uri = existing_uri }).end();
                 return;
             }
         }
@@ -211,7 +211,7 @@ pub fn insertDocument(
 
     // skip .test domains (dev/staging data)
     if (std.mem.endsWith(u8, base_path, ".test")) {
-        logfire.span("tap.dropped", .{ .reason = "test_domain", .uri = uri, .base_path = base_path }).end();
+        logfire.span("ingest.dropped", .{ .reason = "test_domain", .uri = uri, .base_path = base_path }).end();
         return;
     }
 
@@ -310,7 +310,7 @@ pub fn insertPublication(
     // banned bulk-archive repos: second gate behind the ingester's ban —
     // nothing reinserts these, not even replays or backfills (policy.zig).
     if (policy.isBanned(did)) {
-        logfire.span("tap.dropped", .{ .reason = "banned_did", .uri = uri }).end();
+        logfire.span("ingest.dropped", .{ .reason = "banned_did", .uri = uri }).end();
         return;
     }
 
