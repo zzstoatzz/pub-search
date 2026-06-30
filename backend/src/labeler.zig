@@ -111,9 +111,11 @@ pub fn start(allocator: std.mem.Allocator, io: Io) void {
     });
 }
 
-/// Emit (or negate) an account-level label on a subject DID.
+/// Emit (or negate) an account-level label on a subject DID. Returns the
+/// assigned sequence number. To retract, call with neg=true and the same
+/// (did, val) — per the atproto spec, consumers stop hydrating the original.
 /// Returns error.NotConfigured if no signing key / store is set up.
-pub fn emit(subject_did: []const u8, val: []const u8, neg: bool) !void {
+pub fn emit(subject_did: []const u8, val: []const u8, neg: bool) !i64 {
     const keypair = &(g_keypair orelse return error.NotConfigured);
     const store = g_store orelse return error.NotConfigured;
     const server = g_server orelse return error.NotConfigured;
@@ -136,6 +138,7 @@ pub fn emit(subject_did: []const u8, val: []const u8, neg: bool) !void {
     const seq = try store.insert(&label, encoded);
     server.broadcast(seq, encoded);
     logfire.info("labeler: emit seq={d} val={s} neg={} uri={s}", .{ seq, val, neg, subject_did });
+    return seq;
 }
 
 fn nowIso8601(io: Io, buf: *[32]u8) []const u8 {

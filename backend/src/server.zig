@@ -18,6 +18,7 @@ const recommenders = @import("server/recommenders.zig");
 const subscribed = @import("server/subscribed.zig");
 const subscribers = @import("server/subscribers.zig");
 const wrapped_ep = @import("server/wrapped.zig");
+const labeler = @import("labeler.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
@@ -160,6 +161,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleActivity(request, io);
     } else if (mem.eql(u8, path, "/admin/backfill")) {
         try handleBackfill(request, target, io);
+    } else if (mem.eql(u8, path, "/admin/label")) {
+        try handleLabel(request, target);
     } else if (mem.eql(u8, path, "/snapshot")) {
         try handleSnapshot(request, io);
     } else {
@@ -767,6 +770,48 @@ fn backfillWorker(io: Io, did: []u8, collection: ?[]u8) void {
 /// connections; big repos take minutes). `&sync=1` keeps the old blocking
 /// behavior and returns counts. Completion signal either way is the logfire
 /// line `backfill: <did> done`.
+// Emit (or negate) a labeler account-label. Gated by BACKFILL_TOKEN (same admin
+// secret as /admin/backfill). To retract a label, pass neg=1 with the same
+// did+val — per the atproto spec, consumers stop hydrating the original.
+//   GET /admin/label?token=…&did=did:plc:…&val=bulk-mirror&neg=0
+fn handleLabel(request: *http.Server.Request, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const json_hdr: []const http.Header = &.{.{ .name = "content-type", .value = "application/json" }};
+
+    if (std.c.getenv("BACKFILL_TOKEN")) |tok_c| {
+        const provided = parseQueryParam(alloc, target, "token") catch "";
+        if (!mem.eql(u8, provided, std.mem.span(tok_c))) {
+            try request.respond("{\"error\":\"unauthorized\"}", .{ .status = .unauthorized, .extra_headers = json_hdr });
+            return;
+        }
+    }
+
+    const did = parseQueryParam(alloc, target, "did") catch {
+        try request.respond("{\"error\":\"missing did param\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    const val = parseQueryParam(alloc, target, "val") catch "bulk-mirror";
+    const neg = blk: {
+        const v = parseQueryParam(alloc, target, "neg") catch break :blk false;
+        break :blk mem.eql(u8, v, "1") or mem.eql(u8, v, "true");
+    };
+
+    const seq = labeler.emit(did, val, neg) catch |err| {
+        const msg = if (err == error.NotConfigured)
+            "{\"error\":\"labeler not configured (LABELER_DID/LABELER_SECRET_KEY unset)\"}"
+        else
+            "{\"error\":\"emit failed\"}";
+        try request.respond(msg, .{ .status = .internal_server_error, .extra_headers = json_hdr });
+        return;
+    };
+
+    const body = try std.fmt.allocPrint(alloc, "{{\"ok\":true,\"seq\":{d},\"did\":\"{s}\",\"val\":\"{s}\",\"neg\":{}}}", .{ seq, did, val, neg });
+    try request.respond(body, .{ .extra_headers = json_hdr });
+}
+
 fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -849,7 +894,8 @@ fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !vo
         return;
     };
 
-    const body = try std.fmt.allocPrint(alloc,
+    const body = try std.fmt.allocPrint(
+        alloc,
         "{{\"did\":\"{s}\",\"documents\":{d},\"publications\":{d},\"recommends\":{d},\"subscriptions\":{d},\"skipped\":{d}}}",
         .{ did, counts.documents, counts.publications, counts.recommends, counts.subscriptions, counts.skipped },
     );
