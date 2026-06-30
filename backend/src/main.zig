@@ -140,6 +140,11 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     // Background thread — the replica is open, this just reads it.
     if (Thread.spawn(.{}, labeler_classifier.bootstrap, .{})) |t| t.detach() else |_| {}
 
+    // model-pass gate: background worker that confirms flagged authors are
+    // machine-generated (reads content, asks an LLM) before the labeler emits.
+    // No-op without ANTHROPIC_API_KEY — flagged authors just queue unlabeled.
+    labeler_classifier.startReview(allocator, io);
+
     // snapshot promote watcher (inert unless ENABLE_SNAPSHOT_PROMOTE is set)
     promote.start(allocator, io);
 

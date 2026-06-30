@@ -19,6 +19,9 @@ const logfire = @import("logfire");
 const labeler = @import("../labeler.zig");
 const db = @import("../db.zig");
 
+const http = std.http;
+const json = std.json;
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.classifier);
 
@@ -33,8 +36,25 @@ const EVAL_EVERY: i64 = 25; // re-score every N docs past the floor until labele
 const THRESHOLD: f64 = 0.50;
 // bump when scoring logic OR threshold changes → bootstrap negates old labels +
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
-// scaffold only, curation veto). v3 = threshold 0.55→0.50.
-const SCORING_VERSION: i64 = 3;
+// scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
+// (heuristic flags → LLM confirms content is machine-generated before emit).
+const SCORING_VERSION: i64 = 4;
+
+// review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
+// directly (titles can't tell a branded real blog from a registry mirror). It
+// flags PENDING; a background worker reads sample CONTENT, asks an LLM, and only
+// then emits. So a false positive from the heuristic costs an LLM call, not a
+// mislabeled human.
+const STATE_OBSERVING: i64 = 0;
+const STATE_PENDING: i64 = 1; // heuristic flagged; awaiting model review
+const STATE_LABELED: i64 = 2; // model confirmed machine-generated → emitted
+const STATE_REJECTED: i64 = 3; // model said human → not labeled
+const STATE_VETOED: i64 = 4; // had curation → never labeled
+// the model-pass runs on co/core (cocore.dev) — an AT-Protocol-native, OpenAI-
+// compatible decentralized inference exchange. Fitting: the labeler is an AT
+// Proto thing, so its content judge runs on AT-Proto-native inference.
+const REVIEW_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit";
+const COCORE_URL = "https://console.cocore.dev/api/v1/chat/completions";
 const SAMPLE_CAP: i64 = 64; // normalized titles kept per DID for template scoring
 
 var g_conn: ?zqlite.Conn = null;
@@ -76,6 +96,9 @@ pub fn init() void {
         return;
     };
     conn.execNoArgs("CREATE TABLE IF NOT EXISTS classifier_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)") catch {};
+    // review-pipeline state (added after the initial schema; ALTER is a no-op if
+    // the column already exists).
+    conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN state INTEGER NOT NULL DEFAULT 0") catch {};
     g_conn = conn;
     logfire.info("classifier: author-stats ready (floor={d} threshold={d:.2})", .{ FLOOR, THRESHOLD });
 }
@@ -204,25 +227,23 @@ fn maybeEvaluate(conn: zqlite.Conn, did: []const u8) void {
     const score = stats.score(arena.allocator());
     if (score < THRESHOLD) return;
 
-    // curation veto: if anyone recommends or subscribes to this author, never
-    // label them — that's a human-curation signal a mirror won't have. Mark
-    // decided so we stop re-scoring.
+    // curation veto: any recommends/subscriptions → never label (human signal a
+    // mirror won't have). Decided; stop re-scoring.
     if (hasCuration(did)) {
-        conn.exec("UPDATE author_stats SET labeled = 1 WHERE did = ?", .{did}) catch {};
+        setDecided(conn, did, STATE_VETOED);
         logfire.info("classifier: vetoed {s} (score={d:.3} but has curation)", .{ did, score });
         return;
     }
 
-    // emit the label (the labeler signs/stores/broadcasts), then mark decided so
-    // we never emit twice. If the labeler isn't configured, leave unlabeled so a
-    // later boot with a key can still emit.
-    _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, false) catch |err| {
-        if (err != error.NotConfigured)
-            logfire.err("classifier: emit failed for {s}: {s}", .{ did, @errorName(err) });
-        return;
-    };
-    conn.exec("UPDATE author_stats SET labeled = 1 WHERE did = ?", .{did}) catch {};
-    logfire.info("classifier: auto-labeled {s} bulk-mirror (score={d:.3} docs={d})", .{ did, score, doc_count });
+    // the heuristic NEVER emits directly — it can't tell a branded real blog from
+    // a registry mirror. Flag for the model-pass; the review worker reads sample
+    // content, asks an LLM, and emits only on confirmation.
+    setDecided(conn, did, STATE_PENDING);
+    logfire.info("classifier: queued {s} for model review (score={d:.3} docs={d})", .{ did, score, doc_count });
+}
+
+fn setDecided(conn: zqlite.Conn, did: []const u8, state: i64) void {
+    conn.exec("UPDATE author_stats SET labeled = 1, state = ? WHERE did = ?", .{ state, did }) catch {};
 }
 
 const Stats = struct {
@@ -299,6 +320,192 @@ const Stats = struct {
         return coverage_sum / @as(f64, @floatFromInt(n));
     }
 };
+
+// ── model-pass gate (background review worker) ──────────────────────────────
+
+/// Start the review worker if COCORE_API_KEY is set. Without it, flagged authors
+/// stay PENDING (unlabeled) — emission is paused, not faked.
+pub fn startReview(allocator: Allocator, io: Io) void {
+    const key = if (std.c.getenv("COCORE_API_KEY")) |p| std.mem.span(p) else {
+        logfire.info("classifier: model-pass disabled (no COCORE_API_KEY) — flagged authors queue unlabeled", .{});
+        return;
+    };
+    const t = std.Thread.spawn(.{}, reviewWorker, .{ allocator, key, io }) catch |err| {
+        logfire.err("classifier: review worker spawn failed: {s}", .{@errorName(err)});
+        return;
+    };
+    t.detach();
+    logfire.info("classifier: model-pass review worker started ({s})", .{REVIEW_MODEL});
+}
+
+fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
+    while (true) {
+        const conn = g_conn orelse {
+            io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
+            continue;
+        };
+        const did = nextPending(allocator, conn) orelse {
+            io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
+            continue;
+        };
+        defer allocator.free(did);
+
+        const machine = reviewAuthor(allocator, key, io, did) catch |err| {
+            logfire.err("classifier: review failed for {s}: {s}", .{ did, @errorName(err) });
+            io.sleep(Io.Duration.fromSeconds(5), .awake) catch {};
+            continue;
+        };
+        if (machine) {
+            _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, false) catch {};
+            conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_LABELED, did }) catch {};
+            logfire.info("classifier: model CONFIRMED {s} → bulk-mirror", .{did});
+        } else {
+            conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_REJECTED, did }) catch {};
+            logfire.info("classifier: model REJECTED {s} (human-authored)", .{did});
+        }
+        io.sleep(Io.Duration.fromSeconds(1), .awake) catch {};
+    }
+}
+
+fn nextPending(allocator: Allocator, conn: zqlite.Conn) ?[]const u8 {
+    const row = (conn.row("SELECT did FROM author_stats WHERE state = ? LIMIT 1", .{STATE_PENDING}) catch return null) orelse return null;
+    defer row.deinit();
+    return allocator.dupe(u8, row.text(0)) catch null;
+}
+
+/// Ask the LLM whether the author is a machine-generated mirror, from real
+/// sample content (the signal titles can't provide).
+fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) !bool {
+    const samples = try fetchSamples(allocator, did);
+    defer allocator.free(samples);
+
+    // prompt validated against the known cases on cocore Qwen2.5-7B: the framing
+    // (our task: long-form human writing vs automated feeds, "coherent ≠ human")
+    // + concrete examples are what make a small model separate a real blog from a
+    // transit/catalog feed. Without them it calls everything coherent "human".
+    var prompt: std.Io.Writer.Allocating = .init(allocator);
+    defer prompt.deinit();
+    try prompt.writer.writeAll(
+        \\A search engine indexes original long-form writing by people (blogs, essays,
+        \\articles). It must EXCLUDE accounts that are automated feeds, catalogs, or
+        \\database exports — even when the text reads coherently.
+        \\
+        \\The test: did a PERSON sit and write each item as original prose, OR is an
+        \\automated system emitting one record per database row / feed event / catalog
+        \\entry / log?
+        \\
+        \\machine=true examples: a transit-alert bot ("Red Line delayed near Roosevelt"),
+        \\a patent-database mirror, a TV-episode catalog (one entry per episode),
+        \\product-recall summaries, daily log entries, chart/stats dumps. Coherent != human.
+        \\machine=false examples: a personal blog (tech notes, essays, reviews), even with
+        \\branded/templated titles or a numbered series.
+        \\
+        \\Sample documents from ONE account:
+        \\
+        \\
+    );
+    try prompt.writer.writeAll(samples);
+    try prompt.writer.writeAll(
+        \\
+        \\
+        \\Respond with ONLY JSON: {"machine": true|false, "reason": "<one sentence>"}
+    );
+
+    const reply = try callModel(allocator, key, io, prompt.written());
+    defer allocator.free(reply);
+    return parseMachineVerdict(reply);
+}
+
+/// Build a titles+content-excerpt block from the replica (bounded).
+fn fetchSamples(allocator: Allocator, did: []const u8) ![]const u8 {
+    const local = db.getLocalDbRaw() orelse return error.NoReplica;
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var rows = try local.query("SELECT title, content FROM documents WHERE did = ? LIMIT 8", .{did});
+    defer rows.deinit();
+    var n: usize = 0;
+    while (rows.next()) |row| {
+        n += 1;
+        const title = row.text(0);
+        const content = row.text(1);
+        const excerpt = content[0..@min(content.len, 400)];
+        try out.writer.print("- title: {s}\n  content: {s}\n\n", .{ title, excerpt });
+    }
+    if (n == 0) return error.NoSamples;
+    return out.toOwnedSlice();
+}
+
+/// co/core is OpenAI-compatible: POST /chat/completions, Bearer auth.
+fn callModel(allocator: Allocator, key: []const u8, io: Io, prompt: []const u8) ![]const u8 {
+    var client: http.Client = .{ .allocator = allocator, .io = io };
+    defer client.deinit();
+
+    var body: std.Io.Writer.Allocating = .init(allocator);
+    defer body.deinit();
+    var jw: json.Stringify = .{ .writer = &body.writer, .options = .{} };
+    try jw.beginObject();
+    try jw.objectField("model");
+    try jw.write(REVIEW_MODEL);
+    try jw.objectField("max_tokens");
+    try jw.write(150);
+    try jw.objectField("temperature");
+    try jw.write(0);
+    try jw.objectField("messages");
+    try jw.beginArray();
+    try jw.beginObject();
+    try jw.objectField("role");
+    try jw.write("user");
+    try jw.objectField("content");
+    try jw.write(prompt);
+    try jw.endObject();
+    try jw.endArray();
+    try jw.endObject();
+    const payload = try body.toOwnedSlice();
+    defer allocator.free(payload);
+
+    var auth_buf: [256]u8 = undefined;
+    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{key}) catch return error.AuthTooLong;
+
+    var resp: std.Io.Writer.Allocating = .init(allocator);
+    errdefer resp.deinit();
+    const res = client.fetch(.{
+        .location = .{ .url = COCORE_URL },
+        .method = .POST,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+            .authorization = .{ .override = auth },
+        },
+        .payload = payload,
+        .response_writer = &resp.writer,
+    }) catch return error.CocoreRequestFailed;
+
+    const text = try resp.toOwnedSlice();
+    if (res.status != .ok) {
+        defer allocator.free(text);
+        logfire.err("classifier: cocore {}: {s}", .{ res.status, text[0..@min(text.len, 200)] });
+        return error.CocoreApiError;
+    }
+    return text;
+}
+
+/// Pull the verdict out of the OpenAI envelope ({choices:[{message:{content}}]});
+/// the content is a JSON object {"machine": bool, ...}. Default NOT-machine if
+/// anything is unclear (precision-first — never label on an ambiguous reply).
+fn parseMachineVerdict(response: []const u8) bool {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const parsed = json.parseFromSliceLeaky(json.Value, a, response, .{}) catch return false;
+    if (parsed != .object) return false;
+    const choices = parsed.object.get("choices") orelse return false;
+    if (choices != .array or choices.array.items.len == 0) return false;
+    const msg = choices.array.items[0].object.get("message") orelse return false;
+    const content = msg.object.get("content") orelse return false;
+    if (content != .string) return false;
+    // tolerate prose around the JSON — a small model may not return pure JSON.
+    return std.mem.indexOf(u8, content.string, "\"machine\": true") != null or
+        std.mem.indexOf(u8, content.string, "\"machine\":true") != null;
+}
 
 /// True if anyone recommends a doc by this author, or subscribes to one of
 /// their publications. Read from the frozen local replica (indexed existence
