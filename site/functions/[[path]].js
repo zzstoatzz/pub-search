@@ -308,9 +308,22 @@ function rewriteMeta(response, { title, description, ogUrl, ogImageUrl }) {
 
 // ---------- entry ----------
 
+// the labeler is a second fly service (internal :3001, public :8443). Cloudflare
+// terminates TLS for labeler.pub-search.waow.tech (Pages custom domain) and this
+// function proxies it through — fly routes by external port, so it can't host-
+// route, and CF can't cheaply rewrite the origin port. Covers HTTP (queryLabels)
+// and WebSocket (subscribeLabels) transparently.
+const LABELER_HOST = 'labeler.pub-search.waow.tech';
+const LABELER_ORIGIN = 'https://leaflet-search-backend.fly.dev:8443';
+
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const path = url.pathname;
+
+  if (url.hostname === LABELER_HOST) {
+    const target = LABELER_ORIGIN + path + url.search;
+    return fetch(new Request(target, context.request));
+  }
 
   if (path === '/' || path === '/index.html') {
     return handleHome(context, url);
