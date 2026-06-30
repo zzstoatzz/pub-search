@@ -50,6 +50,7 @@ const STATE_PENDING: i64 = 1; // heuristic flagged; awaiting model review
 const STATE_LABELED: i64 = 2; // model confirmed machine-generated → emitted
 const STATE_REJECTED: i64 = 3; // model said human → not labeled
 const STATE_VETOED: i64 = 4; // had curation → never labeled
+const MAX_REVIEW_ATTEMPTS: i64 = 5; // give up after this many inconclusive reviews
 // the model-pass runs on co/core (cocore.dev) — an AT-Protocol-native, OpenAI-
 // compatible decentralized inference exchange. Fitting: the labeler is an AT
 // Proto thing, so its content judge runs on AT-Proto-native inference.
@@ -99,6 +100,7 @@ pub fn init() void {
     // review-pipeline state (added after the initial schema; ALTER is a no-op if
     // the column already exists).
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN state INTEGER NOT NULL DEFAULT 0") catch {};
+    conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN review_attempts INTEGER NOT NULL DEFAULT 0") catch {};
     g_conn = conn;
     logfire.info("classifier: author-stats ready (floor={d} threshold={d:.2})", .{ FLOOR, THRESHOLD });
 }
@@ -350,32 +352,46 @@ fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
         };
         defer allocator.free(did);
 
-        const machine = reviewAuthor(allocator, key, io, did) catch |err| {
-            logfire.err("classifier: review failed for {s}: {s}", .{ did, @errorName(err) });
-            io.sleep(Io.Duration.fromSeconds(5), .awake) catch {};
-            continue;
+        // null verdict = inconclusive (empty/garbled reply, transient provider
+        // error, or out of CC) → leave PENDING and retry, never reject. Only a
+        // CLEAR machine/human answer decides.
+        const verdict: ?bool = reviewAuthor(allocator, key, io, did) catch |err| blk: {
+            logfire.warn("classifier: review error for {s}: {s} (will retry)", .{ did, @errorName(err) });
+            break :blk null;
         };
-        if (machine) {
-            _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, false) catch {};
-            conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_LABELED, did }) catch {};
-            logfire.info("classifier: model CONFIRMED {s} → bulk-mirror", .{did});
+        if (verdict) |machine| {
+            if (machine) {
+                _ = labeler.emit(did, labeler.LABEL_BULK_MIRROR, false) catch {};
+                conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_LABELED, did }) catch {};
+                logfire.info("classifier: model CONFIRMED {s} → bulk-mirror", .{did});
+            } else {
+                conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_REJECTED, did }) catch {};
+                logfire.info("classifier: model REJECTED {s} (human-authored)", .{did});
+            }
         } else {
-            conn.exec("UPDATE author_stats SET state = ? WHERE did = ?", .{ STATE_REJECTED, did }) catch {};
-            logfire.info("classifier: model REJECTED {s} (human-authored)", .{did});
+            // inconclusive → bump attempts; nextPending stops picking it past the
+            // cap (abandoned, NOT labeled — precision-first). Slower backoff.
+            conn.exec("UPDATE author_stats SET review_attempts = review_attempts + 1 WHERE did = ?", .{did}) catch {};
+            logfire.info("classifier: review inconclusive for {s} (will retry)", .{did});
+            io.sleep(Io.Duration.fromSeconds(10), .awake) catch {};
+            continue;
         }
         io.sleep(Io.Duration.fromSeconds(1), .awake) catch {};
     }
 }
 
 fn nextPending(allocator: Allocator, conn: zqlite.Conn) ?[]const u8 {
-    const row = (conn.row("SELECT did FROM author_stats WHERE state = ? LIMIT 1", .{STATE_PENDING}) catch return null) orelse return null;
+    const row = (conn.row(
+        "SELECT did FROM author_stats WHERE state = ? AND review_attempts < ? ORDER BY review_attempts ASC LIMIT 1",
+        .{ STATE_PENDING, MAX_REVIEW_ATTEMPTS },
+    ) catch return null) orelse return null;
     defer row.deinit();
     return allocator.dupe(u8, row.text(0)) catch null;
 }
 
 /// Ask the LLM whether the author is a machine-generated mirror, from real
-/// sample content (the signal titles can't provide).
-fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) !bool {
+/// sample content. Returns true=machine, false=human, null=inconclusive (retry).
+fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) !?bool {
     const samples = try fetchSamples(allocator, did);
     defer allocator.free(samples);
 
@@ -489,22 +505,25 @@ fn callModel(allocator: Allocator, key: []const u8, io: Io, prompt: []const u8) 
 }
 
 /// Pull the verdict out of the OpenAI envelope ({choices:[{message:{content}}]});
-/// the content is a JSON object {"machine": bool, ...}. Default NOT-machine if
-/// anything is unclear (precision-first — never label on an ambiguous reply).
-fn parseMachineVerdict(response: []const u8) bool {
+/// the content is a JSON object {"machine": bool, ...}. Returns null when the
+/// reply is empty/garbled/missing (transient failure or out of CC) so the worker
+/// retries instead of falsely rejecting. Only an explicit true/false decides.
+fn parseMachineVerdict(response: []const u8) ?bool {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const parsed = json.parseFromSliceLeaky(json.Value, a, response, .{}) catch return false;
-    if (parsed != .object) return false;
-    const choices = parsed.object.get("choices") orelse return false;
-    if (choices != .array or choices.array.items.len == 0) return false;
-    const msg = choices.array.items[0].object.get("message") orelse return false;
-    const content = msg.object.get("content") orelse return false;
-    if (content != .string) return false;
+    const parsed = json.parseFromSliceLeaky(json.Value, a, response, .{}) catch return null;
+    if (parsed != .object) return null;
+    const choices = parsed.object.get("choices") orelse return null;
+    if (choices != .array or choices.array.items.len == 0) return null;
+    const msg = choices.array.items[0].object.get("message") orelse return null;
+    const content = msg.object.get("content") orelse return null;
+    if (content != .string or content.string.len == 0) return null;
+    const s = content.string;
     // tolerate prose around the JSON — a small model may not return pure JSON.
-    return std.mem.indexOf(u8, content.string, "\"machine\": true") != null or
-        std.mem.indexOf(u8, content.string, "\"machine\":true") != null;
+    if (std.mem.indexOf(u8, s, "\"machine\": true") != null or std.mem.indexOf(u8, s, "\"machine\":true") != null) return true;
+    if (std.mem.indexOf(u8, s, "\"machine\": false") != null or std.mem.indexOf(u8, s, "\"machine\":false") != null) return false;
+    return null; // model replied but not in the expected shape → retry
 }
 
 /// True if anyone recommends a doc by this author, or subscribes to one of
@@ -620,6 +639,17 @@ test "score: flagged vs kept separation" {
         .sample = "struggling with typescript\nbreaking the cycle\ntiny improvements\nwhat to do when\nserendipity isnt\nopen source your work",
     };
     try std.testing.expect(human.score(a) < THRESHOLD);
+}
+
+test "parseMachineVerdict: clear verdicts decide, empty/garbled retries" {
+    const machine = "{\"choices\":[{\"message\":{\"content\":\"{\\\"machine\\\": true, \\\"reason\\\":\\\"feed\\\"}\"}}]}";
+    const human = "{\"choices\":[{\"message\":{\"content\":\"{\\\"machine\\\": false}\"}}]}";
+    const empty = "{\"choices\":[{\"message\":{\"content\":\"\"}}]}";
+    try std.testing.expectEqual(@as(?bool, true), parseMachineVerdict(machine));
+    try std.testing.expectEqual(@as(?bool, false), parseMachineVerdict(human));
+    try std.testing.expectEqual(@as(?bool, null), parseMachineVerdict(empty)); // → retry, not reject
+    try std.testing.expectEqual(@as(?bool, null), parseMachineVerdict("not json")); // → retry
+    try std.testing.expectEqual(@as(?bool, null), parseMachineVerdict("{\"choices\":[]}")); // → retry
 }
 
 test "date-titled journal is NOT flagged (precision regression: firstwaterbottle)" {
