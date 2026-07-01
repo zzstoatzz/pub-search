@@ -565,7 +565,13 @@ fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) 
 
     const reply = try callModel(allocator, key, io, prompt.written());
     defer allocator.free(reply);
-    return parseVerdict(allocator, reply);
+    const verdict = parseVerdict(allocator, reply);
+    if (verdict == null) {
+        // surface WHAT came back — repeated inconclusives are otherwise
+        // undiagnosable from the logs (see the sksksketch wedge).
+        logfire.warn("classifier: unparseable model reply for {s}: {s}", .{ did, reply[0..@min(reply.len, 300)] });
+    }
+    return verdict;
 }
 
 /// Build a titles+content-excerpt block from the replica (bounded).
@@ -580,11 +586,20 @@ fn fetchSamples(allocator: Allocator, did: []const u8) ![]const u8 {
         n += 1;
         const title = row.text(0);
         const content = row.text(1);
-        const excerpt = content[0..@min(content.len, 400)];
+        const excerpt = utf8Excerpt(content, 400);
         try out.writer.print("- title: {s}\n  content: {s}\n\n", .{ title, excerpt });
     }
     if (n == 0) return error.NoSamples;
     return out.toOwnedSlice();
+}
+
+/// Bounded prefix trimmed to a UTF-8 codepoint boundary — a mid-codepoint
+/// slice puts invalid UTF-8 in the JSON payload and the model reply comes
+/// back garbled (this kept CJK-content authors permanently "inconclusive").
+fn utf8Excerpt(s: []const u8, max: usize) []const u8 {
+    var end = @min(s.len, max);
+    while (end > 0 and end < s.len and s[end] & 0xC0 == 0x80) end -= 1;
+    return s[0..end];
 }
 
 /// co/core is OpenAI-compatible: POST /chat/completions, Bearer auth.
@@ -828,6 +843,17 @@ test "date-titled journal is NOT flagged (precision regression: firstwaterbottle
     // the old code scored this maximally templated (1.0) → false positive.
     try std.testing.expectEqual(@as(f64, 0), journal.templateScore(a));
     try std.testing.expect(journal.score(a) < THRESHOLD);
+}
+
+test "utf8Excerpt never splits a codepoint (regression: CJK authors stuck inconclusive)" {
+    // "스케치" is 9 bytes (3 per codepoint); cutting at 4/5 must fall back to 3.
+    const kr = "스케치";
+    try std.testing.expectEqualStrings("스", utf8Excerpt(kr, 4));
+    try std.testing.expectEqualStrings("스", utf8Excerpt(kr, 5));
+    try std.testing.expectEqualStrings("스케", utf8Excerpt(kr, 6));
+    try std.testing.expectEqualStrings(kr, utf8Excerpt(kr, 100)); // shorter than max: untouched
+    try std.testing.expectEqualStrings("abc", utf8Excerpt("abcdef", 3)); // ascii: plain cut
+    try std.testing.expect(std.unicode.utf8ValidateSlice(utf8Excerpt(kr, 4)));
 }
 
 test "exhausted pending authors get fresh attempts on worker start (regression: sksksketch wedge)" {
