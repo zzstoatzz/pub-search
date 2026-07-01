@@ -1,6 +1,5 @@
 //! Serialize a decoded DAG-CBOR value (zat.cbor.Value) to atproto's dag-json
-//! form — the same JSON shape indigo `tap` emits, so the backend's extractor
-//! parses our records identically. Conventions:
+//! form — the JSON shape the backend's extractor expects. Conventions:
 //!   CID   -> {"$link": "<base32 cidv1>"}   (consumed as e.g. coverImage.ref.$link)
 //!   bytes -> {"$bytes": "<base64>"}
 //! Everything else maps to the obvious JSON type.

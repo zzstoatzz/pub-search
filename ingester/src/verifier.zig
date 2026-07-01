@@ -19,7 +19,7 @@ const CachedKey = struct {
     raw: [33]u8, // compressed public key (secp256k1 or p256)
     len: u8,
     /// PDS hosted on brid.gy. policy since 7e1f071: bridgy fed content is
-    /// never indexed — tap (indigo) rejected their non-canonical commits as
+    /// never indexed — non-canonical commits are rejected as
     /// a side effect of full MST verification; our sig_only verdict admitted
     /// them and let ~20k scraper docs/day flood the corpus (2026-06-10).
     bridged: bool,

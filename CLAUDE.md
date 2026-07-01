@@ -3,7 +3,6 @@
 ## deployment
 - **backend**: push to `main` touching `backend/**` → auto-deploys via GitHub Actions
 - **frontend**: manual deploy from `site/` directory (`cd site && wrangler pages deploy . --project-name leaflet-search`)
-- **tap**: manual deploy from `tap/` directory (`fly deploy --app leaflet-search-tap`) — STOPPED since 2026-06-09 (replaced by ingester; kept for rollback)
 - **ingester**: manual deploy via `ingester/scripts/deploy.sh` (stages the repo-root `banned-dids.txt` into the build context first, then `fly deploy --app leaflet-search-ingester`). Don't call `fly deploy` directly — the build embeds `../banned-dids.txt` which isn't in `ingester/`'s context without staging.
 - `--app` does NOT protect against deploying from the wrong directory — it only renames the target; the config (ports, env, mounts) still comes from that directory's `fly.toml`. Always `cd` into the app dir first. (2026-06-10: root-dir deploy with `--app leaflet-search-ingester` was stopped only by a volume-name mismatch.)
 
@@ -14,7 +13,7 @@
 
 ## architecture
 - **backend** (Zig): HTTP API, FTS5 search, vector similarity; same binary runs as the snapshot builder under `BUILDER_MODE=1`
-- **ingester** (Zig): our own firehose consumer — verifies every commit (signature + MST diff via zat), drops bridgy/non-canonical repos, re-emits over a tap-compatible `/channel`
+- **ingester** (Zig): our own firehose consumer — verifies every commit (signature + MST diff via zat), drops bridgy/non-canonical repos, re-emits over a `/channel` websocket the backend consumes (`backend/src/ingest/ingester.zig`)
 - **site**: static frontend on Cloudflare Pages
 - **db**: Turso (source of truth) + local SQLite read replica (FTS queries; FROZEN by construction — in-place sync deleted 2026-06-26 — refreshed only by snapshot adoption, see docs/scaling-plan.md)
 - **R2**: `leaflet-search-index` bucket for builder snapshots (`INDEX_R2_*` secrets on the backend app)
@@ -35,9 +34,6 @@
 - channels: `staging` (default) → `staging/builds/…` + `latest.staging.json`; `prod` requires `BUILDER_ALLOW_PROD=1` and writes `builds/…` + `latest.json` (pointer uploaded LAST)
 - gates before publish: doc-count tolerance vs turso, FTS sentinel, quick_check; banned DIDs + bridgy rows excluded at build time (`policy.zig`)
 - completion signal: `builder: published <id> to <channel> channel` in logs/logfire
-
-## tap operations (HISTORICAL — tap is STOPPED, replaced by ingester 2026-06-09)
-- see `docs/tap.md` for the protocol reference; `tap/` kept only for rollback
 
 ## zig dependencies
 - update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)

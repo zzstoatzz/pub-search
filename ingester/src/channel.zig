@@ -1,6 +1,6 @@
-//! Tap-compatible `/channel` websocket server.
+//! Firehose `/channel` websocket server.
 //!
-//! Emits the exact frame shape the backend's tap.zig consumer expects:
+//! Emits the exact frame shape the backend's ingester consumer expects:
 //!   {"id":<seq>,"type":"record","record":{"action":..,"did":..,"collection":..,"rkey":..[,"record":<value>]}}
 //! and accepts (ignores) the backend's {"type":"ack","id":..} replies — frames
 //! replayed from the ring are delivered at-least-once and the backend's
@@ -8,7 +8,7 @@
 //!
 //! While no client is connected (backend deploy/restart), frames land in a
 //! bounded in-memory ring instead of being dropped; the ring drains in order
-//! to the next client that connects. This stands in for tap's durable outbox —
+//! to the next client that connects. This stands in for a durable outbox —
 //! at our matched-event rate (~tens/min) the ring covers hours of backend
 //! downtime, and anything beyond that is `/admin/backfill` territory.
 //!

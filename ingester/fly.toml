@@ -1,4 +1,4 @@
-# leaflet-search-ingester — our own verified firehose ingester (replaces tap).
+# leaflet-search-ingester — our own verified firehose ingester.
 # Worker app: no inbound http_service; it consumes the firehose outbound and
 # (currently) emits comparison logs to logfire. Cursor persists to the volume
 # so it resumes across restarts.

@@ -1,16 +1,12 @@
 //! leaflet-search firehose ingester.
 //!
-//! Standalone service that replaces the indigo `tap` sidecar. It consumes the
+//! Standalone service: our own verified firehose consumer. It consumes the
 //! real firehose (com.atproto.sync.subscribeRepos), filters to leaflet-search's
 //! collections, verifies each matched commit (signature + MST, see
-//! verifier.zig) in process, and re-emits verified records over a
-//! tap-compatible `/channel` websocket so the backend's existing consumer can
-//! point at us unchanged.
-//!
-//! Current mode: COMPARISON. Nothing points at /channel yet; every matched
-//! record logs `ingester.captured` (with a verified flag) so we can diff
-//! coverage against what tap delivers to Turso before cutting the backend
-//! over (see project_own_firehose_ingester memory).
+//! verifier.zig) in process, and re-emits verified records over the `/channel`
+//! websocket the backend consumes (live path since the 2026-06-09 cutover).
+//! Every matched record also logs `ingester.captured` (with a verified flag)
+//! so coverage stays auditable in logfire.
 
 const std = @import("std");
 const Io = std.Io;
@@ -19,7 +15,7 @@ const zat = @import("zat");
 const ch = @import("channel.zig");
 const vf = @import("verifier.zig");
 
-// Collections we index — mirrors the backend's TAP_COLLECTION_FILTERS / tap.zig.
+// Collections we index — mirrors the backend's ingester collection filters.
 const COLLECTIONS = [_][]const u8{
     "pub.leaflet.document",
     "pub.leaflet.publication",
@@ -132,8 +128,7 @@ const Handler = struct {
                 if (tracked_ops > 0) {
                     // verify the commit before emitting any of its records.
                     // rejected/bridged commits are still logged as captured so
-                    // coverage comparison against tap stays honest, but they
-                    // never reach /channel.
+                    // coverage stays auditable, but they never reach /channel.
                     const verdict = self.verifier.verifyCommit(commit);
                     for (commit.ops) |op| {
                         if (!isTracked(op.collection)) continue;

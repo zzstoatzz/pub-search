@@ -56,7 +56,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SLINGSHOT = "https://slingshot.microcosm.blue"
 
-# corpus admission policy — mirror of backend/src/policy.zig + tap.zig
+# corpus admission policy — mirror of backend/src/policy.zig + ingest/ingester.zig
 # isBridgyPds. Every write path (ingester, indexer, snapshot builder) drops
 # these; a backfill must enforce the same gates or it re-admits exactly what we
 # deliberately keep out. Registry of who/why/evidence: docs/exclusions.md.
@@ -77,7 +77,7 @@ def is_bridgy_pds(pds: str | None) -> bool:
 
 
 # both publication lexicons. leaflet stores the host in `base_path`; standard
-# stores a full `url` we strip to its host (matches backend tap.zig).
+# stores a full `url` we strip to its host (matches backend ingester.zig).
 COLLECTIONS = ["pub.leaflet.publication", "site.standard.publication"]
 
 

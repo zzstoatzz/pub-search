@@ -22,7 +22,7 @@ backend (zig)
 static frontend (cloudflare pages)
 ```
 
-content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, the [ingester](../ingester/) filters for publishing-related records and verifies each commit cryptographically (it replaced bluesky's [tap](tap.md) on 2026-06-09 — non-canonical repos like bridgy fed mirrors are dropped at the door), and the backend indexes them into turso. the serving replica is rebuilt offline and adopted atomically rather than synced in place — bulk data movement never touches the serving box. a [reconciler](reconciliation.md) periodically verifies documents still exist at their source, catching missed deletions.
+content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, the [ingester](../ingester/) filters for publishing-related records and verifies each commit cryptographically (it replaced bluesky's indigo tap on 2026-06-09 — non-canonical repos like bridgy fed mirrors are dropped at the door), and the backend indexes them into turso. the serving replica is rebuilt offline and adopted atomically rather than synced in place — bulk data movement never touches the serving box. a [reconciler](reconciliation.md) periodically verifies documents still exist at their source, catching missed deletions.
 
 ## how searching works
 
@@ -82,7 +82,6 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [snapshot-pipeline.md](snapshot-pipeline.md) — how the keyword index ships (builder → manifest → R2 → verified adoption), what scales, and how to do production data surgery
 - [scaling-plan.md](scaling-plan.md) — the plan of record: snapshot builder → R2 → verified swap → live overlay (largely executed; see status header)
 - [retro-2026-06-10-cutover-cascade.md](retro-2026-06-10-cutover-cascade.md) — the outage night that produced the invariants behind that plan
-- [tap.md](tap.md) — HISTORICAL: the indigo tap sidecar the ingester replaced (protocol reference)
 - [reconciliation.md](reconciliation.md) — stale document detection and cleanup
 - [turso-hrana.md](turso-hrana.md) — Turso's HTTP protocol for database queries
 - [migrations.md](migrations.md) — schema migration system (zug + adapter + bootstrap)

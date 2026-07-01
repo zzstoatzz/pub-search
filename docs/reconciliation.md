@@ -37,7 +37,7 @@ backed by `idx_documents_verified_at` (migration 015) so the batch fetch is an i
 
 **historical drift (the main problem):** documents deleted while the tap was down are detected and cleaned up. this is the only mechanism that catches these — tap resync can't.
 
-**forward-looking vector leak:** the tap.zig delete handler now also calls `tpuf.delete()`, so future firehose deletes clean both turso and turbopuffer.
+**forward-looking vector leak:** the ingester.zig delete handler now also calls `tpuf.delete()`, so future firehose deletes clean both turso and turbopuffer.
 
 ## files
 
@@ -46,7 +46,7 @@ backed by `idx_documents_verified_at` (migration 015) so the batch fetch is an i
 | `backend/src/ingest/reconciler.zig` | background worker (~250 lines) |
 | `backend/src/main.zig` | wires up `ingest.reconciler.start(allocator, io)` after `tpuf.init()` |
 | `backend/src/db/migrations.zig` | `verified_at` column (in migration `001_initial_schema` — see [migrations.md](migrations.md)) |
-| `backend/src/ingest/tap.zig` | `tpuf.delete()` after `indexer.deleteDocument()` |
+| `backend/src/ingest/ingester.zig` | `tpuf.delete()` after `indexer.deleteDocument()` |
 
 ## configuration
 
