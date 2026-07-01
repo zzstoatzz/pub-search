@@ -260,6 +260,17 @@ fn authorSite(allocator: Allocator, did: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Operator negated a label (via /admin/label neg=1): record the human verdict
+/// so the /labels page and the review pipeline agree with the retraction.
+/// Keeps state=REJECTED (terminal) so the classifier never re-flags the DID.
+pub fn markNegated(did: []const u8) void {
+    const conn = g_conn orelse return;
+    conn.exec(
+        "UPDATE author_stats SET state = ?, reason = 'label negated by operator' WHERE did = ?",
+        .{ STATE_REJECTED, did },
+    ) catch {};
+}
+
 fn stateName(s: i64) []const u8 {
     return switch (s) {
         STATE_PENDING => "pending",
