@@ -38,7 +38,7 @@ const THRESHOLD: f64 = 0.50;
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
 // (heuristic flags → LLM confirms content is machine-generated before emit).
-const SCORING_VERSION: i64 = 7; // v7: majority-of-3 vote over deterministic corpus slices
+const SCORING_VERSION: i64 = 8; // v8: judge model → Qwen3.6-35B (3/3 on judge-eval; 7B was 0/3)
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -57,7 +57,12 @@ const MAX_REVIEW_ATTEMPTS: i64 = 5; // give up after this many inconclusive revi
 // review provider: any OpenAI-compatible chat-completions endpoint. Defaults
 // to co/core; override all three via env (REVIEW_API_URL / REVIEW_MODEL /
 // REVIEW_API_KEY) to switch providers with a secrets change, no deploy of code.
-const DEFAULT_REVIEW_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit";
+// picked by scripts/judge-eval (2026-07-01): 3/3 known-truth accounts, every
+// completed vote correct. Qwen2.5-7B (the previous judge) scored 0/3 —
+// confidently inverted on all three. Slower + reasoning-style, which the
+// worker tolerates (votes retry on inconclusive; latency doesn't back
+// anything up — candidates just stay PENDING longer).
+const DEFAULT_REVIEW_MODEL = "mlx-community/Qwen3.6-35B-A3B-4bit";
 const DEFAULT_REVIEW_URL = "https://console.cocore.dev/api/v1/chat/completions";
 
 const ReviewCfg = struct {
@@ -744,8 +749,10 @@ fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) !
     try jw.beginObject();
     try jw.objectField("model");
     try jw.write(cfg.model);
+    // reasoning models think out loud before the JSON verdict; 150 truncated
+    // them mid-thought and every reply parsed as inconclusive
     try jw.objectField("max_tokens");
-    try jw.write(150);
+    try jw.write(2000);
     try jw.objectField("temperature");
     try jw.write(0);
     try jw.objectField("messages");
@@ -803,22 +810,46 @@ fn parseVerdict(allocator: Allocator, response: []const u8) ?Verdict {
     if (content != .string or content.string.len == 0) return null;
     const s = content.string;
 
-    // machine verdict — tolerate prose; a small model may not return pure JSON.
-    const machine: bool = blk: {
-        if (std.mem.indexOf(u8, s, "\"machine\": true") != null or std.mem.indexOf(u8, s, "\"machine\":true") != null) break :blk true;
-        if (std.mem.indexOf(u8, s, "\"machine\": false") != null or std.mem.indexOf(u8, s, "\"machine\":false") != null) break :blk false;
-        return null; // unexpected shape → retry
-    };
-
-    // reason — prefer the JSON field; else the trimmed content. Best-effort.
-    var reason: []const u8 = "";
-    if (json.parseFromSliceLeaky(json.Value, a, s, .{})) |inner| {
-        if (inner == .object) {
-            if (inner.object.get("reason")) |rv| {
-                if (rv == .string) reason = rv.string;
+    // the verdict is the LAST "machine": true/false in the reply — reasoning
+    // models emit a thought stream (which may draft verdicts) before the final
+    // JSON answer. Tolerates prose around it; a model may not return pure JSON.
+    var pos: ?usize = null;
+    var machine = false;
+    inline for (.{ "\"machine\": true", "\"machine\":true" }) |needle| {
+        if (std.mem.lastIndexOf(u8, s, needle)) |i| {
+            if (pos == null or i > pos.?) {
+                pos = i;
+                machine = true;
             }
         }
-    } else |_| {}
+    }
+    inline for (.{ "\"machine\": false", "\"machine\":false" }) |needle| {
+        if (std.mem.lastIndexOf(u8, s, needle)) |i| {
+            if (pos == null or i > pos.?) {
+                pos = i;
+                machine = false;
+            }
+        }
+    }
+    if (pos == null) return null; // unexpected shape → retry
+
+    // reason — from the JSON object holding that final verdict: parse from its
+    // opening brace, extending past '}' chars that turn out to be inside the
+    // reason text. Best-effort; missing reason still returns the verdict.
+    var reason: []const u8 = "";
+    if (std.mem.lastIndexOfScalar(u8, s[0..pos.?], '{')) |start| {
+        var from = pos.?;
+        while (std.mem.indexOfScalarPos(u8, s, from, '}')) |close| {
+            if (json.parseFromSliceLeaky(json.Value, a, s[start .. close + 1], .{})) |inner| {
+                if (inner == .object) {
+                    if (inner.object.get("reason")) |rv| {
+                        if (rv == .string) reason = rv.string;
+                    }
+                }
+                break;
+            } else |_| from = close + 1;
+        }
+    }
     const capped = reason[0..@min(reason.len, 280)];
     return .{ .machine = machine, .reason = allocator.dupe(u8, capped) catch "" };
 }
@@ -956,6 +987,19 @@ test "parseVerdict: clear verdicts decide + carry reason, empty/garbled retries"
     try std.testing.expect(parseVerdict(a, "{\"choices\":[{\"message\":{\"content\":\"\"}}]}") == null); // → retry
     try std.testing.expect(parseVerdict(a, "not json") == null); // → retry
     try std.testing.expect(parseVerdict(a, "{\"choices\":[]}") == null); // → retry
+}
+
+test "parseVerdict: reasoning-model thought stream — LAST verdict wins, reason from final object" {
+    const a = std.testing.allocator;
+    // a thought stream that drafts the opposite verdict (with stray braces)
+    // before the final JSON answer — the shape Qwen3.6/gemma-4 actually emit.
+    const thinking =
+        \\{"choices":[{"message":{"content":"Here's a thinking process:\n1. Task: {\"machine\": true|false}. Could be {\"machine\": true} if a feed...\n2. But the excerpts are varied prose.\n\n{\"machine\": false, \"reason\": \"varied personal prose across years\"}"}}]}
+    ;
+    const v = parseVerdict(a, thinking).?;
+    defer a.free(v.reason);
+    try std.testing.expect(!v.machine);
+    try std.testing.expectEqualStrings("varied personal prose across years", v.reason);
 }
 
 test "date-titled journal is NOT flagged (precision regression: firstwaterbottle)" {

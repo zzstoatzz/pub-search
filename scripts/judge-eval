@@ -1,0 +1,242 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""Evaluate candidate review models against known-truth accounts.
+
+Replicates the classifier's vote material (facts + title sample + middle
+excerpts, backend/src/ingest/classifier.zig fetchVoteMaterial) and prompt,
+then runs each candidate model over each vote slice for every known account.
+A usable judge must get ALL known cases right on a majority of votes.
+
+Usage:
+  scripts/judge-eval                          # default candidate set
+  scripts/judge-eval mlx-community/gemma-4-12B-it-8bit [more models...]
+
+Needs .env with turso_url/turso_token, and COCORE_API_KEY in the env or .env.
+"""
+
+import asyncio
+import json
+import os
+import sys
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ground truth, established by hand-review (docs/spam-detection-plan.md +
+# the 2026-06-30/07-01 label history)
+KNOWN = {
+    "did:plc:u5kk4h7tr4s3ntskbmhl5z7d": ("sksksketch.net", False),  # human illustrator
+    "did:plc:5swhfspkrynnbidlkrkch3lh": ("prideraiser.org", True),  # fundraiser feed bot
+    "did:plc:4z33k5fjzw2ew3u373pg7ku5": ("festivus (episode catalog)", True),
+}
+
+DEFAULT_MODELS = [
+    "mlx-community/Qwen2.5-7B-Instruct-4bit",  # current judge (baseline)
+    "mlx-community/Qwen3.5-9B-MLX-4bit",
+    "mlx-community/gemma-4-12B-it-8bit",
+    "mlx-community/Qwen3.6-35B-A3B-4bit",
+]
+
+VOTES = 3
+TITLES_PER_VOTE = 30
+EXCERPTS_PER_VOTE = 5
+EXCERPT_LEN = 800
+
+COCORE_URL = "https://console.cocore.dev/api/v1/chat/completions"
+
+PROMPT_HEAD = """A search engine indexes original long-form writing by people (blogs, essays,
+articles). It must EXCLUDE accounts that are automated feeds, catalogs, or
+database exports — even when the text reads coherently.
+
+The test: did a PERSON sit and write each item as original prose, OR is an
+automated system emitting one record per database row / feed event / catalog
+entry / log?
+
+machine=true examples: a transit-alert bot ("Red Line delayed near Roosevelt"),
+a patent-database mirror, a TV-episode catalog (one entry per episode),
+product-recall summaries, daily log entries, chart/stats dumps. Coherent != human.
+machine=false examples: a personal blog (tech notes, essays, reviews), even with
+branded/templated titles or a numbered series.
+
+Evidence from ONE account (facts, a title sample spanning its whole
+history, and excerpts from the middle of several documents):
+
+"""
+
+PROMPT_TAIL = """
+
+Respond with ONLY JSON: {"machine": true|false, "reason": "<one sentence>"}"""
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+    cocore_api_key: str
+
+    @property
+    def turso_host(self) -> str:
+        url = self.turso_url
+        return url[len("libsql://"):] if url.startswith("libsql://") else url
+
+
+def _stmt(sql: str, args: list | None = None) -> dict:
+    s: dict = {"sql": sql}
+    if args:
+        s["args"] = [{"type": "text", "value": str(a)} for a in args]
+    return s
+
+
+async def _execute(client: httpx.AsyncClient, st: Settings, sql: str, args=None) -> dict:
+    r = await client.post(
+        f"https://{st.turso_host}/v2/pipeline",
+        headers={"Authorization": f"Bearer {st.turso_token}", "Content-Type": "application/json"},
+        json={"requests": [{"type": "execute", "stmt": _stmt(sql, args)}, {"type": "close"}]},
+        timeout=120,
+    )
+    r.raise_for_status()
+    res = r.json()["results"][0]["response"]
+    if res.get("type") == "error":
+        raise RuntimeError(res["error"])
+    return res["result"]
+
+
+async def rows(client, st, sql, args=None) -> list[list]:
+    res = await _execute(client, st, sql, args)
+    return [[c.get("value") for c in row] for row in res.get("rows", [])]
+
+
+def middle(s: str, max_len: int) -> str:
+    if len(s) <= max_len:
+        return s
+    start = (len(s) - max_len) // 2
+    return s[start : start + max_len]
+
+
+def excerpt_index(total: int, j: int, vote: int) -> int:
+    base = (total * (2 * j + 1)) // (2 * EXCERPTS_PER_VOTE)
+    return (base + vote) % total
+
+
+async def vote_material(client, st, did: str, vote: int) -> str:
+    """Mirrors classifier.zig fetchVoteMaterial (turso instead of the replica)."""
+    facts = (await rows(client, st,
+        "SELECT COUNT(*), COALESCE(MIN(created_at),''), COALESCE(MAX(created_at),'') FROM documents WHERE did = ?",
+        [did]))[0]
+    total = int(facts[0])
+    if total == 0:
+        raise RuntimeError(f"no documents for {did}")
+    out = [f"Account facts: {total} documents, first {facts[1]}, latest {facts[2]}\n\nTitles across the account's history:"]
+
+    titles = await rows(client, st,
+        "SELECT title FROM documents WHERE did = ? ORDER BY created_at, rkey", [did])
+    stride = max(total // TITLES_PER_VOTE, 1)
+    phase = vote % stride
+    picked = [t[0] for i, t in enumerate(titles) if i % stride == phase][:TITLES_PER_VOTE]
+    out += [f"- {t}" for t in picked]
+
+    out.append("\nContent excerpts (from the middle of documents):\n")
+    for j in range(EXCERPTS_PER_VOTE):
+        idx = excerpt_index(total, j, vote)
+        doc = await rows(client, st,
+            "SELECT title, content FROM documents WHERE did = ? ORDER BY created_at, rkey LIMIT 1 OFFSET ?",
+            [did, idx])
+        if doc:
+            out.append(f"- title: {doc[0][0]}\n  content: {middle(doc[0][1] or '', EXCERPT_LEN)}\n")
+    return "\n".join(out)
+
+
+async def ask(client, st, model: str, material: str) -> tuple[bool | None, str]:
+    try:
+        return await _ask(client, st, model, material)
+    except httpx.HTTPError as e:
+        return None, f"transport: {type(e).__name__}"
+
+
+async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]:
+    r = await client.post(
+        COCORE_URL,
+        headers={"Authorization": f"Bearer {st.cocore_api_key}"},
+        json={
+            "model": model,
+            # reasoning-style models think out loud before the JSON; give them room
+            "max_tokens": 2000,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": PROMPT_HEAD + material + PROMPT_TAIL}],
+        },
+        timeout=float(os.environ.get("JUDGE_TIMEOUT", "90")),
+    )
+    if r.status_code != 200:
+        return None, f"http {r.status_code}"
+    content = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
+    # the verdict is the LAST json object with a "machine" key — reasoning models
+    # emit a thought stream (with stray braces) before it
+    dec = json.JSONDecoder()
+    verdict = None
+    i = content.find("{")
+    while i != -1:
+        try:
+            v, _ = dec.raw_decode(content, i)
+            if isinstance(v, dict) and "machine" in v:
+                verdict = v
+        except json.JSONDecodeError:
+            pass
+        i = content.find("{", i + 1)
+    if verdict is None:
+        return None, f"unparseable: {content[:80]!r}"
+    return bool(verdict["machine"]), str(verdict.get("reason", ""))[:110]
+
+
+async def main() -> None:
+    st = Settings()
+    models = sys.argv[1:] or DEFAULT_MODELS
+    async with httpx.AsyncClient() as client:
+        # build all vote materials once (same evidence for every model)
+        materials = {
+            did: [await vote_material(client, st, did, v) for v in range(VOTES)]
+            for did in KNOWN
+        }
+        # every (model, account, vote) call is independent, but cocore's
+        # decentralized serving drowns under a full burst — bound concurrency
+        sem = asyncio.Semaphore(int(os.environ.get("JUDGE_CONCURRENCY", "12")))
+
+        async def bounded(model, did, v):
+            async with sem:
+                return await ask(client, st, model, materials[did][v])
+
+        tasks = {
+            (model, did, v): asyncio.create_task(bounded(model, did, v))
+            for model in models
+            for did in KNOWN
+            for v in range(VOTES)
+        }
+        results = {k: await t for k, t in tasks.items()}
+
+        print(f"{'model':<45} {'account':<30} truth  votes      verdict")
+        scores: dict[str, int] = {}
+        for model in models:
+            for did, (name, truth) in KNOWN.items():
+                votes = []
+                for v in range(VOTES):
+                    verdict, note = results[(model, did, v)]
+                    votes.append(verdict)
+                    if verdict is None:
+                        print(f"  ! vote {v} inconclusive ({note})")
+                machine = sum(1 for x in votes if x is True)
+                human = sum(1 for x in votes if x is False)
+                verdict = True if machine >= 2 else False if human >= 2 else None
+                ok = "✓" if verdict == truth else "✗"
+                scores[model] = scores.get(model, 0) + (verdict == truth)
+                vs = "".join("M" if x else "?" if x is None else "H" for x in votes)
+                print(f"{model:<45} {name:<30} {'M' if truth else 'H'}      {vs:<10} {ok}")
+        print()
+        for model, s in scores.items():
+            print(f"{model}: {s}/{len(KNOWN)}")
+
+
+asyncio.run(main())
