@@ -38,7 +38,7 @@ const THRESHOLD: f64 = 0.50;
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
 // (heuristic flags → LLM confirms content is machine-generated before emit).
-const SCORING_VERSION: i64 = 6; // v6: rename label bulk-mirror → machine-generated (re-emit)
+const SCORING_VERSION: i64 = 7; // v7: majority-of-3 vote over deterministic corpus slices
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -54,8 +54,17 @@ const MAX_REVIEW_ATTEMPTS: i64 = 5; // give up after this many inconclusive revi
 // the model-pass runs on co/core (cocore.dev) — an AT-Protocol-native, OpenAI-
 // compatible decentralized inference exchange. Fitting: the labeler is an AT
 // Proto thing, so its content judge runs on AT-Proto-native inference.
-const REVIEW_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit";
-const COCORE_URL = "https://console.cocore.dev/api/v1/chat/completions";
+// review provider: any OpenAI-compatible chat-completions endpoint. Defaults
+// to co/core; override all three via env (REVIEW_API_URL / REVIEW_MODEL /
+// REVIEW_API_KEY) to switch providers with a secrets change, no deploy of code.
+const DEFAULT_REVIEW_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit";
+const DEFAULT_REVIEW_URL = "https://console.cocore.dev/api/v1/chat/completions";
+
+const ReviewCfg = struct {
+    url: []const u8,
+    model: []const u8,
+    key: []const u8,
+};
 const SAMPLE_CAP: i64 = 64; // normalized titles kept per DID for template scoring
 
 var g_conn: ?zqlite.Conn = null;
@@ -445,22 +454,32 @@ const Stats = struct {
 
 // ── model-pass gate (background review worker) ──────────────────────────────
 
-/// Start the review worker if COCORE_API_KEY is set. Without it, flagged authors
-/// stay PENDING (unlabeled) — emission is paused, not faked.
+/// Start the review worker if a provider key is set (REVIEW_API_KEY, falling
+/// back to COCORE_API_KEY). Without one, flagged authors stay PENDING
+/// (unlabeled) — emission is paused, not faked.
 pub fn startReview(allocator: Allocator, io: Io) void {
-    const key = if (std.c.getenv("COCORE_API_KEY")) |p| std.mem.span(p) else {
-        logfire.info("classifier: model-pass disabled (no COCORE_API_KEY) — flagged authors queue unlabeled", .{});
+    const key = if (std.c.getenv("REVIEW_API_KEY")) |p|
+        std.mem.span(p)
+    else if (std.c.getenv("COCORE_API_KEY")) |p|
+        std.mem.span(p)
+    else {
+        logfire.info("classifier: model-pass disabled (no REVIEW_API_KEY/COCORE_API_KEY) — flagged authors queue unlabeled", .{});
         return;
     };
-    const t = std.Thread.spawn(.{}, reviewWorker, .{ allocator, key, io }) catch |err| {
+    const cfg = ReviewCfg{
+        .url = if (std.c.getenv("REVIEW_API_URL")) |p| std.mem.span(p) else DEFAULT_REVIEW_URL,
+        .model = if (std.c.getenv("REVIEW_MODEL")) |p| std.mem.span(p) else DEFAULT_REVIEW_MODEL,
+        .key = key,
+    };
+    const t = std.Thread.spawn(.{}, reviewWorker, .{ allocator, cfg, io }) catch |err| {
         logfire.err("classifier: review worker spawn failed: {s}", .{@errorName(err)});
         return;
     };
     t.detach();
-    logfire.info("classifier: model-pass review worker started ({s})", .{REVIEW_MODEL});
+    logfire.info("classifier: model-pass review worker started ({s} @ {s})", .{ cfg.model, cfg.url });
 }
 
-fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
+fn reviewWorker(allocator: Allocator, cfg: ReviewCfg, io: Io) void {
     // authors that exhausted their attempts stay PENDING but invisible to
     // nextPending — without this reset they'd wedge forever. A fresh set of
     // attempts per boot keeps retries bounded (the process restarts on each
@@ -486,7 +505,7 @@ fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
         // CLEAR machine/human answer decides. The model's reason (free text — the
         // protocol can't carry it on the label, so we keep it ourselves) is
         // stored for the dashboard.
-        const verdict: ?Verdict = reviewAuthor(allocator, key, io, did) catch |err| blk: {
+        const verdict: ?Verdict = reviewAuthor(allocator, cfg, io, did) catch |err| blk: {
             logfire.warn("classifier: review error for {s}: {s} (will retry)", .{ did, @errorName(err) });
             break :blk null;
         };
@@ -535,11 +554,65 @@ fn nextPending(allocator: Allocator, conn: zqlite.Conn) ?[]const u8 {
 
 const Verdict = struct { machine: bool, reason: []const u8 };
 
-/// Ask the LLM whether the author is a machine-generated mirror, from real
-/// sample content. Returns a Verdict (machine + reason), or null = inconclusive
-/// (retry). The returned reason is owned by `allocator`.
-fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) !?Verdict {
-    const samples = try fetchSamples(allocator, did);
+// majority-of-N model gate: one review flipped verdicts on the same account
+// across scoring versions (sksksketch: human at v4, machine at v6) because the
+// evidence was whatever 8 rows the replica returned first. Each vote now sees a
+// DIFFERENT deterministic slice of the corpus, so the majority averages over
+// which part of an author's history you look at — sampling variance becomes
+// signal instead of a coin flip.
+const VOTES: usize = 3;
+const VOTE_MAJORITY: usize = 2;
+const TITLES_PER_VOTE: usize = 30;
+const EXCERPTS_PER_VOTE: usize = 5;
+const EXCERPT_LEN: usize = 800;
+
+/// Ask the LLM whether the author is a machine-generated mirror: VOTES
+/// independent reviews over different corpus slices, VOTE_MAJORITY clear
+/// agreeing answers decide. Returns null = no majority (retry). The returned
+/// reason (from the first vote on the winning side) is owned by `allocator`.
+fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8) !?Verdict {
+    var machine_reason: ?[]const u8 = null;
+    var human_reason: ?[]const u8 = null;
+    errdefer if (machine_reason) |r| allocator.free(r);
+    errdefer if (human_reason) |r| allocator.free(r);
+    var machine_votes: usize = 0;
+    var human_votes: usize = 0;
+
+    for (0..VOTES) |vote| {
+        const v = (reviewVote(allocator, cfg, io, did, vote) catch |err| {
+            logfire.warn("classifier: vote {d} error for {s}: {s}", .{ vote, did, @errorName(err) });
+            continue;
+        }) orelse continue;
+        if (v.machine) {
+            machine_votes += 1;
+            if (machine_reason == null) machine_reason = v.reason else allocator.free(v.reason);
+        } else {
+            human_votes += 1;
+            if (human_reason == null) human_reason = v.reason else allocator.free(v.reason);
+        }
+        logfire.info("classifier: vote {d}/{d} for {s}: {s}", .{ vote + 1, VOTES, did, if (v.machine) "machine" else "human" });
+        // remaining votes can't change the outcome → stop spending tokens
+        if (machine_votes >= VOTE_MAJORITY or human_votes >= VOTE_MAJORITY) break;
+    }
+
+    if (machine_votes >= VOTE_MAJORITY) {
+        if (human_reason) |r| allocator.free(r);
+        return .{ .machine = true, .reason = machine_reason.? };
+    }
+    if (human_votes >= VOTE_MAJORITY) {
+        if (machine_reason) |r| allocator.free(r);
+        return .{ .machine = false, .reason = human_reason.? };
+    }
+    // split / too many inconclusive votes → no verdict, worker retries
+    logfire.info("classifier: no majority for {s} (machine={d} human={d})", .{ did, machine_votes, human_votes });
+    if (machine_reason) |r| allocator.free(r);
+    if (human_reason) |r| allocator.free(r);
+    return null;
+}
+
+/// One vote: build this vote's evidence slice, ask the model once.
+fn reviewVote(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, vote: usize) !?Verdict {
+    const samples = try fetchVoteMaterial(allocator, did, vote);
     defer allocator.free(samples);
 
     // prompt validated against the known cases on cocore Qwen2.5-7B: the framing
@@ -563,7 +636,8 @@ fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) 
         \\machine=false examples: a personal blog (tech notes, essays, reviews), even with
         \\branded/templated titles or a numbered series.
         \\
-        \\Sample documents from ONE account:
+        \\Evidence from ONE account (facts, a title sample spanning its whole
+        \\history, and excerpts from the middle of several documents):
         \\
         \\
     );
@@ -574,7 +648,7 @@ fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) 
         \\Respond with ONLY JSON: {"machine": true|false, "reason": "<one sentence>"}
     );
 
-    const reply = try callModel(allocator, key, io, prompt.written());
+    const reply = try callModel(allocator, cfg, io, prompt.written());
     defer allocator.free(reply);
     const verdict = parseVerdict(allocator, reply);
     if (verdict == null) {
@@ -585,23 +659,69 @@ fn reviewAuthor(allocator: Allocator, key: []const u8, io: Io, did: []const u8) 
     return verdict;
 }
 
-/// Build a titles+content-excerpt block from the replica (bounded).
-fn fetchSamples(allocator: Allocator, did: []const u8) ![]const u8 {
+/// The evidence for one vote: corpus facts (doc count + activity span), a
+/// broad title sample, and a few longer excerpts from the MIDDLE of documents
+/// (openings are the most template-like part of anyone's writing). Everything
+/// is ordered by created_at and picked by deterministic index, phased by
+/// `vote`, so each vote sees a different — but reproducible — slice.
+fn fetchVoteMaterial(allocator: Allocator, did: []const u8, vote: usize) ![]const u8 {
     const local = db.getLocalDbRaw() orelse return error.NoReplica;
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
-    var rows = try local.query("SELECT title, content FROM documents WHERE did = ? LIMIT 8", .{did});
-    defer rows.deinit();
-    var n: usize = 0;
-    while (rows.next()) |row| {
-        n += 1;
-        const title = row.text(0);
-        const content = row.text(1);
-        const excerpt = utf8Excerpt(content, 400);
-        try out.writer.print("- title: {s}\n  content: {s}\n\n", .{ title, excerpt });
+
+    const total: usize = blk: {
+        var rows = try local.query("SELECT COUNT(*), COALESCE(MIN(created_at),''), COALESCE(MAX(created_at),'') FROM documents WHERE did = ?", .{did});
+        defer rows.deinit();
+        const row = rows.next() orelse return error.NoSamples;
+        const n: usize = @intCast(@max(row.int(0), 0));
+        if (n == 0) return error.NoSamples;
+        try out.writer.print("Account facts: {d} documents, first {s}, latest {s}\n\nTitles across the account's history:\n", .{ n, row.text(1), row.text(2) });
+        break :blk n;
+    };
+
+    {
+        var rows = try local.query("SELECT title FROM documents WHERE did = ? ORDER BY created_at, rkey", .{did});
+        defer rows.deinit();
+        const stride = @max(total / TITLES_PER_VOTE, 1);
+        const phase = vote % stride;
+        var i: usize = 0;
+        var picked: usize = 0;
+        while (rows.next()) |row| : (i += 1) {
+            if (picked >= TITLES_PER_VOTE) break;
+            if (i % stride != phase) continue;
+            picked += 1;
+            try out.writer.print("- {s}\n", .{row.text(0)});
+        }
     }
-    if (n == 0) return error.NoSamples;
+
+    try out.writer.writeAll("\nContent excerpts (from the middle of documents):\n\n");
+    for (0..EXCERPTS_PER_VOTE) |j| {
+        const idx = excerptIndex(total, j, vote);
+        var rows = try local.query(
+            "SELECT title, content FROM documents WHERE did = ? ORDER BY created_at, rkey LIMIT 1 OFFSET ?",
+            .{ did, @as(i64, @intCast(idx)) },
+        );
+        defer rows.deinit();
+        const row = rows.next() orelse continue;
+        try out.writer.print("- title: {s}\n  content: {s}\n\n", .{ row.text(0), utf8Middle(row.text(1), EXCERPT_LEN) });
+    }
+
     return out.toOwnedSlice();
+}
+
+/// Excerpt j of k for a vote: evenly spaced across the corpus (midpoints of k
+/// equal buckets), shifted by the vote index so votes read different documents.
+fn excerptIndex(total: usize, j: usize, vote: usize) usize {
+    const base = (total * (2 * j + 1)) / (2 * EXCERPTS_PER_VOTE);
+    return (base + vote) % total;
+}
+
+/// A bounded window from the middle of `s`, both edges on UTF-8 boundaries.
+fn utf8Middle(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var start = (s.len - max) / 2;
+    while (start < s.len and s[start] & 0xC0 == 0x80) start += 1;
+    return utf8Excerpt(s[start..], max);
 }
 
 /// Bounded prefix trimmed to a UTF-8 codepoint boundary — a mid-codepoint
@@ -613,8 +733,8 @@ fn utf8Excerpt(s: []const u8, max: usize) []const u8 {
     return s[0..end];
 }
 
-/// co/core is OpenAI-compatible: POST /chat/completions, Bearer auth.
-fn callModel(allocator: Allocator, key: []const u8, io: Io, prompt: []const u8) ![]const u8 {
+/// POST /chat/completions against any OpenAI-compatible provider (cfg.url).
+fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) ![]const u8 {
     var client: http.Client = .{ .allocator = allocator, .io = io };
     defer client.deinit();
 
@@ -623,7 +743,7 @@ fn callModel(allocator: Allocator, key: []const u8, io: Io, prompt: []const u8) 
     var jw: json.Stringify = .{ .writer = &body.writer, .options = .{} };
     try jw.beginObject();
     try jw.objectField("model");
-    try jw.write(REVIEW_MODEL);
+    try jw.write(cfg.model);
     try jw.objectField("max_tokens");
     try jw.write(150);
     try jw.objectField("temperature");
@@ -642,12 +762,12 @@ fn callModel(allocator: Allocator, key: []const u8, io: Io, prompt: []const u8) 
     defer allocator.free(payload);
 
     var auth_buf: [256]u8 = undefined;
-    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{key}) catch return error.AuthTooLong;
+    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{cfg.key}) catch return error.AuthTooLong;
 
     var resp: std.Io.Writer.Allocating = .init(allocator);
     errdefer resp.deinit();
     const res = client.fetch(.{
-        .location = .{ .url = COCORE_URL },
+        .location = .{ .url = cfg.url },
         .method = .POST,
         .headers = .{
             .content_type = .{ .override = "application/json" },
@@ -865,6 +985,35 @@ test "utf8Excerpt never splits a codepoint (regression: CJK authors stuck inconc
     try std.testing.expectEqualStrings(kr, utf8Excerpt(kr, 100)); // shorter than max: untouched
     try std.testing.expectEqualStrings("abc", utf8Excerpt("abcdef", 3)); // ascii: plain cut
     try std.testing.expect(std.unicode.utf8ValidateSlice(utf8Excerpt(kr, 4)));
+}
+
+test "utf8Middle: bounded middle window, valid UTF-8 on both edges" {
+    // 30 Korean codepoints = 90 bytes; a 20-byte middle window lands mid-codepoint
+    // on both sides without alignment.
+    const kr = "스케치" ** 10;
+    const mid = utf8Middle(kr, 20);
+    try std.testing.expect(mid.len <= 20 and mid.len > 0);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(mid));
+    try std.testing.expectEqualStrings("short", utf8Middle("short", 20)); // shorter than max: whole string
+    try std.testing.expectEqualStrings("cde", utf8Middle("abcdefg", 3)); // ascii: centered
+}
+
+test "excerptIndex: votes read different, evenly spread, in-range documents" {
+    const total: usize = 92;
+    for (0..VOTES) |vote| {
+        var prev: usize = 0;
+        for (0..EXCERPTS_PER_VOTE) |j| {
+            const idx = excerptIndex(total, j, vote);
+            try std.testing.expect(idx < total);
+            if (j > 0) try std.testing.expect(idx > prev); // strictly advancing across the corpus
+            prev = idx;
+        }
+        // consecutive votes see adjacent-but-different documents
+        if (vote > 0) try std.testing.expect(excerptIndex(total, 0, vote) != excerptIndex(total, 0, vote - 1));
+    }
+    // tiny corpora stay in range
+    try std.testing.expect(excerptIndex(1, 4, 2) == 0);
+    try std.testing.expect(excerptIndex(3, 4, 2) < 3);
 }
 
 test "exhausted pending authors get fresh attempts on worker start (regression: sksksketch wedge)" {
