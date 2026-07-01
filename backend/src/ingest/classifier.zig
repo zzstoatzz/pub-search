@@ -450,11 +450,20 @@ pub fn startReview(allocator: Allocator, io: Io) void {
 }
 
 fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
+    // authors that exhausted their attempts stay PENDING but invisible to
+    // nextPending — without this reset they'd wedge forever. A fresh set of
+    // attempts per boot keeps retries bounded (the process restarts on each
+    // snapshot adoption) while still never rejecting on provider flakiness.
+    var reset_done = false;
     while (true) {
         const conn = g_conn orelse {
             io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
             continue;
         };
+        if (!reset_done) {
+            resetExhaustedAttempts(conn);
+            reset_done = true;
+        }
         const did = nextPending(allocator, conn) orelse {
             io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
             continue;
@@ -495,6 +504,13 @@ fn reviewWorker(allocator: Allocator, key: []const u8, io: Io) void {
         }
         io.sleep(Io.Duration.fromSeconds(1), .awake) catch {};
     }
+}
+
+fn resetExhaustedAttempts(conn: zqlite.Conn) void {
+    conn.exec(
+        "UPDATE author_stats SET review_attempts = 0 WHERE state = ? AND review_attempts >= ?",
+        .{ STATE_PENDING, MAX_REVIEW_ATTEMPTS },
+    ) catch {};
 }
 
 fn nextPending(allocator: Allocator, conn: zqlite.Conn) ?[]const u8 {
@@ -812,4 +828,26 @@ test "date-titled journal is NOT flagged (precision regression: firstwaterbottle
     // the old code scored this maximally templated (1.0) → false positive.
     try std.testing.expectEqual(@as(f64, 0), journal.templateScore(a));
     try std.testing.expect(journal.score(a) < THRESHOLD);
+}
+
+test "exhausted pending authors get fresh attempts on worker start (regression: sksksketch wedge)" {
+    const conn = try zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+    defer conn.close();
+    try conn.execNoArgs("CREATE TABLE author_stats (did TEXT PRIMARY KEY, state INTEGER NOT NULL, review_attempts INTEGER NOT NULL)");
+    try conn.exec("INSERT INTO author_stats VALUES ('did:stuck', ?, ?)", .{ STATE_PENDING, MAX_REVIEW_ATTEMPTS });
+    try conn.exec("INSERT INTO author_stats VALUES ('did:fresh', ?, 2)", .{STATE_PENDING});
+    try conn.exec("INSERT INTO author_stats VALUES ('did:done', ?, ?)", .{ STATE_LABELED, MAX_REVIEW_ATTEMPTS });
+
+    resetExhaustedAttempts(conn);
+
+    const attempts = struct {
+        fn of(c: zqlite.Conn, did: []const u8) !i64 {
+            const row = (try c.row("SELECT review_attempts FROM author_stats WHERE did = ?", .{did})).?;
+            defer row.deinit();
+            return row.int(0);
+        }
+    };
+    try std.testing.expectEqual(@as(i64, 0), try attempts.of(conn, "did:stuck")); // visible to nextPending again
+    try std.testing.expectEqual(@as(i64, 2), try attempts.of(conn, "did:fresh")); // in-flight count untouched
+    try std.testing.expectEqual(MAX_REVIEW_ATTEMPTS, try attempts.of(conn, "did:done")); // non-pending untouched
 }

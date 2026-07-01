@@ -142,7 +142,7 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
 
     // model-pass gate: background worker that confirms flagged authors are
     // machine-generated (reads content, asks an LLM) before the labeler emits.
-    // No-op without ANTHROPIC_API_KEY — flagged authors just queue unlabeled.
+    // No-op without COCORE_API_KEY — flagged authors just queue unlabeled.
     labeler_classifier.startReview(allocator, io);
 
     // snapshot promote watcher (inert unless ENABLE_SNAPSHOT_PROMOTE is set)
