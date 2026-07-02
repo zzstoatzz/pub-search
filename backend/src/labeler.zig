@@ -95,6 +95,12 @@ pub fn start(allocator: std.mem.Allocator, io: Io) void {
         .address = "0.0.0.0",
         .max_conn = 256,
         .max_message_size = 64 * 1024,
+        // the library defaults (1024-byte request head, 10 headers) reject any
+        // real browser coming through the Cloudflare proxy — CF forwards the
+        // browser's headers and adds its own (cf-ray, x-forwarded-for, sec-*),
+        // which read as a failed handshake and surface as 502s. Curl passed;
+        // browsers didn't.
+        .handshake = .{ .max_size = 8192, .max_headers = 64 },
     }) catch |err| {
         logfire.err("labeler: ws server init failed: {s}", .{@errorName(err)});
         return;
