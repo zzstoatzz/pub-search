@@ -20,6 +20,7 @@ const subscribers = @import("server/subscribers.zig");
 const wrapped_ep = @import("server/wrapped.zig");
 const labeler = @import("labeler.zig");
 const classifier = @import("ingest/classifier.zig");
+const policy = @import("policy.zig");
 
 pub const initRecommendedCache = recommended.init;
 pub const initCuratorsCache = curators.init;
@@ -223,13 +224,21 @@ fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void
     }
 
     // perform search - arena handles cleanup
-    const results = search.search(alloc, query, tag_filter, platform_filter, since_filter, author_filter, mode) catch |err| {
+    const raw_results = search.search(alloc, query, tag_filter, platform_filter, since_filter, author_filter, mode) catch |err| {
         logfire.err("search failed: {}", .{err});
         metrics.stats.recordError();
         return err;
     };
     metrics.stats.recordSearch(query);
     logfire.counter("search.requests", 1);
+
+    // label policy: results from bulk-generated-labeled accounts are hidden by
+    // default; `labeled=show` opts in (they come back annotated so the UI can
+    // badge them). Kept accounts are always shown, annotated. Mirrors the
+    // opt-in model of bsky labeler subscriptions, for our own surface.
+    const labeled_pref = parseQueryParam(alloc, target, "labeled") catch null;
+    const show_labeled = labeled_pref != null and mem.eql(u8, labeled_pref.?, "show");
+    const results = applyLabelPolicy(alloc, raw_results, show_labeled) catch raw_results;
 
     if (mem.eql(u8, format, "v2")) {
         const wrapped = try wrapResponse(alloc, results, query, @tagName(mode), limit, offset);
@@ -243,6 +252,30 @@ fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void
             try sendJson(request, results);
         }
     }
+}
+
+/// Label policy over a serialized search-result array: rows from labeled
+/// accounts are dropped unless kept or `show`; survivors are annotated
+/// (labeled/kept) so the UI can badge them. One choke point covers every
+/// mode and format; result sets are ≤tens of rows so the reparse is noise.
+fn applyLabelPolicy(alloc: Allocator, body: []const u8, show: bool) ![]const u8 {
+    const root = try json.parseFromSliceLeaky(json.Value, alloc, body, .{});
+    if (root != .array) return body; // error payloads etc. pass through
+
+    var out: json.Array = .init(alloc);
+    for (root.array.items) |item| {
+        var result = item;
+        if (zat.json.getString(result, "did")) |did| {
+            if (classifier.isLabeledDid(did)) {
+                const kept = policy.isKept(did);
+                if (!kept and !show) continue;
+                try result.object.put("labeled", .{ .bool = true });
+                try result.object.put("kept", .{ .bool = kept });
+            }
+        }
+        try out.append(result);
+    }
+    return json.Stringify.valueAlloc(alloc, json.Value{ .array = out }, .{});
 }
 
 fn handleTags(request: *http.Server.Request, target: []const u8, io: Io) !void {

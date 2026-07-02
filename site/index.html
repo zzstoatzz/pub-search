@@ -336,6 +336,18 @@
       color: #d4956a;
     }
     .platform-badge:hover { background: rgba(180, 100, 64, 0.35); }
+    .labeled-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-right: 8px;
+      text-transform: lowercase;
+      background: rgba(120, 120, 120, 0.15);
+      color: var(--text-dim);
+      text-decoration: none;
+      border: 1px dashed var(--border-focus);
+    }
+    .labeled-badge:hover { color: var(--text-secondary); }
 
     .status {
       padding: 1rem;
@@ -1090,6 +1102,7 @@
       if (currentSince) searchUrl += `&since=${encodeURIComponent(currentSince)}`;
       if (currentAuthor) searchUrl += `&author=${encodeURIComponent(currentAuthor)}`;
       if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
+      if (localStorage.getItem('showLabeled') === 'show') searchUrl += '&labeled=show';
 
       try {
         const res = await fetch(searchUrl);
@@ -1138,6 +1151,11 @@
             : '';
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           const platformHome = getPlatformHome(plat, doc.basePath);
+          // bulk-generated accounts are hidden by default; when shown (opt-in
+          // or kept), they wear the label. see /labels.
+          const labeledBadge = doc.labeled
+            ? `<a href="/labels" class="labeled-badge" title="this account's documents are generated from a database rather than composed — ${doc.kept ? 'kept in results deliberately' : 'shown because you opted in'}. click for details.">bulk-generated</a>`
+            : '';
 
           // source badge (only shown in hybrid/semantic modes)
           let sourceBadge = '';
@@ -1174,7 +1192,7 @@
             <div class="result${coverHtml ? ' has-cover' : ''}">
               ${coverHtml}
               <div class="result-title">
-                <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}
+                <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}${labeledBadge}
                 ${docUrl
                   ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
                   : escapeHtml(doc.title || 'Untitled')}${sourceBadge}

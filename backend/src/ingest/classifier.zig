@@ -322,6 +322,16 @@ fn authorSite(allocator: Allocator, did: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Is this DID currently labeled bulk-generated? Read by the search path to
+/// filter/annotate results (author-stats sqlite is serialized; a point lookup
+/// per result row is sub-microsecond). Kept-ness is policy.isKept, comptime.
+pub fn isLabeledDid(did: []const u8) bool {
+    const conn = g_conn orelse return false;
+    const row = (conn.row("SELECT 1 FROM author_stats WHERE did = ? AND state = ?", .{ did, STATE_LABELED }) catch return false) orelse return false;
+    row.deinit();
+    return true;
+}
+
 /// Operator negated a label (via /admin/label neg=1): record the human verdict
 /// so the /labels page and the review pipeline agree with the retraction.
 /// Keeps state=REJECTED (terminal) so the classifier never re-flags the DID.
