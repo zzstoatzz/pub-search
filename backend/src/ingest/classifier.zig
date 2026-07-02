@@ -17,6 +17,7 @@ const std = @import("std");
 const zqlite = @import("zqlite");
 const logfire = @import("logfire");
 const labeler = @import("../labeler.zig");
+const policy = @import("../policy.zig");
 const db = @import("../db.zig");
 
 const http = std.http;
@@ -135,7 +136,12 @@ pub fn observe(did: []const u8, title: []const u8, content: []const u8) void {
 /// Runs once, in a background thread.
 pub fn bootstrap() void {
     const conn = g_conn orelse return;
-    if (getMeta(conn, "scoring_version") == SCORING_VERSION) return;
+    if (getMeta(conn, "scoring_version") == SCORING_VERSION) {
+        // no re-score needed, but a DID newly added to banned-dids.txt still
+        // needs its seeded label without waiting for a version bump.
+        seedBannedRegistry(conn);
+        return;
+    }
     const local = db.getLocalDbRaw() orelse return;
     if (!local.isReady()) return;
 
@@ -186,6 +192,32 @@ pub fn bootstrap() void {
     for (entries.items) |e| observeLen(e.did, e.title, e.len);
     setMeta(conn, "scoring_version", SCORING_VERSION);
     logfire.info("classifier: bootstrap (re)scored {d} existing docs at v{d}", .{ entries.items.len, SCORING_VERSION });
+    seedBannedRegistry(conn);
+}
+
+/// The hand-banned registry (banned-dids.txt / docs/exclusions.md) must be a
+/// SUBSET of the labeled set: banned DIDs are dropped at the firehose and
+/// excluded from the replica, so the classifier can never observe them — but
+/// they're our best-evidenced bulk-generated cases, and the label stream is
+/// how other consumers learn about them. Operator-attested: no model review.
+/// Idempotent per scoring version (re-emits after each version's negate+wipe).
+fn seedBannedRegistry(conn: zqlite.Conn) void {
+    for (policy.BANNED_ENTRIES) |entry| {
+        const existing = (conn.row("SELECT state FROM author_stats WHERE did = ?", .{entry.did}) catch continue) orelse null;
+        if (existing) |row| {
+            const done = row.int(0) == STATE_LABELED;
+            row.deinit();
+            if (done) continue;
+        }
+        var reason_buf: [256]u8 = undefined;
+        const reason = std.fmt.bufPrint(&reason_buf, "{s} — hand-banned bulk-generated mirror; evidence in docs/exclusions.md", .{if (entry.note.len > 0) entry.note else entry.did}) catch entry.did;
+        conn.exec(
+            "INSERT OR REPLACE INTO author_stats (did, doc_count, len_sum, empty_titles, digit_titles, title_sample, sample_count, state, reason) VALUES (?, 0, 0, 0, 0, '', 0, ?, ?)",
+            .{ entry.did, STATE_LABELED, reason },
+        ) catch continue;
+        _ = labeler.emit(entry.did, labeler.LABEL_BULK_GENERATED, false) catch {};
+        logfire.info("classifier: seeded banned-registry label for {s} ({s})", .{ entry.did, entry.note });
+    }
 }
 
 fn getMeta(conn: zqlite.Conn, key: []const u8) i64 {
