@@ -148,9 +148,11 @@ rows = query(
     f"FROM documents WHERE {LIVE} AND indexed_at >= '{INGESTER_EPOCH}' "
     f"ORDER BY indexed_at ASC LIMIT 2000"
 )
+first_global_title = None
 for rkey, created, indexed, title, did, base_path, path in rows:
     t_tid, t_created, t_indexed = tid_time(rkey), parse_iso(created), parse_iso(indexed)
     if agree(t_tid, t_created) and agree(t_tid, t_indexed):
+        first_global_title = title
         url = f"https://{base_path}{path}" if base_path and path else None
         fact(
             f"the first document this index watched arrive live off the firehose was "
@@ -160,24 +162,28 @@ for rkey, created, indexed, title, did, base_path, path in rows:
         )
         break
 
-# earliest verifiably-dated document per platform: the claimed date is
-# corroborated by the record-key timestamp (skip 'other')
+# first document per platform to arrive live off the firehose. arrival is
+# the only clock an author can't mint — a claimed date and a record-key
+# timestamp can be co-fabricated by the same import, so agreement between
+# them alone proves nothing (skip 'other')
 for (platform,) in query(
     f"SELECT DISTINCT platform FROM documents WHERE {LIVE} AND platform != 'other'"
 ):
     rows = query(
-        f"SELECT rkey, created_at, title, did, base_path, path FROM documents "
-        f"WHERE {LIVE} AND platform = '{platform}' AND created_at >= '2022' "
-        f"ORDER BY created_at ASC LIMIT 500"
+        f"SELECT rkey, created_at, indexed_at, title, did, base_path, path FROM documents "
+        f"WHERE {LIVE} AND platform = '{platform}' AND indexed_at >= '{INGESTER_EPOCH}' "
+        f"ORDER BY indexed_at ASC LIMIT 2000"
     )
-    for rkey, created, title, did, base_path, path in rows:
-        t_created = parse_iso(created)
-        if agree(tid_time(rkey), t_created):
+    for rkey, created, indexed, title, did, base_path, path in rows:
+        if title == first_global_title:
+            break  # already told as the global first — don't repeat it
+        t_tid = tid_time(rkey)
+        if agree(t_tid, parse_iso(created)) and agree(t_tid, parse_iso(indexed)):
             url = f"https://{base_path}{path}" if base_path and path else None
             fact(
-                f"the earliest verifiably-dated {platform} document is “{title}” "
-                f"by {handle_for(did)}, {t_created:%B %-d, %Y}",
-                detail="its record-key timestamp corroborates the date it claims",
+                f"the first {platform} document this index watched arrive was "
+                f"“{title}” by {handle_for(did)}, {t_tid:%B %-d, %Y}",
+                detail="firsts are by verified arrival — self-reported dates reach back further, but can't be checked",
                 url=url,
             )
             break
@@ -224,11 +230,13 @@ if best_doc:
 
 print("tags...")
 rows = query(
-    "SELECT tag, COUNT(*) as n FROM document_tags GROUP BY tag ORDER BY n DESC LIMIT 1"
+    "SELECT tag, COUNT(*) as n FROM document_tags GROUP BY tag ORDER BY n DESC LIMIT 6"
 )
 if rows:
     tag, n = rows[0]
     fact(f"the most-used tag is “{tag}” — {int(n):,} documents carry it")
+    for tag, n in rows[1:]:
+        fact(f"{int(n):,} documents are tagged “{tag}”")
 
 rows = query(
     "SELECT COUNT(*) FROM (SELECT tag FROM document_tags GROUP BY tag HAVING COUNT(*) = 1)"
@@ -268,6 +276,66 @@ if rows:
         fact(
             f"{round(recent / total * 100)}% of all {total:,} documents were written in the last 30 days"
         )
+
+print("more shape...")
+rows = query(
+    f"SELECT date(indexed_at), COUNT(*) as n FROM documents "
+    f"WHERE {LIVE} AND indexed_at >= '{INGESTER_EPOCH}' "
+    f"GROUP BY date(indexed_at) ORDER BY n DESC LIMIT 1"
+)
+if rows:
+    day, n = rows[0]
+    d = parse_iso(day)
+    if d and int(n):
+        fact(f"the busiest day this index has seen was {d:%B %-d, %Y} — {int(n):,} documents arrived")
+
+rows = query(
+    f"SELECT p.name, p.base_path, COUNT(*) as n FROM documents d "
+    f"JOIN publications p ON p.uri = d.publication_uri "
+    f"WHERE d.{LIVE} GROUP BY d.publication_uri ORDER BY n DESC LIMIT 1"
+)
+if rows:
+    name, base_path, n = rows[0]
+    url = f"https://{base_path}" if base_path else None
+    fact(f"the largest publication is “{name or base_path}” — {int(n):,} documents", url=url)
+
+rows = query(f"SELECT COUNT(*) FROM publications")
+if rows and int(rows[0][0]):
+    fact(f"{int(rows[0][0]):,} publications are indexed across the network")
+
+rows = query(
+    f"SELECT (SELECT COUNT(*) FROM documents WHERE {LIVE} AND cover_image IS NOT NULL AND cover_image != ''), "
+    f"(SELECT COUNT(*) FROM documents WHERE {LIVE})"
+)
+if rows:
+    covers, total = int(rows[0][0]), int(rows[0][1])
+    if total and covers:
+        fact(f"{round(covers / total * 100)}% of documents ship with cover art")
+
+rows = query(f"SELECT SUM(length(content)) FROM documents WHERE {LIVE}")
+if rows and rows[0][0]:
+    chars = int(rows[0][0])
+    novels = round(chars / 500_000)
+    fact(
+        f"the index holds {chars / 1e6:.0f} million characters of writing — "
+        f"roughly {novels:,} novels' worth"
+    )
+
+rows = query(
+    f"SELECT COUNT(*) FROM (SELECT did FROM documents WHERE {LIVE} "
+    f"GROUP BY did HAVING MIN(indexed_at) >= datetime('now', '-30 days'))"
+)
+if rows and int(rows[0][0]):
+    fact(f"{int(rows[0][0]):,} authors published their first document in the last 30 days")
+
+rows = query(
+    f"SELECT COUNT(*) FROM documents WHERE {LIVE} AND platform = 'other'"
+)
+if rows and int(rows[0][0]):
+    fact(
+        f"{int(rows[0][0]):,} documents come from outside the known platforms — "
+        f"self-hosted sites publishing straight to the protocol"
+    )
 
 # ---- write ------------------------------------------------------------------
 

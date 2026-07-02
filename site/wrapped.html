@@ -125,17 +125,21 @@
       line-height: 1.4;
     }
     .freshness .dot { color: var(--accent); }
-    /* ephemeral corpus factoid — a quiet rotating line beneath the entry form.
-       text-only and dim, styled like .freshness, so it reads as part of the
-       galaxy backdrop rather than competing with it. */
+    /* ephemeral corpus factoids — faint captions drifting in the star field
+       itself (entry screen only). several are visible at once at scattered
+       positions, each fading in and out on its own clock, like reading
+       plaques hung on the galaxy. */
+    #factoid-layer {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    }
     .factoid {
-      margin-top: 2.75rem; text-align: center;
+      position: absolute; max-width: 270px;
       font-size: 12px; line-height: 1.5;
-      min-height: 3.5em; /* reserve space so rotation never shifts the form */
-      opacity: 0; transition: opacity 0.9s ease;
+      opacity: 0; transition: opacity 1.1s ease;
+      pointer-events: auto;
     }
     .factoid.show { opacity: 0.9; }
-    /* halo in the page bg so the line stays legible over the star field
+    /* halo in the page bg so text stays legible over the stars
        (same trick as the canvas neighborhood labels) */
     .factoid .fact-text, .factoid .fact-detail {
       text-shadow:
@@ -479,7 +483,6 @@
             '</div>' +
             '<button type="submit">go</button>' +
           '</form>' +
-          '<div class="factoid" id="factoid" aria-live="polite"></div>' +
         '</div>';
       startFactoids();
       var form = document.getElementById('entry-form');
@@ -568,44 +571,104 @@
     }
 
     // ----- ephemeral corpus factoids (entry screen only) -----------------
-    // facts.json is precomputed by scripts/build-facts (nightly-runnable) so
-    // the fun-but-expensive queries never touch the live database. Each fact
-    // fades through beneath the entry form; the element disappearing (handle
-    // entered) ends the rotation naturally.
+    // facts.json is precomputed by scripts/build-facts (regenerated on the
+    // prefect server alongside the atlas) so the fun-but-expensive queries
+    // never touch the live database. Several captions float in the star
+    // field at once, scattered around the content column, each on its own
+    // fade clock — more of the corpus on screen without rushing the reader.
     var FACTS = null;
+    // slot anchors as viewport fractions [x, y, align]; chosen to ring the
+    // 600px content column rather than sit under it
+    var FACT_SLOTS_WIDE = [
+      [0.06, 0.44, 'left'],  [0.94, 0.40, 'right'],
+      [0.08, 0.72, 'left'],  [0.92, 0.68, 'right'],
+      [0.50, 0.88, 'center'], [0.28, 0.58, 'left']
+    ];
+    var FACT_SLOTS_NARROW = [[0.50, 0.55, 'center'], [0.50, 0.80, 'center']];
+
     function startFactoids() {
-      var el = document.getElementById('factoid');
-      if (!el) return;
-      if (FACTS) { rotateFactoids(el); return; }
+      if (FACTS) { scatterFactoids(); return; }
       fetch('facts.json')
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(d) {
           if (!d || !Array.isArray(d.facts) || !d.facts.length) return;
-          FACTS = d.facts;
-          if (document.getElementById('factoid')) rotateFactoids(document.getElementById('factoid'));
+          // shuffle once so every visit reads a different sequence
+          FACTS = d.facts.slice();
+          for (var i = FACTS.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var t = FACTS[i]; FACTS[i] = FACTS[j]; FACTS[j] = t;
+          }
+          scatterFactoids();
         })
         .catch(function() {});
     }
-    function rotateFactoids(el) {
-      var i = Math.floor(Math.random() * FACTS.length);
-      var HOLD_MS = 9000, FADE_MS = 950;
-      function show() {
-        if (!document.getElementById('factoid')) return; // left the entry screen
-        var f = FACTS[i];
-        i = (i + 1) % FACTS.length;
+
+    function factoidLayer() {
+      // the layer lives only while the entry screen does
+      if (!document.getElementById('entry-form')) return null;
+      var layer = document.getElementById('factoid-layer');
+      if (!layer) {
+        layer = document.createElement('div');
+        layer.id = 'factoid-layer';
+        document.body.appendChild(layer);
+      }
+      return layer;
+    }
+    function removeFactoidLayer() {
+      var layer = document.getElementById('factoid-layer');
+      if (layer) layer.remove();
+    }
+
+    function scatterFactoids() {
+      if (!factoidLayer()) return;
+      var narrow = matchMedia('(max-width: 720px)').matches;
+      var slots = narrow ? FACT_SLOTS_NARROW : FACT_SLOTS_WIDE;
+      var concurrent = narrow ? 1 : 3;
+      var next = 0;
+      var busy = slots.map(function() { return false; });
+      var HOLD_MS = 11000, FADE_MS = 1150;
+
+      function freeSlot() {
+        var open = [];
+        for (var i = 0; i < slots.length; i++) if (!busy[i]) open.push(i);
+        return open.length ? open[Math.floor(Math.random() * open.length)] : -1;
+      }
+
+      function place() {
+        var layer = factoidLayer();
+        if (!layer) return; // left the entry screen — rotation ends
+        var si = freeSlot();
+        if (si < 0) { setTimeout(place, 2000); return; }
+        var f = FACTS[next]; next = (next + 1) % FACTS.length;
+        var s = slots[si];
+        busy[si] = true;
+
+        var el = document.createElement('div');
+        el.className = 'factoid';
         var inner = f.url
           ? '<a class="fact-text" href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.text) + '</a>'
           : '<span class="fact-text">' + esc(f.text) + '</span>';
         if (f.detail) inner += '<span class="fact-detail">' + esc(f.detail) + '</span>';
         el.innerHTML = inner;
-        el.classList.add('show');
+        el.style.textAlign = s[2];
+        if (s[2] === 'right') { el.style.right = ((1 - s[0]) * 100) + '%'; }
+        else if (s[2] === 'center') { el.style.left = (s[0] * 100) + '%'; el.style.transform = 'translateX(-50%)'; }
+        else { el.style.left = (s[0] * 100) + '%'; }
+        el.style.top = (s[1] * 100) + '%';
+        layer.appendChild(el);
+        requestAnimationFrame(function() { requestAnimationFrame(function() { el.classList.add('show'); }); });
+
         setTimeout(function() {
-          if (!document.getElementById('factoid')) return;
           el.classList.remove('show');
-          setTimeout(show, FADE_MS);
+          setTimeout(function() { el.remove(); busy[si] = false; }, FADE_MS);
         }, HOLD_MS);
+        // each chain replaces its own caption when it dies, so exactly
+        // `concurrent` are ever in flight, offset by the initial stagger
+        setTimeout(place, HOLD_MS + FADE_MS + Math.random() * 1500);
       }
-      show();
+
+      // stagger the first wave in
+      for (var k = 0; k < concurrent; k++) setTimeout(place, 400 + k * 3500);
     }
 
     // ----- rank badge ---------------------------------------------------
@@ -1320,6 +1383,7 @@
 
       var key = did ? 'did' : 'handle';
       var val = did || handle;
+      removeFactoidLayer();
       root.innerHTML = '<div class="status">reading the graph…</div>';
 
       fetch(API_BASE + '/wrapped?' + key + '=' + encodeURIComponent(val))
