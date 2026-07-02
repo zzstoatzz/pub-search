@@ -122,7 +122,7 @@
       // is this account in the search index or not?
       const status = a.state !== 'labeled' ? ''
         : a.kept
-          ? `<span class="kept" title="the label is true — but pub-search deliberately keeps this account in the index anyway. the label states what a thing is; whether to exclude it is our policy, and policy is allowed to have taste.">kept in search</span>`
+          ? `<span class="kept" title="the label is accurate — we've just chosen to keep this account in results for now. ideally you'd control per label how each one affects your experience (like bluesky's moderation settings); we're considering that but haven't built it yet.">kept in search</span>`
           : '<span class="docs">not in search</span>';
       const reason = a.reason
         ? `<div class="reason${muted ? ' muted' : ''}">${esc(a.reason)}</div>`
