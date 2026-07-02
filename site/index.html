@@ -1,1855 +1,2352 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <title>pub search</title>
-  <meta name="description" content="search standard.site publishing platforms">
-  <meta property="og:title" content="pub search">
-  <meta property="og:description" content="search standard.site publishing platforms">
-  <meta property="og:type" content="website">
-  <meta property="og:image" content="https://pub-search.waow.tech/og-image">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="pub search">
-  <meta name="twitter:description" content="search standard.site publishing platforms">
-  <meta name="twitter:image" content="https://pub-search.waow.tech/og-image">
-  <script>
-    // prevent flash: apply theme before CSS loads
-    (function() {
-      var t = localStorage.getItem('theme') || 'dark';
-      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', t);
-    })();
-  </script>
-  <style>
-    :root, [data-theme="dark"] {
-      --bg: #0a0a0a;
-      --bg-subtle: #111;
-      --bg-hover: #151515;
-      --border: #222;
-      --border-subtle: #252525;
-      --border-focus: #333;
-      --text: #ccc;
-      --text-bright: #fff;
-      --text-secondary: #888;
-      --text-dim: #777;
-      --text-muted: #444;
-      --error: #c44;
-      --result-hover: #111;
-      --row-border: #1a1a1a;
-      --tooltip-bg: rgba(17, 17, 17, 0.9);
-    }
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <title>pub search</title>
+        <meta
+            name="description"
+            content="search standard.site publishing platforms"
+        />
+        <meta property="og:title" content="pub search" />
+        <meta
+            property="og:description"
+            content="search standard.site publishing platforms"
+        />
+        <meta property="og:type" content="website" />
+        <meta
+            property="og:image"
+            content="https://pub-search.waow.tech/og-image"
+        />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="pub search" />
+        <meta
+            name="twitter:description"
+            content="search standard.site publishing platforms"
+        />
+        <meta
+            name="twitter:image"
+            content="https://pub-search.waow.tech/og-image"
+        />
+        <script>
+            // prevent flash: apply theme before CSS loads
+            (function () {
+                var t = localStorage.getItem("theme") || "dark";
+                if (t === "system")
+                    t = matchMedia("(prefers-color-scheme: light)").matches
+                        ? "light"
+                        : "dark";
+                document.documentElement.setAttribute("data-theme", t);
+            })();
+        </script>
+        <style>
+            :root,
+            [data-theme="dark"] {
+                --bg: #0a0a0a;
+                --bg-subtle: #111;
+                --bg-hover: #151515;
+                --border: #222;
+                --border-subtle: #252525;
+                --border-focus: #333;
+                --text: #ccc;
+                --text-bright: #fff;
+                --text-secondary: #888;
+                --text-dim: #777;
+                --text-muted: #444;
+                --error: #c44;
+                --result-hover: #111;
+                --row-border: #1a1a1a;
+                --tooltip-bg: rgba(17, 17, 17, 0.9);
+            }
 
-    [data-theme="light"] {
-      --bg: #f5f5f0;
-      --bg-subtle: #eee;
-      --bg-hover: #e4e4e0;
-      --border: #ddd;
-      --border-subtle: #ccc;
-      --border-focus: #bbb;
-      --text: #333;
-      --text-bright: #111;
-      --text-secondary: #555;
-      --text-dim: #666;
-      --text-muted: #999;
-      --error: #c44;
-      --result-hover: #eee;
-      --row-border: #e0e0e0;
-      --tooltip-bg: rgba(238, 238, 238, 0.9);
-    }
+            [data-theme="light"] {
+                --bg: #f5f5f0;
+                --bg-subtle: #eee;
+                --bg-hover: #e4e4e0;
+                --border: #ddd;
+                --border-subtle: #ccc;
+                --border-focus: #bbb;
+                --text: #333;
+                --text-bright: #111;
+                --text-secondary: #555;
+                --text-dim: #666;
+                --text-muted: #999;
+                --error: #c44;
+                --result-hover: #eee;
+                --row-border: #e0e0e0;
+                --tooltip-bg: rgba(238, 238, 238, 0.9);
+            }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
 
-    body {
-      font-family: monospace;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      padding: 1rem;
-      font-size: 14px;
-      line-height: 1.6;
-    }
+            body {
+                font-family: monospace;
+                background: var(--bg);
+                color: var(--text);
+                min-height: 100vh;
+                padding: 1rem;
+                font-size: 14px;
+                line-height: 1.6;
+            }
 
-    .container {
-      max-width: 600px;
-      margin: 0 auto;
-    }
+            .container {
+                max-width: 600px;
+                margin: 0 auto;
+            }
 
-    a { color: #1B7340; text-decoration: none; }
-    a:hover { color: #2a9d5c; }
+            a {
+                color: #1b7340;
+                text-decoration: none;
+            }
+            a:hover {
+                color: #2a9d5c;
+            }
 
-    h1 {
-      font-size: 12px;
-      font-weight: normal;
-      margin-bottom: 1.5rem;
-      /* flex row so the gear can be pushed to the right edge of the
+            h1 {
+                font-size: 12px;
+                font-weight: normal;
+                margin-bottom: 1.5rem;
+                /* flex row so the gear can be pushed to the right edge of the
        * content area instead of floating mid-line. wraps if needed. */
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-    }
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 0.4rem;
+            }
 
-    h1 a.title {
-      color: var(--text-secondary);
-    }
+            h1 a.title {
+                color: var(--text-secondary);
+            }
 
-    h1 a.title:hover {
-      color: var(--text-bright);
-    }
+            h1 a.title:hover {
+                color: var(--text-bright);
+            }
 
-    h1 a.src {
-      font-size: 10px;
-      color: var(--text-muted);
-    }
+            h1 a.src {
+                font-size: 10px;
+                color: var(--text-muted);
+            }
 
-    h1 a.stats-link {
-      font-size: 10px;
-      color: #553;
-    }
+            h1 a.stats-link {
+                font-size: 10px;
+                color: #553;
+            }
 
-    h1 a.stats-link:hover {
-      color: #d4956a;
-    }
+            h1 a.stats-link:hover {
+                color: #d4956a;
+            }
 
-    h1 .by {
-      font-size: 10px;
-      color: var(--text-dim);
-    }
+            h1 .by {
+                font-size: 10px;
+                color: var(--text-dim);
+            }
 
-    h1 .by a {
-      color: var(--text-dim);
-    }
+            h1 .by a {
+                color: var(--text-dim);
+            }
 
-    h1 .by a:hover {
-      color: #1B7340;
-    }
+            h1 .by a:hover {
+                color: #1b7340;
+            }
 
-    .search-box {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem; /* reduced to accommodate syntax-help popover */
-    }
+            .search-box {
+                display: flex;
+                gap: 0.5rem;
+                margin-bottom: 0.5rem; /* reduced to accommodate syntax-help popover */
+            }
 
-    /* the wrapper IS the visible input box; active-filter chips sit
+            /* the wrapper IS the visible input box; active-filter chips sit
      * inline before the actual text field. */
-    .lf-typeahead-wrap {
-      position: relative;
-      flex: 1;
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
-      padding: 0.35rem 0.5rem;
-      background: var(--bg-subtle);
-      border: 1px solid var(--border-focus);
-      min-height: 38px;
-    }
+            .lf-typeahead-wrap {
+                position: relative;
+                flex: 1;
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px;
+                padding: 0.35rem 0.5rem;
+                background: var(--bg-subtle);
+                border: 1px solid var(--border-focus);
+                min-height: 38px;
+            }
 
-    .lf-typeahead-wrap:focus-within { outline: 1px solid #1B7340; }
+            .lf-typeahead-wrap:focus-within {
+                outline: 1px solid #1b7340;
+            }
 
-    /* `display: contents` lets the chips become direct flex children of
+            /* `display: contents` lets the chips become direct flex children of
      * the wrapper so they share its alignment and gap. */
-    .lf-filter-chips { display: contents; }
+            .lf-filter-chips {
+                display: contents;
+            }
 
-    /* override the global input[type=text] visual chrome — the wrapper
+            /* override the global input[type=text] visual chrome — the wrapper
      * owns the border/bg now. */
-    .lf-typeahead-wrap input[type="text"] {
-      flex: 1;
-      min-width: 80px;
-      width: auto;
-      border: none;
-      background: transparent;
-      outline: none;
-      padding: 0.15rem 0;
-      font-size: 16px; /* prevent iOS auto-zoom on focus */
-      color: var(--text);
-    }
+            .lf-typeahead-wrap input[type="text"] {
+                flex: 1;
+                min-width: 80px;
+                width: auto;
+                border: none;
+                background: transparent;
+                outline: none;
+                padding: 0.15rem 0;
+                font-size: 16px; /* prevent iOS auto-zoom on focus */
+                color: var(--text);
+            }
 
-    .lf-typeahead-wrap input[type="text"]:focus { outline: none; }
+            .lf-typeahead-wrap input[type="text"]:focus {
+                outline: none;
+            }
 
-    .syntax-help-btn {
-      font-family: monospace;
-      font-size: 10px;
-      background: none;
-      border: 1px solid var(--text-muted);
-      color: var(--text-muted);
-      cursor: pointer;
-      border-radius: 50%;
-      width: 14px;
-      height: 14px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      vertical-align: middle;
-      margin-left: 2px;
-    }
+            .syntax-help-btn {
+                font-family: monospace;
+                font-size: 10px;
+                background: none;
+                border: 1px solid var(--text-muted);
+                color: var(--text-muted);
+                cursor: pointer;
+                border-radius: 50%;
+                width: 14px;
+                height: 14px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                vertical-align: middle;
+                margin-left: 2px;
+            }
 
-    .syntax-help-btn:hover { color: var(--text-secondary); border-color: var(--text-secondary); }
-    .syntax-help-btn.active { color: #1B7340; border-color: #1B7340; }
+            .syntax-help-btn:hover {
+                color: var(--text-secondary);
+                border-color: var(--text-secondary);
+            }
+            .syntax-help-btn.active {
+                color: #1b7340;
+                border-color: #1b7340;
+            }
 
-    .syntax-help {
-      display: none;
-      background: var(--tooltip-bg);
-      border: 1px solid var(--border);
-      padding: 0.5rem 0.75rem;
-      margin-bottom: 1rem;
-      font-size: 11px;
-      line-height: 1.8;
-    }
+            .syntax-help {
+                display: none;
+                background: var(--tooltip-bg);
+                border: 1px solid var(--border);
+                padding: 0.5rem 0.75rem;
+                margin-bottom: 1rem;
+                font-size: 11px;
+                line-height: 1.8;
+            }
 
-    .syntax-help.open { display: block; }
+            .syntax-help.open {
+                display: block;
+            }
 
-    .syntax-help code {
-      color: #1B7340;
-      font-family: monospace;
-    }
+            .syntax-help code {
+                color: #1b7340;
+                font-family: monospace;
+            }
 
-    .syntax-help .syntax-row {
-      display: flex;
-      gap: 1rem;
-    }
+            .syntax-help .syntax-row {
+                display: flex;
+                gap: 1rem;
+            }
 
-    .syntax-help .syntax-example { min-width: 110px; }
-    .syntax-help .syntax-desc { color: var(--text-secondary); }
-    .syntax-help .about-blurb { color: var(--text); margin-bottom: 0.6rem; line-height: 1.7; }
-    .syntax-help .about-blurb + .syntax-row { border-top: 1px solid var(--row-border); padding-top: 0.5rem; }
+            .syntax-help .syntax-example {
+                min-width: 110px;
+            }
+            .syntax-help .syntax-desc {
+                color: var(--text-secondary);
+            }
+            .syntax-help .about-blurb {
+                color: var(--text);
+                margin-bottom: 0.6rem;
+                line-height: 1.7;
+            }
+            .syntax-help .about-blurb + .syntax-row {
+                border-top: 1px solid var(--row-border);
+                padding-top: 0.5rem;
+            }
 
-    /* platform logo marquee (empty state) — a slow drift of who's indexed.
+            /* platform logo marquee (empty state) — a slow drift of who's indexed.
      * duplicated track content makes the loop seamless; hover pauses. */
-    .platform-marquee {
-      overflow: hidden;
-      margin: 1rem auto 0;
-      max-width: 420px;
-      -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
-      mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
-    }
-    .marquee-track {
-      display: flex;
-      gap: 1.6rem;
-      width: max-content;
-      animation: marquee-drift 28s linear infinite;
-    }
-    .platform-marquee:hover .marquee-track { animation-play-state: paused; }
-    @keyframes marquee-drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-    @media (prefers-reduced-motion: reduce) {
-      .marquee-track { animation: none; flex-wrap: wrap; justify-content: center; width: auto; }
-      .platform-marquee { -webkit-mask-image: none; mask-image: none; }
-      .marquee-track .pf-chip.dup { display: none; }
-    }
-    .pf-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      color: var(--text-dim);
-      white-space: nowrap;
-    }
-    .pf-chip:hover { color: var(--text); }
-    .pf-chip img { width: 16px; height: 16px; border-radius: 3px; }
-    .join-hint { font-size: 11px; margin-top: 0.9rem; }
-    .join-hint a { color: var(--text-dim); border-bottom: 1px dashed var(--border-focus); }
-    .join-hint a:hover { color: #2a9d5c; }
+            .platform-marquee {
+                overflow: hidden;
+                margin: 1rem auto 0;
+                max-width: 420px;
+                -webkit-mask-image: linear-gradient(
+                    90deg,
+                    transparent,
+                    #000 15%,
+                    #000 85%,
+                    transparent
+                );
+                mask-image: linear-gradient(
+                    90deg,
+                    transparent,
+                    #000 15%,
+                    #000 85%,
+                    transparent
+                );
+            }
+            .marquee-track {
+                display: flex;
+                gap: 1.6rem;
+                width: max-content;
+                animation: marquee-drift 28s linear infinite;
+            }
+            .platform-marquee:hover .marquee-track {
+                animation-play-state: paused;
+            }
+            @keyframes marquee-drift {
+                from {
+                    transform: translateX(0);
+                }
+                to {
+                    transform: translateX(-50%);
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .marquee-track {
+                    animation: none;
+                    flex-wrap: wrap;
+                    justify-content: center;
+                    width: auto;
+                }
+                .platform-marquee {
+                    -webkit-mask-image: none;
+                    mask-image: none;
+                }
+                .marquee-track .pf-chip.dup {
+                    display: none;
+                }
+            }
+            .pf-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 11px;
+                color: var(--text-dim);
+                white-space: nowrap;
+            }
+            .pf-chip:hover {
+                color: var(--text);
+            }
+            .pf-chip img {
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+            }
+            .join-hint {
+                font-size: 11px;
+                margin-top: 0.9rem;
+            }
+            .join-hint a {
+                color: var(--text-dim);
+                border-bottom: 1px dashed var(--border-focus);
+            }
+            .join-hint a:hover {
+                color: #2a9d5c;
+            }
 
-    input[type="text"] {
-      flex: 1;
-      padding: 0.5rem;
-      font-family: monospace;
-      font-size: 16px; /* prevents iOS auto-zoom on focus */
-      background: var(--bg-subtle);
-      border: 1px solid var(--border-focus);
-      color: var(--text);
-    }
+            input[type="text"] {
+                flex: 1;
+                padding: 0.5rem;
+                font-family: monospace;
+                font-size: 16px; /* prevents iOS auto-zoom on focus */
+                background: var(--bg-subtle);
+                border: 1px solid var(--border-focus);
+                color: var(--text);
+            }
 
-    input[type="text"]:focus { outline: 1px solid #1B7340; }
+            input[type="text"]:focus {
+                outline: 1px solid #1b7340;
+            }
 
-    button {
-      padding: 0.5rem 1rem;
-      font-family: monospace;
-      font-size: 14px;
-      background: var(--bg-subtle);
-      border: 1px solid var(--border-focus);
-      color: var(--text);
-      cursor: pointer;
-    }
+            button {
+                padding: 0.5rem 1rem;
+                font-family: monospace;
+                font-size: 14px;
+                background: var(--bg-subtle);
+                border: 1px solid var(--border-focus);
+                color: var(--text);
+                cursor: pointer;
+            }
 
-    button:hover { background: var(--border); }
-    button:disabled { color: var(--text-dim); cursor: not-allowed; }
+            button:hover {
+                background: var(--border);
+            }
+            button:disabled {
+                color: var(--text-dim);
+                cursor: not-allowed;
+            }
 
-    .results {
-      display: flex;
-      flex-direction: column;
-    }
+            .results {
+                display: flex;
+                flex-direction: column;
+            }
 
-    .result {
-      position: relative;
-      border-bottom: 1px solid var(--border);
-      padding: 1rem 0;
-    }
+            .result {
+                position: relative;
+                border-bottom: 1px solid var(--border);
+                padding: 1rem 0;
+            }
 
-    .result.has-cover { padding-right: 52px; }
+            .result.has-cover {
+                padding-right: 52px;
+            }
 
-    .result:hover { background: var(--result-hover); margin: 0 -0.5rem; padding: 1rem 0.5rem; }
-    .result.has-cover:hover { padding-right: 52px; }
-    .result:hover .cover-thumb { right: 1.25rem; }
+            .result:hover {
+                background: var(--result-hover);
+                margin: 0 -0.5rem;
+                padding: 1rem 0.5rem;
+            }
+            .result.has-cover:hover {
+                padding-right: 52px;
+            }
+            .result:hover .cover-thumb {
+                right: 1.25rem;
+            }
 
-    .result-title {
-      color: var(--text-bright);
-      margin-bottom: 0.5rem;
-      /* prevent long titles from breaking layout */
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-      word-break: break-word;
-    }
+            .result-title {
+                color: var(--text-bright);
+                margin-bottom: 0.5rem;
+                /* prevent long titles from breaking layout */
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+                word-break: break-word;
+            }
 
-    .result-title a { color: inherit; }
-    .result-title a:hover { color: #2a9d5c; }
+            .result-title a {
+                color: inherit;
+            }
+            .result-title a:hover {
+                color: #2a9d5c;
+            }
 
-    .result-snippet {
-      font-size: 12px;
-      color: var(--text-secondary);
-      margin-bottom: 0.5rem;
-      line-height: 1.5;
-      /* break unbreakable runs (e.g. embedded image URLs) so they wrap
+            .result-snippet {
+                font-size: 12px;
+                color: var(--text-secondary);
+                margin-bottom: 0.5rem;
+                line-height: 1.5;
+                /* break unbreakable runs (e.g. embedded image URLs) so they wrap
        * instead of forcing horizontal overflow of the result card. */
-      overflow-wrap: anywhere;
-    }
-
-    .result-snippet mark {
-      background: rgba(27, 115, 64, 0.3);
-      color: #2a9d5c;
-      padding: 0 2px;
-    }
-
-    .result-meta {
-      font-size: 11px;
-      color: var(--text-dim);
-    }
-
-    .author-name a {
-      color: var(--text-secondary);
-      text-decoration: none;
-    }
-
-    .author-name a:hover {
-      color: #2a9d5c;
-    }
-
-    .entity-type {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      margin-right: 8px;
-      text-transform: lowercase;
-    }
-
-    .entity-type.article {
-      background: rgba(27, 115, 64, 0.2);
-      color: #2a9d5c;
-    }
-
-    .entity-type.looseleaf {
-      background: rgba(100, 100, 100, 0.2);
-      color: var(--text-secondary);
-    }
-
-    .entity-type.publication {
-      background: rgba(64, 115, 180, 0.2);
-      color: #6a9fd4;
-    }
-
-    .platform-badge {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      margin-right: 8px;
-      text-transform: lowercase;
-      background: rgba(180, 100, 64, 0.2);
-      color: #d4956a;
-    }
-    .platform-badge:hover { background: rgba(180, 100, 64, 0.35); }
-    .labeled-badge {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      margin-right: 8px;
-      text-transform: lowercase;
-      background: rgba(120, 120, 120, 0.15);
-      color: var(--text-dim);
-      text-decoration: none;
-      border: 1px dashed var(--border-focus);
-    }
-    .labeled-badge:hover { color: var(--text-secondary); }
-
-    .status {
-      padding: 1rem;
-      text-align: center;
-      color: var(--text-dim);
-    }
-
-    .error { color: var(--error); }
-
-    .empty-state {
-      text-align: center;
-      padding: 2rem;
-      color: var(--text-dim);
-    }
-
-    .empty-state p { margin-bottom: 0.5rem; }
-
-    .suggestions {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-bottom: 1.5rem;
-      padding: 0.5rem 0;
-      border-bottom: 1px solid var(--row-border);
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      overflow-y: hidden;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
-      -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
-    }
-    .suggestions::-webkit-scrollbar { display: none; }
-    .suggestions > * { flex-shrink: 0; }
-
-    .suggestions-label {
-      color: var(--text-dim);
-    }
-
-    .suggestions-list {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      flex-wrap: nowrap;
-    }
-    .suggestions-list > * { flex-shrink: 0; }
-
-    .suggestion {
-      color: var(--text-dim);
-      cursor: pointer;
-      font-style: italic;
-    }
-
-    .suggestion::before {
-      content: '"';
-      color: var(--text-muted);
-    }
-
-    .suggestion::after {
-      content: '"';
-      color: var(--text-muted);
-    }
-
-    .suggestion:hover {
-      color: #2a9d5c;
-    }
-
-    .suggestion:hover::before,
-    .suggestion:hover::after {
-      color: #2a9d5c;
-    }
-
-    .stats {
-      font-size: 11px;
-      color: var(--text-dim);
-      margin-top: 1.5rem;
-      text-align: center;
-    }
-
-    .related-section {
-      margin-top: 1rem;
-      padding-top: 0;
-    }
-
-    .related-header {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-bottom: 0.75rem;
-    }
-
-    .related-loading {
-      font-size: 11px;
-      color: var(--text-dim);
-      margin-top: 1rem;
-      animation: pulse 1.5s ease-in-out infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 0.4; }
-      50% { opacity: 0.8; }
-    }
-
-    .related-items {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    .related-item {
-      font-size: 12px;
-      padding: 0.4rem 0.6rem;
-      background: var(--bg-subtle);
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      color: var(--text-secondary);
-      text-decoration: none;
-      max-width: 200px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .related-item:hover {
-      background: var(--bg-hover);
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    .tags {
-      margin-bottom: 1rem;
-    }
-
-    .tags-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-bottom: 0.5rem;
-    }
-
-    .tags-list {
-      display: flex;
-      flex-wrap: nowrap;
-      gap: 0.5rem;
-      overflow-x: auto;
-      overflow-y: hidden;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none; /* firefox */
-      padding-bottom: 2px;
-      /* fade out the right edge so users see there's more content to scroll */
-      mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
-      -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
-    }
-    .tags-list::-webkit-scrollbar { display: none; }
-    .tags-list > * { flex-shrink: 0; }
-
-    .tag {
-      font-size: 11px;
-      padding: 3px 8px;
-      background: var(--bg-hover);
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      cursor: pointer;
-      color: var(--text-dim);
-    }
-
-    .tag:hover {
-      background: var(--bg-hover);
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    .tag.active {
-      background: rgba(27, 115, 64, 0.2);
-      border-color: #1B7340;
-      color: #2a9d5c;
-    }
-
-    .tag .count {
-      color: var(--text-muted);
-      margin-left: 4px;
-    }
-
-    input.tag-input {
-      /* match .tag styling exactly */
-      font-size: 11px;
-      padding: 3px 8px;
-      background: var(--bg-hover);
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      color: var(--text-dim);
-      font-family: monospace;
-      /* prevent flex expansion from global input[type="text"] */
-      flex: none;
-      width: 90px;
-    }
-
-    input.tag-input:hover {
-      background: var(--bg-hover);
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    input.tag-input:focus {
-      outline: none;
-      border-color: #1B7340;
-      background: rgba(27, 115, 64, 0.1);
-      color: var(--text);
-    }
-
-    input.tag-input::placeholder {
-      color: var(--text-dim);
-    }
-
-    .platform-filter {
-      margin-bottom: 1rem;
-    }
-
-    .platform-filter-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-bottom: 0.5rem;
-    }
-
-    .platform-filter-list {
-      display: flex;
-      flex-wrap: nowrap;
-      gap: 0.5rem;
-      overflow-x: auto;
-      overflow-y: hidden;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      padding-bottom: 2px;
-      mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
-      -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
-    }
-    .platform-filter-list::-webkit-scrollbar { display: none; }
-    .platform-filter-list > * { flex-shrink: 0; }
-
-    .platform-option {
-      font-size: 11px;
-      padding: 3px 8px;
-      background: var(--bg-hover);
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      cursor: pointer;
-      color: var(--text-dim);
-    }
-
-    .platform-option:hover {
-      background: var(--bg-hover);
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    .platform-option.active {
-      background: rgba(180, 100, 64, 0.2);
-      border-color: #d4956a;
-      color: #d4956a;
-    }
-
-    .date-filter {
-      margin-bottom: 1rem;
-    }
-
-    .date-filter-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-bottom: 0.5rem;
-    }
-
-    .date-filter-list {
-      display: flex;
-      gap: 0.5rem;
-    }
-
-    .date-option {
-      font-size: 11px;
-      padding: 3px 8px;
-      background: var(--bg-hover);
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      cursor: pointer;
-      color: var(--text-dim);
-    }
-
-    .date-option:hover {
-      background: var(--bg-hover);
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    .date-option.active {
-      background: rgba(14, 165, 233, 0.2);
-      border-color: #0ea5e9;
-      color: #38bdf8;
-    }
-
-
-    .active-filters {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-      font-size: 11px;
-    }
-
-    .active-filters-label {
-      color: var(--text-dim);
-    }
-
-    .filter-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 3px 8px;
-      border-radius: 3px;
-      font-size: 11px;
-    }
-
-    .filter-chip.tag {
-      background: rgba(27, 115, 64, 0.2);
-      border: 1px solid #1B7340;
-      color: #2a9d5c;
-    }
-
-    .filter-chip.platform {
-      background: rgba(180, 100, 64, 0.2);
-      border: 1px solid #d4956a;
-      color: #d4956a;
-    }
-
-    .filter-chip.date {
-      background: rgba(14, 165, 233, 0.2);
-      border: 1px solid #0ea5e9;
-      color: #38bdf8;
-    }
-
-    .filter-chip.author {
-      background: rgba(42, 157, 92, 0.2);
-      border: 1px solid #2a9d5c;
-      color: #34d399;
-    }
-
-    .filter-chip .x {
-      cursor: pointer;
-      opacity: 0.6;
-      margin-left: 2px;
-    }
-
-    .filter-chip .x:hover {
-      opacity: 1;
-      color: var(--error);
-    }
-
-    .mode-toggle {
-      margin-bottom: 1rem;
-    }
-
-    .mode-toggle-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-bottom: 0.5rem;
-    }
-
-    .mode-toggle-list {
-      display: flex;
-      gap: 0.5rem;
-    }
-
-    .mode-option {
-      font-size: 11px;
-      padding: 3px 8px;
-      background: var(--bg-hover);
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      cursor: pointer;
-      color: var(--text-dim);
-    }
-
-    .mode-option:hover {
-      background: var(--bg-hover);
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    .mode-option.active {
-      background: rgba(139, 92, 246, 0.2);
-      border-color: #8b5cf6;
-      color: #a78bfa;
-    }
-
-    .source-badge {
-      font-size: 9px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      margin-left: 6px;
-      text-transform: lowercase;
-    }
-
-    .source-badge.keyword {
-      background: rgba(59, 130, 246, 0.2);
-      color: #60a5fa;
-    }
-
-    .source-badge.semantic {
-      background: rgba(139, 92, 246, 0.2);
-      color: #a78bfa;
-    }
-
-    .source-badge.keyword-semantic {
-      background: rgba(16, 185, 129, 0.2);
-      color: #34d399;
-    }
-
-    /* button-based theme toggle — reset native chrome, keep the inline-glyph look */
-    .theme-toggle {
-      cursor: pointer;
-      color: var(--text-dim);
-      font-size: 16px;
-      user-select: none;
-      background: none;
-      border: none;
-      padding: 6px 8px;
-      font-family: inherit;
-      line-height: 1;
-      min-width: 44px;
-      min-height: 44px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .theme-toggle:hover { color: var(--text); }
-    .theme-toggle:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
-
-    .cover-thumb {
-      position: absolute;
-      top: 0.75rem;
-      right: 0.75rem;
-      width: 40px;
-      height: 40px;
-      border-radius: 4px;
-      object-fit: cover;
-    }
-
-    .atlas-link {
-      color: var(--text-muted);
-      text-decoration: none;
-      margin-left: 6px;
-      display: inline-flex;
-      align-items: center;
-      vertical-align: middle;
-      opacity: 0.5;
-      transition: opacity 0.15s;
-    }
-
-    .atlas-link:hover {
-      opacity: 1;
-      color: var(--text-secondary);
-    }
-
-    .atlas-link svg { display: block; }
-
-    /* touch-active feedback */
-    @media (hover: none) and (pointer: coarse) {
-      .result:active {
-        background: var(--result-hover);
-      }
-    }
-
-    /* mobile improvements */
-    @media (max-width: 600px) {
-      body {
-        padding: 0.75rem;
-        font-size: 13px;
-      }
-
-      .container {
-        max-width: 100%;
-      }
-
-      /* ensure minimum 44px touch targets */
-      .tag, .platform-option, .mode-option, .date-option, .suggestion, input.tag-input, .filter-chip {
-        min-height: 44px;
-        display: inline-flex;
-        align-items: center;
-        padding: 0.5rem 0.75rem;
-      }
-
-      input.tag-input {
-        width: 80px;
-      }
-
-      button:not(.syntax-help-btn):not(.lf-settings-btn):not(.lf-row-more) {
-        min-height: 44px;
-        padding: 0.5rem 0.75rem;
-      }
-
-      /* stack search box on very small screens */
-      .search-box {
-        flex-direction: column;
-        gap: 0.5rem;
-      }
-
-      .search-box input[type="text"] {
-        width: 100%;
-      }
-
-      .search-box button {
-        width: 100%;
-      }
-
-      /* result card mobile tweaks */
-      .result {
-        padding: 0.75rem 0;
-      }
-
-      .result:hover {
-        margin: 0 -0.75rem;
-        padding: 0.75rem;
-      }
-
-      .result:hover .cover-thumb { right: 1.5rem; }
-
-      .result-title {
-        font-size: 14px;
-        line-height: 1.4;
-      }
-
-      .result-snippet {
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      /* badges inline on mobile */
-      .entity-type, .platform-badge {
-        font-size: 9px;
-        padding: 2px 5px;
-        margin-right: 6px;
-        vertical-align: middle;
-      }
-
-      /* tags: horizontal scroll on mobile instead of wrapping */
-      .tags-list {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none; /* firefox */
-        gap: 0.5rem;
-        padding-bottom: 2px;
-      }
-
-      .tags-list::-webkit-scrollbar { display: none; }
-
-      .tags-list .tag, .tags-list input.tag-input {
-        flex-shrink: 0;
-      }
-
-      .platform-filter-list, .date-filter-list {
-        gap: 0.5rem;
-      }
-
-      /* suggestions responsive */
-      .suggestions {
-        line-height: 2;
-      }
-
-      /* related items more compact */
-      .related-item {
-        max-width: 150px;
-        font-size: 11px;
-        padding: 0.5rem;
-      }
-
-      .cover-thumb {
-        width: 32px;
-        height: 32px;
-      }
-
-      .result.has-cover { padding-right: 44px; }
-      .result.has-cover:hover { padding-right: 44px; }
-    }
-
-    /* ensure touch targets on tablets too */
-    @media (hover: none) and (pointer: coarse) {
-      .tag, .platform-option, .mode-option, .date-option, .suggestion, .related-item, input.tag-input, .filter-chip {
-        min-height: 44px;
-        display: inline-flex;
-        align-items: center;
-      }
-    }
-  </style>
-  <link rel="stylesheet" href="components.css?v=1782991000">
-  <script src="platforms.js"></script>
-  <script src="clients.js"></script>
-  <script src="identity.js"></script>
-  <script src="ui.js"></script>
-</head>
-<body>
-  <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="what is this? (+ search syntax)">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button></h1>
-
-    <div class="search-box">
-      <div class="lf-typeahead-wrap">
-        <div class="lf-filter-chips" id="filter-chips"></div>
-        <input type="text" id="query" placeholder="search content..." aria-label="search atproto publishing platforms" autofocus>
-      </div>
-      <button id="search-btn">search</button>
-    </div>
-
-    <div class="syntax-help" id="syntax-help">
-      <p class="about-blurb">
-        a search engine for writing published on the open social web — blogs and essays
-        from <a href="https://leaflet.pub" target="_blank">leaflet</a>, <a href="https://pckt.blog" target="_blank">pckt</a>,
-        <a href="https://offprint.app" target="_blank">offprint</a>, <a href="https://greengale.app" target="_blank">greengale</a>,
-        <a href="https://whtwnd.com" target="_blank">whitewind</a>, and anything else on
-        <a href="https://standard.site" target="_blank">standard.site</a>. search by keyword, by meaning, or both.
-      </p>
-      <p class="about-blurb">
-        built on top: <a href="/atlas.html">atlas</a> <span class="syntax-desc">(a map of everything, by meaning)</span> ·
-        <a href="/recommended">recommended</a> <span class="syntax-desc">(what people vouch for)</span> ·
-        <a href="/subscribed">subscribed</a> <span class="syntax-desc">(who people follow)</span> ·
-        <a href="/wrapped">wrapped</a> <span class="syntax-desc">(your year in publishing)</span> ·
-        <a href="/stats">stats</a> ·
-        <a href="/labels">labels</a> <span class="syntax-desc">(what we exclude, and why)</span>
-      </p>
-      <div class="syntax-row"><span class="syntax-example"><code>cat dog</code></span><span class="syntax-desc">matches either term</span></div>
-      <div class="syntax-row"><span class="syntax-example"><code>"exact phrase"</code></span><span class="syntax-desc">matches exact phrase</span></div>
-      <div class="syntax-row"><span class="syntax-example"><code>@handle query</code></span><span class="syntax-desc">filter by author (quote to search literally)</span></div>
-    </div>
-
-    <div id="mode-toggle" class="mode-toggle"></div>
-
-    <div id="suggestions"></div>
-
-    <div id="tags" class="tags"></div>
-
-    <div id="platform-filter" class="platform-filter"></div>
-
-    <div id="date-filter" class="date-filter"></div>
-
-    <div id="results" class="results">
-      <div class="empty-state">
-        <p>search writing on <a href="https://standard.site" target="_blank">standard.site</a></p>
-        <div class="platform-marquee" aria-label="platforms indexed">
-          <div class="marquee-track" id="marquee-track"></div>
+                overflow-wrap: anywhere;
+            }
+
+            .result-snippet mark {
+                background: rgba(27, 115, 64, 0.3);
+                color: #2a9d5c;
+                padding: 0 2px;
+            }
+
+            .result-meta {
+                font-size: 11px;
+                color: var(--text-dim);
+            }
+
+            .author-name a {
+                color: var(--text-secondary);
+                text-decoration: none;
+            }
+
+            .author-name a:hover {
+                color: #2a9d5c;
+            }
+
+            .entity-type {
+                font-size: 10px;
+                padding: 2px 6px;
+                border-radius: 3px;
+                margin-right: 8px;
+                text-transform: lowercase;
+            }
+
+            .entity-type.article {
+                background: rgba(27, 115, 64, 0.2);
+                color: #2a9d5c;
+            }
+
+            .entity-type.looseleaf {
+                background: rgba(100, 100, 100, 0.2);
+                color: var(--text-secondary);
+            }
+
+            .entity-type.publication {
+                background: rgba(64, 115, 180, 0.2);
+                color: #6a9fd4;
+            }
+
+            .platform-badge {
+                font-size: 10px;
+                padding: 2px 6px;
+                border-radius: 3px;
+                margin-right: 8px;
+                text-transform: lowercase;
+                background: rgba(180, 100, 64, 0.2);
+                color: #d4956a;
+            }
+            .platform-badge:hover {
+                background: rgba(180, 100, 64, 0.35);
+            }
+            .labeled-badge {
+                font-size: 10px;
+                padding: 2px 6px;
+                border-radius: 3px;
+                margin-right: 8px;
+                text-transform: lowercase;
+                background: rgba(120, 120, 120, 0.15);
+                color: var(--text-dim);
+                text-decoration: none;
+                border: 1px dashed var(--border-focus);
+            }
+            .labeled-badge:hover {
+                color: var(--text-secondary);
+            }
+
+            .status {
+                padding: 1rem;
+                text-align: center;
+                color: var(--text-dim);
+            }
+
+            .error {
+                color: var(--error);
+            }
+
+            .empty-state {
+                text-align: center;
+                padding: 2rem;
+                color: var(--text-dim);
+            }
+
+            .empty-state p {
+                margin-bottom: 0.5rem;
+            }
+
+            .suggestions {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-bottom: 1.5rem;
+                padding: 0.5rem 0;
+                border-bottom: 1px solid var(--row-border);
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                overflow-y: hidden;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                mask-image: linear-gradient(
+                    to right,
+                    black calc(100% - 24px),
+                    transparent 100%
+                );
+                -webkit-mask-image: linear-gradient(
+                    to right,
+                    black calc(100% - 24px),
+                    transparent 100%
+                );
+            }
+            .suggestions::-webkit-scrollbar {
+                display: none;
+            }
+            .suggestions > * {
+                flex-shrink: 0;
+            }
+
+            .suggestions-label {
+                color: var(--text-dim);
+            }
+
+            .suggestions-list {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex-wrap: nowrap;
+            }
+            .suggestions-list > * {
+                flex-shrink: 0;
+            }
+
+            .suggestion {
+                color: var(--text-dim);
+                cursor: pointer;
+                font-style: italic;
+            }
+
+            .suggestion::before {
+                content: '"';
+                color: var(--text-muted);
+            }
+
+            .suggestion::after {
+                content: '"';
+                color: var(--text-muted);
+            }
+
+            .suggestion:hover {
+                color: #2a9d5c;
+            }
+
+            .suggestion:hover::before,
+            .suggestion:hover::after {
+                color: #2a9d5c;
+            }
+
+            .stats {
+                font-size: 11px;
+                color: var(--text-dim);
+                margin-top: 1.5rem;
+                text-align: center;
+            }
+
+            .related-section {
+                margin-top: 1rem;
+                padding-top: 0;
+            }
+
+            .related-header {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-bottom: 0.75rem;
+            }
+
+            .related-loading {
+                font-size: 11px;
+                color: var(--text-dim);
+                margin-top: 1rem;
+                animation: pulse 1.5s ease-in-out infinite;
+            }
+
+            @keyframes pulse {
+                0%,
+                100% {
+                    opacity: 0.4;
+                }
+                50% {
+                    opacity: 0.8;
+                }
+            }
+
+            .related-items {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+
+            .related-item {
+                font-size: 12px;
+                padding: 0.4rem 0.6rem;
+                background: var(--bg-subtle);
+                border: 1px solid var(--border);
+                border-radius: 3px;
+                color: var(--text-secondary);
+                text-decoration: none;
+                max-width: 200px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .related-item:hover {
+                background: var(--bg-hover);
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            .tags {
+                margin-bottom: 1rem;
+            }
+
+            .tags-label {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-bottom: 0.5rem;
+            }
+
+            .tags-list {
+                display: flex;
+                flex-wrap: nowrap;
+                gap: 0.5rem;
+                overflow-x: auto;
+                overflow-y: hidden;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none; /* firefox */
+                padding-bottom: 2px;
+                /* fade out the right edge so users see there's more content to scroll */
+                mask-image: linear-gradient(
+                    to right,
+                    black calc(100% - 24px),
+                    transparent 100%
+                );
+                -webkit-mask-image: linear-gradient(
+                    to right,
+                    black calc(100% - 24px),
+                    transparent 100%
+                );
+            }
+            .tags-list::-webkit-scrollbar {
+                display: none;
+            }
+            .tags-list > * {
+                flex-shrink: 0;
+            }
+
+            .tag {
+                font-size: 11px;
+                padding: 3px 8px;
+                background: var(--bg-hover);
+                border: 1px solid var(--border-subtle);
+                border-radius: 3px;
+                cursor: pointer;
+                color: var(--text-dim);
+            }
+
+            .tag:hover {
+                background: var(--bg-hover);
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            .tag.active {
+                background: rgba(27, 115, 64, 0.2);
+                border-color: #1b7340;
+                color: #2a9d5c;
+            }
+
+            .tag .count {
+                color: var(--text-muted);
+                margin-left: 4px;
+            }
+
+            input.tag-input {
+                /* match .tag styling exactly */
+                font-size: 11px;
+                padding: 3px 8px;
+                background: var(--bg-hover);
+                border: 1px solid var(--border-subtle);
+                border-radius: 3px;
+                color: var(--text-dim);
+                font-family: monospace;
+                /* prevent flex expansion from global input[type="text"] */
+                flex: none;
+                width: 90px;
+            }
+
+            input.tag-input:hover {
+                background: var(--bg-hover);
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            input.tag-input:focus {
+                outline: none;
+                border-color: #1b7340;
+                background: rgba(27, 115, 64, 0.1);
+                color: var(--text);
+            }
+
+            input.tag-input::placeholder {
+                color: var(--text-dim);
+            }
+
+            .platform-filter {
+                margin-bottom: 1rem;
+            }
+
+            .platform-filter-label {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-bottom: 0.5rem;
+            }
+
+            .platform-filter-list {
+                display: flex;
+                flex-wrap: nowrap;
+                gap: 0.5rem;
+                overflow-x: auto;
+                overflow-y: hidden;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                padding-bottom: 2px;
+                mask-image: linear-gradient(
+                    to right,
+                    black calc(100% - 24px),
+                    transparent 100%
+                );
+                -webkit-mask-image: linear-gradient(
+                    to right,
+                    black calc(100% - 24px),
+                    transparent 100%
+                );
+            }
+            .platform-filter-list::-webkit-scrollbar {
+                display: none;
+            }
+            .platform-filter-list > * {
+                flex-shrink: 0;
+            }
+
+            .platform-option {
+                font-size: 11px;
+                padding: 3px 8px;
+                background: var(--bg-hover);
+                border: 1px solid var(--border-subtle);
+                border-radius: 3px;
+                cursor: pointer;
+                color: var(--text-dim);
+            }
+
+            .platform-option:hover {
+                background: var(--bg-hover);
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            .platform-option.active {
+                background: rgba(180, 100, 64, 0.2);
+                border-color: #d4956a;
+                color: #d4956a;
+            }
+
+            .date-filter {
+                margin-bottom: 1rem;
+            }
+
+            .date-filter-label {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-bottom: 0.5rem;
+            }
+
+            .date-filter-list {
+                display: flex;
+                gap: 0.5rem;
+            }
+
+            .date-option {
+                font-size: 11px;
+                padding: 3px 8px;
+                background: var(--bg-hover);
+                border: 1px solid var(--border-subtle);
+                border-radius: 3px;
+                cursor: pointer;
+                color: var(--text-dim);
+            }
+
+            .date-option:hover {
+                background: var(--bg-hover);
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            .date-option.active {
+                background: rgba(14, 165, 233, 0.2);
+                border-color: #0ea5e9;
+                color: #38bdf8;
+            }
+
+            .active-filters {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 0.5rem;
+                margin-bottom: 1rem;
+                font-size: 11px;
+            }
+
+            .active-filters-label {
+                color: var(--text-dim);
+            }
+
+            .filter-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding: 3px 8px;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+
+            .filter-chip.tag {
+                background: rgba(27, 115, 64, 0.2);
+                border: 1px solid #1b7340;
+                color: #2a9d5c;
+            }
+
+            .filter-chip.platform {
+                background: rgba(180, 100, 64, 0.2);
+                border: 1px solid #d4956a;
+                color: #d4956a;
+            }
+
+            .filter-chip.date {
+                background: rgba(14, 165, 233, 0.2);
+                border: 1px solid #0ea5e9;
+                color: #38bdf8;
+            }
+
+            .filter-chip.author {
+                background: rgba(42, 157, 92, 0.2);
+                border: 1px solid #2a9d5c;
+                color: #34d399;
+            }
+
+            .filter-chip .x {
+                cursor: pointer;
+                opacity: 0.6;
+                margin-left: 2px;
+            }
+
+            .filter-chip .x:hover {
+                opacity: 1;
+                color: var(--error);
+            }
+
+            .mode-toggle {
+                margin-bottom: 1rem;
+            }
+
+            .mode-toggle-label {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-bottom: 0.5rem;
+            }
+
+            .mode-toggle-list {
+                display: flex;
+                gap: 0.5rem;
+            }
+
+            .mode-option {
+                font-size: 11px;
+                padding: 3px 8px;
+                background: var(--bg-hover);
+                border: 1px solid var(--border-subtle);
+                border-radius: 3px;
+                cursor: pointer;
+                color: var(--text-dim);
+            }
+
+            .mode-option:hover {
+                background: var(--bg-hover);
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            .mode-option.active {
+                background: rgba(139, 92, 246, 0.2);
+                border-color: #8b5cf6;
+                color: #a78bfa;
+            }
+
+            .source-badge {
+                font-size: 9px;
+                padding: 1px 5px;
+                border-radius: 3px;
+                margin-left: 6px;
+                text-transform: lowercase;
+            }
+
+            .source-badge.keyword {
+                background: rgba(59, 130, 246, 0.2);
+                color: #60a5fa;
+            }
+
+            .source-badge.semantic {
+                background: rgba(139, 92, 246, 0.2);
+                color: #a78bfa;
+            }
+
+            .source-badge.keyword-semantic {
+                background: rgba(16, 185, 129, 0.2);
+                color: #34d399;
+            }
+
+            /* button-based theme toggle — reset native chrome, keep the inline-glyph look */
+            .theme-toggle {
+                cursor: pointer;
+                color: var(--text-dim);
+                font-size: 16px;
+                user-select: none;
+                background: none;
+                border: none;
+                padding: 6px 8px;
+                font-family: inherit;
+                line-height: 1;
+                min-width: 44px;
+                min-height: 44px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .theme-toggle:hover {
+                color: var(--text);
+            }
+            .theme-toggle:focus-visible {
+                outline: 2px solid var(--border-focus);
+                outline-offset: 2px;
+            }
+
+            .cover-thumb {
+                position: absolute;
+                top: 0.75rem;
+                right: 0.75rem;
+                width: 40px;
+                height: 40px;
+                border-radius: 4px;
+                object-fit: cover;
+            }
+
+            .atlas-link {
+                color: var(--text-muted);
+                text-decoration: none;
+                margin-left: 6px;
+                display: inline-flex;
+                align-items: center;
+                vertical-align: middle;
+                opacity: 0.5;
+                transition: opacity 0.15s;
+            }
+
+            .atlas-link:hover {
+                opacity: 1;
+                color: var(--text-secondary);
+            }
+
+            .atlas-link svg {
+                display: block;
+            }
+
+            /* touch-active feedback */
+            @media (hover: none) and (pointer: coarse) {
+                .result:active {
+                    background: var(--result-hover);
+                }
+            }
+
+            /* mobile improvements */
+            @media (max-width: 600px) {
+                body {
+                    padding: 0.75rem;
+                    font-size: 13px;
+                }
+
+                .container {
+                    max-width: 100%;
+                }
+
+                /* ensure minimum 44px touch targets */
+                .tag,
+                .platform-option,
+                .mode-option,
+                .date-option,
+                .suggestion,
+                input.tag-input,
+                .filter-chip {
+                    min-height: 44px;
+                    display: inline-flex;
+                    align-items: center;
+                    padding: 0.5rem 0.75rem;
+                }
+
+                input.tag-input {
+                    width: 80px;
+                }
+
+                button:not(.syntax-help-btn):not(.lf-settings-btn):not(
+                        .lf-row-more
+                    ) {
+                    min-height: 44px;
+                    padding: 0.5rem 0.75rem;
+                }
+
+                /* stack search box on very small screens */
+                .search-box {
+                    flex-direction: column;
+                    gap: 0.5rem;
+                }
+
+                .search-box input[type="text"] {
+                    width: 100%;
+                }
+
+                .search-box button {
+                    width: 100%;
+                }
+
+                /* result card mobile tweaks */
+                .result {
+                    padding: 0.75rem 0;
+                }
+
+                .result:hover {
+                    margin: 0 -0.75rem;
+                    padding: 0.75rem;
+                }
+
+                .result:hover .cover-thumb {
+                    right: 1.5rem;
+                }
+
+                .result-title {
+                    font-size: 14px;
+                    line-height: 1.4;
+                }
+
+                .result-snippet {
+                    font-size: 12px;
+                    line-height: 1.5;
+                }
+
+                /* badges inline on mobile */
+                .entity-type,
+                .platform-badge {
+                    font-size: 9px;
+                    padding: 2px 5px;
+                    margin-right: 6px;
+                    vertical-align: middle;
+                }
+
+                /* tags: horizontal scroll on mobile instead of wrapping */
+                .tags-list {
+                    flex-wrap: nowrap;
+                    overflow-x: auto;
+                    -webkit-overflow-scrolling: touch;
+                    scrollbar-width: none; /* firefox */
+                    gap: 0.5rem;
+                    padding-bottom: 2px;
+                }
+
+                .tags-list::-webkit-scrollbar {
+                    display: none;
+                }
+
+                .tags-list .tag,
+                .tags-list input.tag-input {
+                    flex-shrink: 0;
+                }
+
+                .platform-filter-list,
+                .date-filter-list {
+                    gap: 0.5rem;
+                }
+
+                /* suggestions responsive */
+                .suggestions {
+                    line-height: 2;
+                }
+
+                /* related items more compact */
+                .related-item {
+                    max-width: 150px;
+                    font-size: 11px;
+                    padding: 0.5rem;
+                }
+
+                .cover-thumb {
+                    width: 32px;
+                    height: 32px;
+                }
+
+                .result.has-cover {
+                    padding-right: 44px;
+                }
+                .result.has-cover:hover {
+                    padding-right: 44px;
+                }
+            }
+
+            /* ensure touch targets on tablets too */
+            @media (hover: none) and (pointer: coarse) {
+                .tag,
+                .platform-option,
+                .mode-option,
+                .date-option,
+                .suggestion,
+                .related-item,
+                input.tag-input,
+                .filter-chip {
+                    min-height: 44px;
+                    display: inline-flex;
+                    align-items: center;
+                }
+            }
+        </style>
+        <link rel="stylesheet" href="components.css?v=1782991000" />
+        <script src="platforms.js"></script>
+        <script src="clients.js"></script>
+        <script src="identity.js"></script>
+        <script src="ui.js"></script>
+    </head>
+    <body>
+        <div class="container">
+            <h1>
+                <a href="/" class="title">pub search</a>
+                <span class="by"
+                    >by
+                    <a
+                        href="https://bsky.app/profile/zzstoatzz.io"
+                        target="_blank"
+                        >@zzstoatzz.io</a
+                    ></span
+                >
+                <a
+                    href="https://tangled.sh/@zzstoatzz.io/leaflet-search"
+                    target="_blank"
+                    class="src"
+                    >[src]</a
+                >
+                <a id="header-stats" class="stats-link"></a>
+                <button
+                    class="syntax-help-btn"
+                    id="syntax-help-btn"
+                    title="what is this? (+ search syntax)"
+                >
+                    ?
+                </button>
+                <button
+                    class="lf-settings-btn"
+                    id="settings-btn"
+                    aria-label="settings"
+                    title="settings"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                    >
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path
+                            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+                        ></path>
+                    </svg>
+                </button>
+            </h1>
+
+            <div class="search-box">
+                <div class="lf-typeahead-wrap">
+                    <div class="lf-filter-chips" id="filter-chips"></div>
+                    <input
+                        type="text"
+                        id="query"
+                        placeholder="search content..."
+                        aria-label="search atproto publishing platforms"
+                        autofocus
+                    />
+                </div>
+                <button id="search-btn">search</button>
+            </div>
+
+            <div class="syntax-help" id="syntax-help">
+                <p class="about-blurb">
+                    a search engine for writing published on the open social web
+                    — blogs and essays from
+                    <a href="https://leaflet.pub" target="_blank">leaflet</a>,
+                    <a href="https://pckt.blog" target="_blank">pckt</a>,
+                    <a href="https://offprint.app" target="_blank">offprint</a>,
+                    <a href="https://greengale.app" target="_blank">greengale</a
+                    >,
+                    <a href="https://whtwnd.com" target="_blank">whitewind</a>,
+                    and anything else on
+                    <a href="https://standard.site" target="_blank"
+                        >standard.site</a
+                    >. search by keyword, by meaning, or both.
+                </p>
+                <p class="about-blurb">
+                    built on top: <a href="/atlas.html">atlas</a>
+                    <span class="syntax-desc"
+                        >(a map of everything, by meaning)</span
+                    >
+                    · <a href="/recommended">recommended</a>
+                    <span class="syntax-desc">(what people vouch for)</span> ·
+                    <a href="/subscribed">subscribed</a>
+                    <span class="syntax-desc">(who people follow)</span> ·
+                    <a href="/wrapped">wrapped</a>
+                    <span class="syntax-desc">(your year in publishing)</span> ·
+                    <a href="/stats">stats</a> · <a href="/labels">labels</a>
+                    <span class="syntax-desc">(what we exclude, and why)</span>
+                </p>
+                <div class="syntax-row">
+                    <span class="syntax-example"><code>cat dog</code></span
+                    ><span class="syntax-desc">matches either term</span>
+                </div>
+                <div class="syntax-row">
+                    <span class="syntax-example"
+                        ><code>"exact phrase"</code></span
+                    ><span class="syntax-desc">matches exact phrase</span>
+                </div>
+                <div class="syntax-row">
+                    <span class="syntax-example"
+                        ><code>@handle query</code></span
+                    ><span class="syntax-desc"
+                        >filter by author (quote to search literally)</span
+                    >
+                </div>
+            </div>
+
+            <div id="mode-toggle" class="mode-toggle"></div>
+
+            <div id="suggestions"></div>
+
+            <div id="tags" class="tags"></div>
+
+            <div id="platform-filter" class="platform-filter"></div>
+
+            <div id="date-filter" class="date-filter"></div>
+
+            <div id="results" class="results">
+                <div class="empty-state">
+                    <p>
+                        search writing on
+                        <a href="https://standard.site" target="_blank"
+                            >standard.site</a
+                        >
+                    </p>
+                    <div
+                        class="platform-marquee"
+                        aria-label="platforms indexed"
+                    >
+                        <div class="marquee-track" id="marquee-track"></div>
+                    </div>
+                    <p class="join-hint">
+                        <a
+                            href="https://piccalil.li/blog/publishing-on-the-atmosphere-with-standardsite/"
+                            target="_blank"
+                            title="a step-by-step guide to publishing your own site on standard.site — found with this search engine"
+                            >your site could be here</a
+                        >
+                    </p>
+                </div>
+            </div>
+
+            <div id="stats" class="stats"></div>
         </div>
-        <p class="join-hint"><a href="https://wil.to/posts/implementing-standard-site/" target="_blank" title="a step-by-step guide to publishing your own site on standard.site — found with this search engine">your site could be here</a></p>
-      </div>
-    </div>
 
-    <div id="stats" class="stats"></div>
-  </div>
+        <script>
+            const API_URL =
+                location.hostname === "localhost" ||
+                location.hostname === "127.0.0.1"
+                    ? "http://localhost:8080"
+                    : "https://leaflet-search-backend.fly.dev";
 
-  <script>
-    const API_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
-      ? 'http://localhost:8080'
-      : 'https://leaflet-search-backend.fly.dev';
+            // platform marquee — logos of who's indexed, drifting slowly. content is
+            // duplicated once so the -50% translate loops seamlessly; the dup set is
+            // hidden from a11y and from the reduced-motion static layout.
+            (function () {
+                const PLATFORM_SITES = window.PubPlatforms.named().map((id) => [
+                    id,
+                    window.PubPlatforms.domainOf(id),
+                ]);
+                const track = document.getElementById("marquee-track");
+                if (!track) return;
+                const chip = (p, dup) =>
+                    `<a class="pf-chip${dup ? " dup" : ""}" href="https://${p[1]}" target="_blank" rel="noopener"${dup ? ' aria-hidden="true" tabindex="-1"' : ""}><img src="https://icons.duckduckgo.com/ip3/${p[1]}.ico" alt="" loading="lazy" onerror="this.remove()"><span>${p[0]}</span></a>`;
+                track.innerHTML =
+                    PLATFORM_SITES.map((p) => chip(p, false)).join("") +
+                    PLATFORM_SITES.map((p) => chip(p, true)).join("");
+            })();
 
-    // platform marquee — logos of who's indexed, drifting slowly. content is
-    // duplicated once so the -50% translate loops seamlessly; the dup set is
-    // hidden from a11y and from the reduced-motion static layout.
-    (function () {
-      const PLATFORM_SITES = window.PubPlatforms.named().map(id => [id, window.PubPlatforms.domainOf(id)]);
-      const track = document.getElementById('marquee-track');
-      if (!track) return;
-      const chip = (p, dup) =>
-        `<a class="pf-chip${dup ? ' dup' : ''}" href="https://${p[1]}" target="_blank" rel="noopener"${dup ? ' aria-hidden="true" tabindex="-1"' : ''}><img src="https://icons.duckduckgo.com/ip3/${p[1]}.ico" alt="" loading="lazy" onerror="this.remove()"><span>${p[0]}</span></a>`;
-      track.innerHTML = PLATFORM_SITES.map(p => chip(p, false)).join('') + PLATFORM_SITES.map(p => chip(p, true)).join('');
-    })();
+            // syntax help toggle
+            const syntaxHelpBtn = document.getElementById("syntax-help-btn");
+            const syntaxHelp = document.getElementById("syntax-help");
+            syntaxHelpBtn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                syntaxHelp.classList.toggle("open");
+                syntaxHelpBtn.classList.toggle("active");
+            });
+            document.addEventListener("click", function (e) {
+                if (
+                    !syntaxHelp.contains(e.target) &&
+                    e.target !== syntaxHelpBtn
+                ) {
+                    syntaxHelp.classList.remove("open");
+                    syntaxHelpBtn.classList.remove("active");
+                }
+            });
 
-    // syntax help toggle
-    const syntaxHelpBtn = document.getElementById('syntax-help-btn');
-    const syntaxHelp = document.getElementById('syntax-help');
-    syntaxHelpBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      syntaxHelp.classList.toggle('open');
-      syntaxHelpBtn.classList.toggle('active');
-    });
-    document.addEventListener('click', function(e) {
-      if (!syntaxHelp.contains(e.target) && e.target !== syntaxHelpBtn) {
-        syntaxHelp.classList.remove('open');
-        syntaxHelpBtn.classList.remove('active');
-      }
-    });
+            // settings (preferred client)
+            document
+                .getElementById("settings-btn")
+                .addEventListener("click", function () {
+                    if (window.LeafletUI) window.LeafletUI.openSettings();
+                });
 
-    // settings (preferred client)
-    document.getElementById('settings-btn').addEventListener('click', function() {
-      if (window.LeafletUI) window.LeafletUI.openSettings();
-    });
+            const queryInput = document.getElementById("query");
+            const searchBtn = document.getElementById("search-btn");
+            const resultsDiv = document.getElementById("results");
+            const statsDiv = document.getElementById("stats");
+            const tagsDiv = document.getElementById("tags");
+            // chips render INSIDE the input wrapper now (not as a separate row),
+            // so applied filters are visually attached to the search field.
+            const activeFilterDiv = document.getElementById("filter-chips");
+            const suggestionsDiv = document.getElementById("suggestions");
+            const platformFilterDiv =
+                document.getElementById("platform-filter");
+            const dateFilterDiv = document.getElementById("date-filter");
+            const modeToggleDiv = document.getElementById("mode-toggle");
+            let currentTag = null;
+            let currentPlatform = null;
+            let currentSince = null;
+            let currentAuthor = null;
+            let currentMode = "keyword";
+            let allTags = [];
+            let popularSearches = [];
+            const authorCache = new Map();
+            let currentOffset = 0;
+            let currentHasMore = false;
+            const PAGE_SIZE = 20;
 
-    const queryInput = document.getElementById('query');
-    const searchBtn = document.getElementById('search-btn');
-    const resultsDiv = document.getElementById('results');
-    const statsDiv = document.getElementById('stats');
-    const tagsDiv = document.getElementById('tags');
-    // chips render INSIDE the input wrapper now (not as a separate row),
-    // so applied filters are visually attached to the search field.
-    const activeFilterDiv = document.getElementById('filter-chips');
-    const suggestionsDiv = document.getElementById('suggestions');
-    const platformFilterDiv = document.getElementById('platform-filter');
-    const dateFilterDiv = document.getElementById('date-filter');
-    const modeToggleDiv = document.getElementById('mode-toggle');
-    let currentTag = null;
-    let currentPlatform = null;
-    let currentSince = null;
-    let currentAuthor = null;
-    let currentMode = 'keyword';
-    let allTags = [];
-    let popularSearches = [];
-    const authorCache = new Map();
-    let currentOffset = 0;
-    let currentHasMore = false;
-    const PAGE_SIZE = 20;
+            // extract results array from API response (handles both v1 and v2 formats)
+            function extractResults(parsed) {
+                if (parsed.results && Array.isArray(parsed.results)) {
+                    return {
+                        results: parsed.results,
+                        total: parsed.total || parsed.results.length,
+                        hasMore: parsed.hasMore || false,
+                    };
+                }
+                if (Array.isArray(parsed)) {
+                    return {
+                        results: parsed,
+                        total: parsed.length,
+                        hasMore: false,
+                    };
+                }
+                return null;
+            }
 
-    // extract results array from API response (handles both v1 and v2 formats)
-    function extractResults(parsed) {
-      if (parsed.results && Array.isArray(parsed.results)) {
-        return { results: parsed.results, total: parsed.total || parsed.results.length, hasMore: parsed.hasMore || false };
-      }
-      if (Array.isArray(parsed)) {
-        return { results: parsed, total: parsed.length, hasMore: false };
-      }
-      return null;
-    }
+            // Keep <title> in sync with the current query/filters so the browser tab
+            // tells you what's open. Resets to the static default for the empty page.
+            function updateDocTitle(query, tag, platform) {
+                const parts = [];
+                const q = (query || "").trim();
+                if (q) parts.push(`"${q}"`);
+                if (tag) parts.push(`#${tag}`);
+                if (platform) parts.push(`on ${platform}`);
+                if (currentAuthor) {
+                    const a =
+                        typeof authorCache !== "undefined" && authorCache.get
+                            ? authorCache.get(currentAuthor)
+                            : null;
+                    parts.push(
+                        a ? `by @${a}` : `by ${currentAuthor.slice(0, 14)}…`,
+                    );
+                }
+                document.title = parts.length
+                    ? `${parts.join(" ")} · pub search`
+                    : "pub search";
+            }
 
-    // Keep <title> in sync with the current query/filters so the browser tab
-    // tells you what's open. Resets to the static default for the empty page.
-    function updateDocTitle(query, tag, platform) {
-      const parts = [];
-      const q = (query || '').trim();
-      if (q) parts.push(`"${q}"`);
-      if (tag) parts.push(`#${tag}`);
-      if (platform) parts.push(`on ${platform}`);
-      if (currentAuthor) {
-        const a = (typeof authorCache !== 'undefined' && authorCache.get) ? authorCache.get(currentAuthor) : null;
-        parts.push(a ? `by @${a}` : `by ${currentAuthor.slice(0, 14)}…`);
-      }
-      document.title = parts.length ? `${parts.join(' ')} · pub search` : 'pub search';
-    }
+            async function search(
+                query,
+                tag = null,
+                platform = null,
+                append = false,
+            ) {
+                if (!query.trim() && !tag && !platform && !currentAuthor)
+                    return;
 
-    async function search(query, tag = null, platform = null, append = false) {
-      if (!query.trim() && !tag && !platform && !currentAuthor) return;
+                if (!append) {
+                    searchBtn.disabled = true;
+                    resultsDiv.innerHTML = `<div class="status">searching...</div>`;
+                    currentOffset = 0;
+                    updateDocTitle(query, tag, platform);
+                }
 
-      if (!append) {
-        searchBtn.disabled = true;
-        resultsDiv.innerHTML = `<div class="status">searching...</div>`;
-        currentOffset = 0;
-        updateDocTitle(query, tag, platform);
-      }
+                let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || "")}&format=v2&limit=${PAGE_SIZE}&offset=${currentOffset}`;
+                if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
+                if (platform)
+                    searchUrl += `&platform=${encodeURIComponent(platform)}`;
+                if (currentSince)
+                    searchUrl += `&since=${encodeURIComponent(currentSince)}`;
+                if (currentAuthor)
+                    searchUrl += `&author=${encodeURIComponent(currentAuthor)}`;
+                if (currentMode !== "keyword")
+                    searchUrl += `&mode=${currentMode}`;
 
-      let searchUrl = `${API_URL}/search?q=${encodeURIComponent(query || '')}&format=v2&limit=${PAGE_SIZE}&offset=${currentOffset}`;
-      if (tag) searchUrl += `&tag=${encodeURIComponent(tag)}`;
-      if (platform) searchUrl += `&platform=${encodeURIComponent(platform)}`;
-      if (currentSince) searchUrl += `&since=${encodeURIComponent(currentSince)}`;
-      if (currentAuthor) searchUrl += `&author=${encodeURIComponent(currentAuthor)}`;
-      if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
+                try {
+                    const res = await fetch(searchUrl);
+                    const rawText = await res.text();
+                    let parsed;
 
-      try {
-        const res = await fetch(searchUrl);
-        const rawText = await res.text();
-        let parsed;
+                    try {
+                        parsed = JSON.parse(rawText);
+                    } catch (parseErr) {
+                        resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
+                        return;
+                    }
 
-        try {
-          parsed = JSON.parse(rawText);
-        } catch (parseErr) {
-          resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
-          return;
-        }
+                    if (parsed.error) {
+                        resultsDiv.innerHTML = `<div class="status error">${parsed.error}</div>`;
+                        return;
+                    }
 
-        if (parsed.error) {
-          resultsDiv.innerHTML = `<div class="status error">${parsed.error}</div>`;
-          return;
-        }
+                    const extracted = extractResults(parsed);
+                    if (!extracted) {
+                        resultsDiv.innerHTML = `<div class="status error">unexpected response format</div>`;
+                        return;
+                    }
 
-        const extracted = extractResults(parsed);
-        if (!extracted) {
-          resultsDiv.innerHTML = `<div class="status error">unexpected response format</div>`;
-          return;
-        }
+                    const results = extracted.results;
+                    currentHasMore = extracted.hasMore;
 
-        const results = extracted.results;
-        currentHasMore = extracted.hasMore;
-
-        if (results.length === 0 && !append) {
-          resultsDiv.innerHTML = `
+                    if (results.length === 0 && !append) {
+                        resultsDiv.innerHTML = `
             <div class="empty-state">
-              <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ''}${tag ? ` in #${escapeHtml(tag)}` : ''}${platform ? ` on ${escapeHtml(platform)}` : ''}</p>
+              <p>no results${query ? ` for ${formatQueryForDisplay(query)}` : ""}${tag ? ` in #${escapeHtml(tag)}` : ""}${platform ? ` on ${escapeHtml(platform)}` : ""}</p>
             </div>
           `;
-          statsDiv.textContent = '';
-          return;
-        }
+                        statsDiv.textContent = "";
+                        return;
+                    }
 
-        let html = '';
-        for (const doc of results) {
-          const entityType = doc.type || 'article';
-          const plat = doc.platform || 'leaflet';
-          const docUrl = doc.url || null;
-          const platformBadge = window.PubPlatforms.byId[plat]
-            ? `<span class="platform-badge" onclick="event.stopPropagation(); setPlatform('${escapeHtml(plat)}')" style="cursor:pointer">${escapeHtml(window.PubPlatforms.labelOf(plat))}</span>`
-            : '';
-          const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
-          const platformHome = getPlatformHome(plat, doc.basePath);
-          // bulk-generated accounts are hidden by default; when shown (opt-in
-          // or kept), they wear the label. see /labels.
-          const labeledBadge = doc.labeled
-            ? `<a href="/labels" class="labeled-badge" title="this account's documents are generated from a database rather than composed${doc.kept ? ' — kept in results deliberately' : ''}. click for details.">bulk-generated</a>`
-            : '';
+                    let html = "";
+                    for (const doc of results) {
+                        const entityType = doc.type || "article";
+                        const plat = doc.platform || "leaflet";
+                        const docUrl = doc.url || null;
+                        const platformBadge = window.PubPlatforms.byId[plat]
+                            ? `<span class="platform-badge" onclick="event.stopPropagation(); setPlatform('${escapeHtml(plat)}')" style="cursor:pointer">${escapeHtml(window.PubPlatforms.labelOf(plat))}</span>`
+                            : "";
+                        const date = doc.createdAt
+                            ? new Date(doc.createdAt).toLocaleDateString()
+                            : "";
+                        const platformHome = getPlatformHome(
+                            plat,
+                            doc.basePath,
+                        );
+                        // bulk-generated accounts are hidden by default; when shown (opt-in
+                        // or kept), they wear the label. see /labels.
+                        const labeledBadge = doc.labeled
+                            ? `<a href="/labels" class="labeled-badge" title="this account's documents are generated from a database rather than composed${doc.kept ? " — kept in results deliberately" : ""}. click for details.">bulk-generated</a>`
+                            : "";
 
-          // source badge (only shown in hybrid/semantic modes)
-          let sourceBadge = '';
-          if (doc.source && currentMode !== 'keyword') {
-            const cls = doc.source.replace('+', '-');
-            sourceBadge = `<span class="source-badge ${cls}">${escapeHtml(doc.source)}</span>`;
-          }
+                        // source badge (only shown in hybrid/semantic modes)
+                        let sourceBadge = "";
+                        if (doc.source && currentMode !== "keyword") {
+                            const cls = doc.source.replace("+", "-");
+                            sourceBadge = `<span class="source-badge ${cls}">${escapeHtml(doc.source)}</span>`;
+                        }
 
-          // skip empty snippet divs (semantic results have no snippet)
-          const snippetHtml = doc.snippet
-            ? `<div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>`
-            : '';
+                        // skip empty snippet divs (semantic results have no snippet)
+                        const snippetHtml = doc.snippet
+                            ? `<div class="result-snippet">${highlightTerms(doc.snippet, query)}</div>`
+                            : "";
 
-          // cover image thumbnail (only when present)
-          const coverHtml = doc.coverImage && doc.did
-            ? `<img class="cover-thumb" src="https://cdn.bsky.app/img/feed_thumbnail/plain/${doc.did}/${doc.coverImage}@jpeg" alt="" loading="lazy" onerror="this.remove()">`
-            : '';
+                        // cover image thumbnail (only when present)
+                        const coverHtml =
+                            doc.coverImage && doc.did
+                                ? `<img class="cover-thumb" src="https://cdn.bsky.app/img/feed_thumbnail/plain/${doc.did}/${doc.coverImage}@jpeg" alt="" loading="lazy" onerror="this.remove()">`
+                                : "";
 
-          // dataset on .result-meta carries everything the post-render
-          // wiring step needs to attach context menus on @handle, the
-          // publication link, and the row "⋯" overflow button.
-          const metaData = [
-            doc.did ? `data-did="${escapeHtml(doc.did)}"` : '',
-            doc.uri ? `data-uri="${escapeHtml(doc.uri)}"` : '',
-            doc.basePath ? `data-base-path="${escapeHtml(doc.basePath)}"` : '',
-            platformHome.url ? `data-ext-url="${escapeHtml(platformHome.url)}"` : '',
-          ].filter(Boolean).join(' ');
+                        // dataset on .result-meta carries everything the post-render
+                        // wiring step needs to attach context menus on @handle, the
+                        // publication link, and the row "⋯" overflow button.
+                        const metaData = [
+                            doc.did ? `data-did="${escapeHtml(doc.did)}"` : "",
+                            doc.uri ? `data-uri="${escapeHtml(doc.uri)}"` : "",
+                            doc.basePath
+                                ? `data-base-path="${escapeHtml(doc.basePath)}"`
+                                : "",
+                            platformHome.url
+                                ? `data-ext-url="${escapeHtml(platformHome.url)}"`
+                                : "",
+                        ]
+                            .filter(Boolean)
+                            .join(" ");
 
-          const pubLabelHtml = platformHome.url
-            ? `<a href="${platformHome.url}" target="_blank" class="pub-link">${platformHome.label}</a>`
-            : platformHome.label;
+                        const pubLabelHtml = platformHome.url
+                            ? `<a href="${platformHome.url}" target="_blank" class="pub-link">${platformHome.label}</a>`
+                            : platformHome.label;
 
-          html += `
-            <div class="result${coverHtml ? ' has-cover' : ''}">
+                        html += `
+            <div class="result${coverHtml ? " has-cover" : ""}">
               ${coverHtml}
               <div class="result-title">
                 <span class="entity-type ${entityType}">${entityType}</span>${platformBadge}${labeledBadge}
-                ${docUrl
-                  ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || 'Untitled')}</a>`
-                  : escapeHtml(doc.title || 'Untitled')}${sourceBadge}
+                ${
+                    docUrl
+                        ? `<a href="${docUrl}" target="_blank">${escapeHtml(doc.title || "Untitled")}</a>`
+                        : escapeHtml(doc.title || "Untitled")
+                }${sourceBadge}
               </div>
               ${snippetHtml}
               <div class="result-meta" ${metaData}>
-                ${date ? `${date} | ` : ''}<span class="author-name"></span>${pubLabelHtml}<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>
+                ${date ? `${date} | ` : ""}<span class="author-name"></span>${pubLabelHtml}<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>
               </div>
             </div>
           `;
-        }
+                    }
 
-        if (append) {
-          // remove existing "load more" button and related section before appending
-          const existingLoadMore = resultsDiv.querySelector('.load-more');
-          if (existingLoadMore) existingLoadMore.remove();
-          const existingRelated = resultsDiv.querySelector('.related-section');
-          if (existingRelated) existingRelated.remove();
-          const existingRelatedLoading = resultsDiv.querySelector('.related-loading');
-          if (existingRelatedLoading) existingRelatedLoading.remove();
-          resultsDiv.insertAdjacentHTML('beforeend', html);
-        } else {
-          resultsDiv.innerHTML = html;
-        }
+                    if (append) {
+                        // remove existing "load more" button and related section before appending
+                        const existingLoadMore =
+                            resultsDiv.querySelector(".load-more");
+                        if (existingLoadMore) existingLoadMore.remove();
+                        const existingRelated =
+                            resultsDiv.querySelector(".related-section");
+                        if (existingRelated) existingRelated.remove();
+                        const existingRelatedLoading =
+                            resultsDiv.querySelector(".related-loading");
+                        if (existingRelatedLoading)
+                            existingRelatedLoading.remove();
+                        resultsDiv.insertAdjacentHTML("beforeend", html);
+                    } else {
+                        resultsDiv.innerHTML = html;
+                    }
 
-        const totalShown = resultsDiv.querySelectorAll('.result').length;
-        statsDiv.textContent = `${totalShown} result${totalShown === 1 ? '' : 's'}${extracted.total > totalShown ? ` of ${extracted.total}` : ''}`;
-        resolveAuthors(results);
-        wireResultActions();
+                    const totalShown =
+                        resultsDiv.querySelectorAll(".result").length;
+                    statsDiv.textContent = `${totalShown} result${totalShown === 1 ? "" : "s"}${extracted.total > totalShown ? ` of ${extracted.total}` : ""}`;
+                    resolveAuthors(results);
+                    wireResultActions();
 
-        // add "load more" button if there are more results
-        if (currentHasMore) {
-          const remaining = extracted.total - totalShown;
-          const remainingText = remaining > 0 ? ` (${remaining} remaining)` : '';
-          const loadMoreHtml = `<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadMore()" style="font-size:12px">load more${remainingText}</button></div>`;
-          resultsDiv.insertAdjacentHTML('beforeend', loadMoreHtml);
-        }
+                    // add "load more" button if there are more results
+                    if (currentHasMore) {
+                        const remaining = extracted.total - totalShown;
+                        const remainingText =
+                            remaining > 0 ? ` (${remaining} remaining)` : "";
+                        const loadMoreHtml = `<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadMore()" style="font-size:12px">load more${remainingText}</button></div>`;
+                        resultsDiv.insertAdjacentHTML(
+                            "beforeend",
+                            loadMoreHtml,
+                        );
+                    }
 
-        if (!append && results.length > 0 && results[0].uri) {
-          loadRelated(results[0]);
-        }
+                    if (!append && results.length > 0 && results[0].uri) {
+                        loadRelated(results[0]);
+                    }
+                } catch (err) {
+                    resultsDiv.innerHTML = `<div class="status error">error: ${err.message}</div>`;
+                } finally {
+                    searchBtn.disabled = false;
+                }
+            }
 
-      } catch (err) {
-        resultsDiv.innerHTML = `<div class="status error">error: ${err.message}</div>`;
-      } finally {
-        searchBtn.disabled = false;
-      }
-    }
+            function loadMore() {
+                currentOffset += PAGE_SIZE;
+                search(queryInput.value, currentTag, currentPlatform, true);
+            }
 
-    function loadMore() {
-      currentOffset += PAGE_SIZE;
-      search(queryInput.value, currentTag, currentPlatform, true);
-    }
+            async function resolveAuthors(results) {
+                // collect unique DIDs, skip publications
+                const dids = [
+                    ...new Set(
+                        results
+                            .filter(
+                                (r) =>
+                                    r.did &&
+                                    (r.type || "article") !== "publication",
+                            )
+                            .map((r) => r.did),
+                    ),
+                ];
 
-    async function resolveAuthors(results) {
-      // collect unique DIDs, skip publications
-      const dids = [...new Set(
-        results
-          .filter(r => r.did && (r.type || 'article') !== 'publication')
-          .map(r => r.did)
-      )];
+                // find which DIDs we still need to fetch
+                const toFetch = dids.filter((d) => !authorCache.has(d));
 
-      // find which DIDs we still need to fetch
-      const toFetch = dids.filter(d => !authorCache.has(d));
+                if (toFetch.length > 0) {
+                    try {
+                        const profiles =
+                            await window.LeafletIdentity.resolveProfiles(
+                                toFetch,
+                            );
+                        profiles.forEach((p, key) => {
+                            if (key.startsWith("did:") && p.handle)
+                                authorCache.set(key, p.handle);
+                        });
+                    } catch (e) {
+                        // graceful degradation — results already visible without names
+                    }
+                }
 
-      if (toFetch.length > 0) {
-        try {
-          const profiles = await window.LeafletIdentity.resolveProfiles(toFetch);
-          profiles.forEach((p, key) => {
-            if (key.startsWith('did:') && p.handle) authorCache.set(key, p.handle);
-          });
-        } catch (e) {
-          // graceful degradation — results already visible without names
-        }
-      }
+                // populate DOM. handle link defaults to the user's preferred client
+                // (Bluesky out of the box, settable via the gear). long-press / right-
+                // click reveals the full destination menu — atlas, all clients, copy.
+                document
+                    .querySelectorAll(".result-meta[data-did]")
+                    .forEach((el) => {
+                        const did = el.dataset.did;
+                        const handle = authorCache.get(did);
+                        if (!handle) return;
+                        const nameSpan = el.querySelector(".author-name");
+                        if (!nameSpan || nameSpan.innerHTML) return; // already populated
+                        const handleEsc = escapeHtml(handle);
+                        const profileUrl = window.LeafletClients
+                            ? window.LeafletClients.profileUrlFor(did)
+                            : `https://bsky.app/profile/${encodeURIComponent(did)}`;
+                        nameSpan.innerHTML = `<a class="lf-author-link" href="${profileUrl}" data-profile-did="${escapeHtml(did)}" target="_blank">@${handleEsc}</a> · `;
+                        const link = nameSpan.querySelector(".lf-author-link");
+                        if (link && window.LeafletUI) {
+                            window.LeafletUI.bindContextMenu(link, () =>
+                                window.LeafletUI.authorMenuItems(handle, did),
+                            );
+                        }
+                    });
+            }
 
-      // populate DOM. handle link defaults to the user's preferred client
-      // (Bluesky out of the box, settable via the gear). long-press / right-
-      // click reveals the full destination menu — atlas, all clients, copy.
-      document.querySelectorAll('.result-meta[data-did]').forEach(el => {
-        const did = el.dataset.did;
-        const handle = authorCache.get(did);
-        if (!handle) return;
-        const nameSpan = el.querySelector('.author-name');
-        if (!nameSpan || nameSpan.innerHTML) return; // already populated
-        const handleEsc = escapeHtml(handle);
-        const profileUrl = (window.LeafletClients
-          ? window.LeafletClients.profileUrlFor(did)
-          : `https://bsky.app/profile/${encodeURIComponent(did)}`);
-        nameSpan.innerHTML = `<a class="lf-author-link" href="${profileUrl}" data-profile-did="${escapeHtml(did)}" target="_blank">@${handleEsc}</a> · `;
-        const link = nameSpan.querySelector('.lf-author-link');
-        if (link && window.LeafletUI) {
-          window.LeafletUI.bindContextMenu(link, () =>
-            window.LeafletUI.authorMenuItems(handle, did));
-        }
-      });
-    }
+            // wire long-press menus on result rows after each render. handles three
+            // trigger zones: the "⋯" button (row-level), the publication link
+            // (publication menu), and the author link (set up in resolveAuthors).
+            function wireResultActions() {
+                if (!window.LeafletUI) return;
+                document.querySelectorAll(".result").forEach((row) => {
+                    if (row.dataset.actionsWired) return;
+                    row.dataset.actionsWired = "1";
 
-    // wire long-press menus on result rows after each render. handles three
-    // trigger zones: the "⋯" button (row-level), the publication link
-    // (publication menu), and the author link (set up in resolveAuthors).
-    function wireResultActions() {
-      if (!window.LeafletUI) return;
-      document.querySelectorAll('.result').forEach(row => {
-        if (row.dataset.actionsWired) return;
-        row.dataset.actionsWired = '1';
+                    const meta = row.querySelector(".result-meta");
+                    const data = meta ? meta.dataset : {};
 
-        const meta = row.querySelector('.result-meta');
-        const data = meta ? meta.dataset : {};
+                    const moreBtn = row.querySelector(".lf-row-more");
+                    if (moreBtn) {
+                        const handler = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const handle = data.did
+                                ? authorCache.get(data.did)
+                                : null;
+                            const items = window.LeafletUI.rowMenuItems({
+                                uri: data.uri || "",
+                                basePath: data.basePath || "",
+                                handle: handle || "",
+                                authorDid: data.did || "",
+                                externalUrl: data.extUrl || "",
+                            });
+                            const rect = moreBtn.getBoundingClientRect();
+                            window.LeafletUI.showMenu(
+                                items,
+                                rect.right - 8,
+                                rect.bottom + 4,
+                            );
+                        };
+                        moreBtn.addEventListener("click", handler);
+                        // touch: also expose via long-press for parity with other zones
+                        window.LeafletUI.longPress(moreBtn, handler);
+                    }
 
-        const moreBtn = row.querySelector('.lf-row-more');
-        if (moreBtn) {
-          const handler = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const handle = data.did ? authorCache.get(data.did) : null;
-            const items = window.LeafletUI.rowMenuItems({
-              uri: data.uri || '',
-              basePath: data.basePath || '',
-              handle: handle || '',
-              authorDid: data.did || '',
-              externalUrl: data.extUrl || '',
-            });
-            const rect = moreBtn.getBoundingClientRect();
-            window.LeafletUI.showMenu(items, rect.right - 8, rect.bottom + 4);
-          };
-          moreBtn.addEventListener('click', handler);
-          // touch: also expose via long-press for parity with other zones
-          window.LeafletUI.longPress(moreBtn, handler);
-        }
+                    const pubLink = row.querySelector(".pub-link");
+                    if (pubLink && (data.basePath || data.extUrl)) {
+                        window.LeafletUI.bindContextMenu(pubLink, () =>
+                            window.LeafletUI.publicationMenuItems(
+                                data.basePath || "",
+                                data.extUrl || "",
+                            ),
+                        );
+                    }
+                });
+            }
 
-        const pubLink = row.querySelector('.pub-link');
-        if (pubLink && (data.basePath || data.extUrl)) {
-          window.LeafletUI.bindContextMenu(pubLink, () =>
-            window.LeafletUI.publicationMenuItems(data.basePath || '', data.extUrl || ''));
-        }
-      });
-    }
+            function escapeHtml(str) {
+                if (!str) return "";
+                return str.replace(
+                    /[&<>"']/g,
+                    (c) =>
+                        ({
+                            "&": "&amp;",
+                            "<": "&lt;",
+                            ">": "&gt;",
+                            '"': "&quot;",
+                            "'": "&#39;",
+                        })[c],
+                );
+            }
 
-    function escapeHtml(str) {
-      if (!str) return '';
-      return str.replace(/[&<>"']/g, c => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-      })[c]);
-    }
+            // display query without adding redundant quotes
+            function formatQueryForDisplay(query) {
+                if (!query) return "";
+                const escaped = escapeHtml(query);
+                // if query is already fully quoted, don't add more quotes
+                if (query.startsWith('"') && query.endsWith('"')) {
+                    return escaped;
+                }
+                return `"${escaped}"`;
+            }
 
-    // display query without adding redundant quotes
-    function formatQueryForDisplay(query) {
-      if (!query) return '';
-      const escaped = escapeHtml(query);
-      // if query is already fully quoted, don't add more quotes
-      if (query.startsWith('"') && query.endsWith('"')) {
-        return escaped;
-      }
-      return `"${escaped}"`;
-    }
+            function getPlatformHome(platform, basePath) {
+                if (basePath) {
+                    return { url: `https://${basePath}`, label: basePath };
+                }
+                if (window.PubPlatforms.domainOf(platform)) {
+                    return {
+                        url: window.PubPlatforms.homeOf(platform),
+                        label: window.PubPlatforms.labelOf(platform),
+                    };
+                }
+                // fallback for documents without a known platform - link to standard.site lexicon
+                return { url: "https://standard.site", label: "other" };
+            }
 
-    function getPlatformHome(platform, basePath) {
-      if (basePath) {
-        return { url: `https://${basePath}`, label: basePath };
-      }
-      if (window.PubPlatforms.domainOf(platform)) {
-        return { url: window.PubPlatforms.homeOf(platform), label: window.PubPlatforms.labelOf(platform) };
-      }
-      // fallback for documents without a known platform - link to standard.site lexicon
-      return { url: 'https://standard.site', label: 'other' };
-    }
+            function highlightTerms(text, query) {
+                if (!text || !query) return escapeHtml(text);
 
-    function highlightTerms(text, query) {
-      if (!text || !query) return escapeHtml(text);
+                // extract terms: quoted phrases as single terms, or split by whitespace
+                const terms = [];
+                const phraseRegex = /"([^"]+)"/g;
+                let match;
+                let remaining = query.toLowerCase();
 
-      // extract terms: quoted phrases as single terms, or split by whitespace
-      const terms = [];
-      const phraseRegex = /"([^"]+)"/g;
-      let match;
-      let remaining = query.toLowerCase();
+                // extract quoted phrases first
+                while (
+                    (match = phraseRegex.exec(query.toLowerCase())) !== null
+                ) {
+                    terms.push(match[1]); // the phrase without quotes
+                    remaining = remaining.replace(match[0], " ");
+                }
 
-      // extract quoted phrases first
-      while ((match = phraseRegex.exec(query.toLowerCase())) !== null) {
-        terms.push(match[1]); // the phrase without quotes
-        remaining = remaining.replace(match[0], ' ');
-      }
+                // add remaining non-quoted terms
+                remaining
+                    .split(/\s+/)
+                    .filter((t) => t.length > 0)
+                    .forEach((t) => terms.push(t));
 
-      // add remaining non-quoted terms
-      remaining.split(/\s+/).filter(t => t.length > 0).forEach(t => terms.push(t));
+                if (terms.length === 0) return escapeHtml(text);
 
-      if (terms.length === 0) return escapeHtml(text);
+                // build regex that matches any term (case insensitive)
+                const escaped = terms.map((t) =>
+                    t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                );
+                const regex = new RegExp(`(${escaped.join("|")})`, "gi");
 
-      // build regex that matches any term (case insensitive)
-      const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const regex = new RegExp(`(${escaped.join('|')})`, 'gi');
+                // escape HTML first, then apply highlights
+                return escapeHtml(text).replace(regex, "<mark>$1</mark>");
+            }
 
-      // escape HTML first, then apply highlights
-      return escapeHtml(text).replace(regex, '<mark>$1</mark>');
-    }
+            function updateUrl() {
+                const params = new URLSearchParams();
+                const q = queryInput.value.trim();
+                if (q) params.set("q", q);
+                if (currentTag) params.set("tag", currentTag);
+                if (currentPlatform) params.set("platform", currentPlatform);
+                if (currentSince) params.set("since", currentSince);
+                if (currentAuthor) params.set("author", currentAuthor);
+                if (currentMode !== "keyword") params.set("mode", currentMode);
+                const url = params.toString() ? `?${params}` : "/";
+                history.pushState(null, "", url);
+            }
 
-    function updateUrl() {
-      const params = new URLSearchParams();
-      const q = queryInput.value.trim();
-      if (q) params.set('q', q);
-      if (currentTag) params.set('tag', currentTag);
-      if (currentPlatform) params.set('platform', currentPlatform);
-      if (currentSince) params.set('since', currentSince);
-      if (currentAuthor) params.set('author', currentAuthor);
-      if (currentMode !== 'keyword') params.set('mode', currentMode);
-      const url = params.toString() ? `?${params}` : '/';
-      history.pushState(null, '', url);
-    }
+            function doSearch() {
+                // parse @handle from query text (only if not inside quotes)
+                const raw = queryInput.value;
+                // match @handle that's NOT inside quotes — look for unquoted @handle.tld pattern
+                const unquoted = raw.replace(/"[^"]*"/g, ""); // strip quoted sections
+                const authorMatch = unquoted.match(/(?:^|\s)@([\w.-]+\.\w+)/);
+                if (authorMatch) {
+                    const handle = authorMatch[1];
+                    // strip the @handle from the original query (not the unquoted version)
+                    queryInput.value = raw
+                        .replace(
+                            new RegExp(
+                                "\\s*@" + handle.replace(/\./g, "\\.") + "\\s*",
+                            ),
+                            " ",
+                        )
+                        .trim();
+                    currentAuthor = handle;
+                    renderActiveFilter();
+                }
+                updateUrl();
+                search(queryInput.value, currentTag, currentPlatform);
+            }
 
-    function doSearch() {
-      // parse @handle from query text (only if not inside quotes)
-      const raw = queryInput.value;
-      // match @handle that's NOT inside quotes — look for unquoted @handle.tld pattern
-      const unquoted = raw.replace(/"[^"]*"/g, ''); // strip quoted sections
-      const authorMatch = unquoted.match(/(?:^|\s)@([\w.-]+\.\w+)/);
-      if (authorMatch) {
-        const handle = authorMatch[1];
-        // strip the @handle from the original query (not the unquoted version)
-        queryInput.value = raw.replace(new RegExp('\\s*@' + handle.replace(/\./g, '\\.') + '\\s*'), ' ').trim();
-        currentAuthor = handle;
-        renderActiveFilter();
-      }
-      updateUrl();
-      search(queryInput.value, currentTag, currentPlatform);
-    }
+            function setTag(tag) {
+                if (currentTag === tag) {
+                    clearTag();
+                    return;
+                }
+                currentTag = tag;
+                renderActiveFilter();
+                renderTags();
+                doSearch();
+            }
 
-    function setTag(tag) {
-      if (currentTag === tag) {
-        clearTag();
-        return;
-      }
-      currentTag = tag;
-      renderActiveFilter();
-      renderTags();
-      doSearch();
-    }
+            function clearTag() {
+                currentTag = null;
+                renderActiveFilter();
+                renderTags();
+                updateUrl();
+                if (
+                    queryInput.value.trim() ||
+                    currentPlatform ||
+                    currentAuthor
+                ) {
+                    search(queryInput.value, null, currentPlatform);
+                } else {
+                    renderEmptyState();
+                }
+            }
 
-    function clearTag() {
-      currentTag = null;
-      renderActiveFilter();
-      renderTags();
-      updateUrl();
-      if (queryInput.value.trim() || currentPlatform || currentAuthor) {
-        search(queryInput.value, null, currentPlatform);
-      } else {
-        renderEmptyState();
-      }
-    }
+            function setPlatform(platform) {
+                if (currentPlatform === platform) {
+                    clearPlatform();
+                    return;
+                }
+                currentPlatform = platform;
+                renderActiveFilter();
+                renderPlatformFilter();
+                doSearch();
+            }
 
-    function setPlatform(platform) {
-      if (currentPlatform === platform) {
-        clearPlatform();
-        return;
-      }
-      currentPlatform = platform;
-      renderActiveFilter();
-      renderPlatformFilter();
-      doSearch();
-    }
+            function clearPlatform() {
+                currentPlatform = null;
+                renderActiveFilter();
+                renderPlatformFilter();
+                updateUrl();
+                if (queryInput.value.trim() || currentTag || currentAuthor) {
+                    search(queryInput.value, currentTag, null);
+                } else {
+                    renderEmptyState();
+                }
+            }
 
-    function clearPlatform() {
-      currentPlatform = null;
-      renderActiveFilter();
-      renderPlatformFilter();
-      updateUrl();
-      if (queryInput.value.trim() || currentTag || currentAuthor) {
-        search(queryInput.value, currentTag, null);
-      } else {
-        renderEmptyState();
-      }
-    }
+            function setAuthor(did) {
+                if (currentAuthor === did) {
+                    clearAuthor();
+                    return;
+                }
+                currentAuthor = did;
+                renderActiveFilter();
+                doSearch();
+            }
 
-    function setAuthor(did) {
-      if (currentAuthor === did) {
-        clearAuthor();
-        return;
-      }
-      currentAuthor = did;
-      renderActiveFilter();
-      doSearch();
-    }
+            function clearAuthor() {
+                currentAuthor = null;
+                renderActiveFilter();
+                updateUrl();
+                if (queryInput.value.trim() || currentTag || currentPlatform) {
+                    search(queryInput.value, currentTag, currentPlatform);
+                } else {
+                    renderEmptyState();
+                }
+            }
 
-    function clearAuthor() {
-      currentAuthor = null;
-      renderActiveFilter();
-      updateUrl();
-      if (queryInput.value.trim() || currentTag || currentPlatform) {
-        search(queryInput.value, currentTag, currentPlatform);
-      } else {
-        renderEmptyState();
-      }
-    }
+            function renderPlatformFilter() {
+                const platforms = window.PubPlatforms.order.map((id) => ({
+                    id: id,
+                    label: id,
+                }));
+                const html = platforms
+                    .map(
+                        (p) => `
+        <span class="platform-option${currentPlatform === p.id ? " active" : ""}" onclick="setPlatform('${p.id}')">${p.label}</span>
+      `,
+                    )
+                    .join("");
+                platformFilterDiv.innerHTML = `<div class="platform-filter-label">filter by platform:</div><div class="platform-filter-list">${html}</div>`;
+            }
 
-    function renderPlatformFilter() {
-      const platforms = window.PubPlatforms.order.map(id => ({ id: id, label: id }));
-      const html = platforms.map(p => `
-        <span class="platform-option${currentPlatform === p.id ? ' active' : ''}" onclick="setPlatform('${p.id}')">${p.label}</span>
-      `).join('');
-      platformFilterDiv.innerHTML = `<div class="platform-filter-label">filter by platform:</div><div class="platform-filter-list">${html}</div>`;
-    }
+            function sinceFromPreset(preset) {
+                const d = new Date();
+                if (preset === "week") d.setDate(d.getDate() - 7);
+                else if (preset === "month") d.setMonth(d.getMonth() - 1);
+                else if (preset === "year") d.setFullYear(d.getFullYear() - 1);
+                else return null;
+                return d.toISOString().slice(0, 10);
+            }
 
-    function sinceFromPreset(preset) {
-      const d = new Date();
-      if (preset === 'week') d.setDate(d.getDate() - 7);
-      else if (preset === 'month') d.setMonth(d.getMonth() - 1);
-      else if (preset === 'year') d.setFullYear(d.getFullYear() - 1);
-      else return null;
-      return d.toISOString().slice(0, 10);
-    }
+            // reverse: given a since ISO date, find the closest preset
+            function presetFromSince(since) {
+                if (!since) return null;
+                const now = new Date();
+                const d = new Date(since);
+                const days = Math.round((now - d) / (1000 * 60 * 60 * 24));
+                if (days <= 8) return "week";
+                if (days <= 32) return "month";
+                if (days <= 370) return "year";
+                return null;
+            }
 
-    // reverse: given a since ISO date, find the closest preset
-    function presetFromSince(since) {
-      if (!since) return null;
-      const now = new Date();
-      const d = new Date(since);
-      const days = Math.round((now - d) / (1000 * 60 * 60 * 24));
-      if (days <= 8) return 'week';
-      if (days <= 32) return 'month';
-      if (days <= 370) return 'year';
-      return null;
-    }
+            let currentDatePreset = null;
 
-    let currentDatePreset = null;
+            function renderDateFilter() {
+                const presets = [
+                    { id: null, label: "any" },
+                    { id: "week", label: "week" },
+                    { id: "month", label: "month" },
+                    { id: "year", label: "year" },
+                ];
+                const html = presets
+                    .map(
+                        (p) => `
+        <span class="date-option${currentDatePreset === p.id ? " active" : ""}" onclick="setDateFilter(${p.id === null ? "null" : `'${p.id}'`})">${p.label}</span>
+      `,
+                    )
+                    .join("");
+                dateFilterDiv.innerHTML = `<div class="date-filter-label">date:</div><div class="date-filter-list">${html}</div>`;
+            }
 
-    function renderDateFilter() {
-      const presets = [
-        { id: null, label: 'any' },
-        { id: 'week', label: 'week' },
-        { id: 'month', label: 'month' },
-        { id: 'year', label: 'year' },
-      ];
-      const html = presets.map(p => `
-        <span class="date-option${currentDatePreset === p.id ? ' active' : ''}" onclick="setDateFilter(${p.id === null ? 'null' : `'${p.id}'`})">${p.label}</span>
-      `).join('');
-      dateFilterDiv.innerHTML = `<div class="date-filter-label">date:</div><div class="date-filter-list">${html}</div>`;
-    }
+            function setDateFilter(preset) {
+                if (currentDatePreset === preset) return;
+                currentDatePreset = preset;
+                currentSince = sinceFromPreset(preset);
+                renderDateFilter();
+                renderActiveFilter();
+                if (
+                    queryInput.value.trim() ||
+                    currentTag ||
+                    currentPlatform ||
+                    currentSince ||
+                    currentAuthor
+                ) {
+                    doSearch();
+                }
+            }
 
-    function setDateFilter(preset) {
-      if (currentDatePreset === preset) return;
-      currentDatePreset = preset;
-      currentSince = sinceFromPreset(preset);
-      renderDateFilter();
-      renderActiveFilter();
-      if (queryInput.value.trim() || currentTag || currentPlatform || currentSince || currentAuthor) {
-        doSearch();
-      }
-    }
+            function renderModeToggle() {
+                const modes = [
+                    { id: "keyword", label: "keyword" },
+                    { id: "semantic", label: "semantic" },
+                    { id: "hybrid", label: "hybrid" },
+                ];
+                const html = modes
+                    .map(
+                        (m) => `
+        <span class="mode-option${currentMode === m.id ? " active" : ""}" onclick="setMode('${m.id}')">${m.label}</span>
+      `,
+                    )
+                    .join("");
+                modeToggleDiv.innerHTML = `<div class="mode-toggle-label">search mode:</div><div class="mode-toggle-list">${html}</div>`;
+            }
 
-    function renderModeToggle() {
-      const modes = [
-        { id: 'keyword', label: 'keyword' },
-        { id: 'semantic', label: 'semantic' },
-        { id: 'hybrid', label: 'hybrid' },
-      ];
-      const html = modes.map(m => `
-        <span class="mode-option${currentMode === m.id ? ' active' : ''}" onclick="setMode('${m.id}')">${m.label}</span>
-      `).join('');
-      modeToggleDiv.innerHTML = `<div class="mode-toggle-label">search mode:</div><div class="mode-toggle-list">${html}</div>`;
-    }
+            function setMode(mode) {
+                if (currentMode === mode) return;
+                currentMode = mode;
+                renderModeToggle();
+                // hide tags for semantic mode (tpuf doesn't support them); date works for keyword+hybrid
+                tagsDiv.style.display = currentMode === "keyword" ? "" : "none";
+                dateFilterDiv.style.display =
+                    currentMode !== "semantic" ? "" : "none";
+                if (currentMode !== "keyword") {
+                    currentTag = null;
+                    renderActiveFilter();
+                }
+                if (currentMode === "semantic") {
+                    currentSince = null;
+                    currentDatePreset = null;
+                    renderDateFilter();
+                    renderActiveFilter();
+                }
+                // trigger search if there's a query
+                if (
+                    queryInput.value.trim() ||
+                    currentTag ||
+                    currentPlatform ||
+                    currentAuthor
+                ) {
+                    doSearch();
+                }
+            }
 
-    function setMode(mode) {
-      if (currentMode === mode) return;
-      currentMode = mode;
-      renderModeToggle();
-      // hide tags for semantic mode (tpuf doesn't support them); date works for keyword+hybrid
-      tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
-      dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
-      if (currentMode !== 'keyword') {
-        currentTag = null;
-        renderActiveFilter();
-      }
-      if (currentMode === 'semantic') {
-        currentSince = null;
-        currentDatePreset = null;
-        renderDateFilter();
-        renderActiveFilter();
-      }
-      // trigger search if there's a query
-      if (queryInput.value.trim() || currentTag || currentPlatform || currentAuthor) {
-        doSearch();
-      }
-    }
+            const DATE_PRESET_LABELS = {
+                week: "last week",
+                month: "last month",
+                year: "last year",
+            };
 
-    const DATE_PRESET_LABELS = { week: 'last week', month: 'last month', year: 'last year' };
+            function renderActiveFilter() {
+                // chips render inline inside the search input wrapper; emit just
+                // the chips (no outer wrapper, no "active filters:" label).
+                if (
+                    !currentTag &&
+                    !currentPlatform &&
+                    !currentSince &&
+                    !currentAuthor
+                ) {
+                    activeFilterDiv.innerHTML = "";
+                    return;
+                }
+                let chips = [];
+                if (currentTag) {
+                    chips.push(
+                        `<span class="filter-chip tag">#${escapeHtml(currentTag)}<span class="x" onclick="clearTag()">\u00d7</span></span>`,
+                    );
+                }
+                if (currentPlatform) {
+                    chips.push(
+                        `<span class="filter-chip platform">${escapeHtml(currentPlatform)}<span class="x" onclick="clearPlatform()">\u00d7</span></span>`,
+                    );
+                }
+                if (currentSince) {
+                    const label =
+                        DATE_PRESET_LABELS[currentDatePreset] || currentSince;
+                    chips.push(
+                        `<span class="filter-chip date">${escapeHtml(label)}<span class="x" onclick="setDateFilter(null)">\u00d7</span></span>`,
+                    );
+                }
+                if (currentAuthor) {
+                    const handle = authorCache.get(currentAuthor);
+                    const label = handle
+                        ? `@${handle}`
+                        : currentAuthor.slice(0, 20) + "...";
+                    chips.push(
+                        `<span class="filter-chip author">${escapeHtml(label)}<span class="x" onclick="clearAuthor()">\u00d7</span></span>`,
+                    );
+                }
+                activeFilterDiv.innerHTML = chips.join("");
+            }
 
-    function renderActiveFilter() {
-      // chips render inline inside the search input wrapper; emit just
-      // the chips (no outer wrapper, no "active filters:" label).
-      if (!currentTag && !currentPlatform && !currentSince && !currentAuthor) {
-        activeFilterDiv.innerHTML = '';
-        return;
-      }
-      let chips = [];
-      if (currentTag) {
-        chips.push(`<span class="filter-chip tag">#${escapeHtml(currentTag)}<span class="x" onclick="clearTag()">\u00d7</span></span>`);
-      }
-      if (currentPlatform) {
-        chips.push(`<span class="filter-chip platform">${escapeHtml(currentPlatform)}<span class="x" onclick="clearPlatform()">\u00d7</span></span>`);
-      }
-      if (currentSince) {
-        const label = DATE_PRESET_LABELS[currentDatePreset] || currentSince;
-        chips.push(`<span class="filter-chip date">${escapeHtml(label)}<span class="x" onclick="setDateFilter(null)">\u00d7</span></span>`);
-      }
-      if (currentAuthor) {
-        const handle = authorCache.get(currentAuthor);
-        const label = handle ? `@${handle}` : currentAuthor.slice(0, 20) + '...';
-        chips.push(`<span class="filter-chip author">${escapeHtml(label)}<span class="x" onclick="clearAuthor()">\u00d7</span></span>`);
-      }
-      activeFilterDiv.innerHTML = chips.join('');
-    }
+            function renderTags() {
+                const tagsHtml = allTags
+                    .slice(0, 15)
+                    .map(
+                        (t) => `
+        <span class="tag${currentTag === t.tag ? " active" : ""}" onclick="setTag('${escapeHtml(t.tag)}')">${escapeHtml(t.tag)}<span class="count">${t.count}</span></span>
+      `,
+                    )
+                    .join("");
+                const inputHtml = `<input type="text" class="tag-input" id="tag-input" placeholder="enter tag..." value="${currentTag && !allTags.some((t) => t.tag === currentTag) ? escapeHtml(currentTag) : ""}">`;
+                tagsDiv.innerHTML = `<div class="tags-label">filter by tag:</div><div class="tags-list">${tagsHtml}${inputHtml}</div>`;
 
-    function renderTags() {
-      const tagsHtml = allTags.slice(0, 15).map(t => `
-        <span class="tag${currentTag === t.tag ? ' active' : ''}" onclick="setTag('${escapeHtml(t.tag)}')">${escapeHtml(t.tag)}<span class="count">${t.count}</span></span>
-      `).join('');
-      const inputHtml = `<input type="text" class="tag-input" id="tag-input" placeholder="enter tag..." value="${currentTag && !allTags.some(t => t.tag === currentTag) ? escapeHtml(currentTag) : ''}">`;
-      tagsDiv.innerHTML = `<div class="tags-label">filter by tag:</div><div class="tags-list">${tagsHtml}${inputHtml}</div>`;
+                // bind enter key handler
+                const tagInput = document.getElementById("tag-input");
+                tagInput.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        const val = tagInput.value.trim();
+                        if (val) {
+                            setTag(val);
+                        }
+                    }
+                });
+            }
 
-      // bind enter key handler
-      const tagInput = document.getElementById('tag-input');
-      tagInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          const val = tagInput.value.trim();
-          if (val) {
-            setTag(val);
-          }
-        }
-      });
-    }
+            async function loadTags() {
+                try {
+                    const res = await fetch(`${API_URL}/tags?format=v2`);
+                    const data = await res.json();
+                    if (data.error) {
+                        console.error("failed to load tags:", data.error);
+                        return;
+                    }
+                    const extracted = extractResults(data);
+                    allTags = extracted
+                        ? extracted.results
+                        : Array.isArray(data)
+                          ? data
+                          : [];
+                    renderTags();
+                } catch (e) {
+                    console.error("failed to load tags", e);
+                }
+            }
 
-    async function loadTags() {
-      try {
-        const res = await fetch(`${API_URL}/tags?format=v2`);
-        const data = await res.json();
-        if (data.error) {
-          console.error('failed to load tags:', data.error);
-          return;
-        }
-        const extracted = extractResults(data);
-        allTags = extracted ? extracted.results : (Array.isArray(data) ? data : []);
-        renderTags();
-      } catch (e) {
-        console.error('failed to load tags', e);
-      }
-    }
+            async function loadPopular() {
+                try {
+                    const res = await fetch(`${API_URL}/popular?format=v2`);
+                    const data = await res.json();
+                    if (!data.error) {
+                        const extracted = extractResults(data);
+                        const items = extracted
+                            ? extracted.results
+                            : Array.isArray(data)
+                              ? data
+                              : [];
+                        popularSearches = items.slice(0, 5);
+                        renderSuggestions();
+                    }
+                } catch (e) {
+                    console.error("failed to load popular", e);
+                }
+            }
 
-    async function loadPopular() {
-      try {
-        const res = await fetch(`${API_URL}/popular?format=v2`);
-        const data = await res.json();
-        if (!data.error) {
-          const extracted = extractResults(data);
-          const items = extracted ? extracted.results : (Array.isArray(data) ? data : []);
-          popularSearches = items.slice(0, 5);
-          renderSuggestions();
-        }
-      } catch (e) {
-        console.error('failed to load popular', e);
-      }
-    }
-
-    function renderSuggestions() {
-      if (popularSearches.length === 0) {
-        suggestionsDiv.innerHTML = '';
-        return;
-      }
-      suggestionsDiv.innerHTML = `
+            function renderSuggestions() {
+                if (popularSearches.length === 0) {
+                    suggestionsDiv.innerHTML = "";
+                    return;
+                }
+                suggestionsDiv.innerHTML = `
         <div class="suggestions">
           <span class="suggestions-label">popular searches:</span>
           <span class="suggestions-list">
-            ${popularSearches.map(p => `<span class="suggestion" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>`).join('')}
+            ${popularSearches.map((p) => `<span class="suggestion" onclick="searchPopular('${escapeHtml(p.query)}')">${escapeHtml(p.query)}</span>`).join("")}
           </span>
         </div>
       `;
-    }
+            }
 
-    function renderEmptyState() {
-      resultsDiv.innerHTML = `
+            function renderEmptyState() {
+                resultsDiv.innerHTML = `
         <div class="empty-state">
           <p>search writing published on <a href="https://standard.site" target="_blank">standard.site</a> platforms</p>
           <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://greengale.app" target="_blank">greengale</a> · <a href="https://whtwnd.com" target="_blank">whitewind</a> · <a href="https://standard.site" target="_blank">other</a></p>
         </div>
       `;
-    }
+            }
 
-    function searchPopular(query) {
-      queryInput.value = query;
-      doSearch();
-    }
+            function searchPopular(query) {
+                queryInput.value = query;
+                doSearch();
+            }
 
-    // register typeahead BEFORE the existing keydown handler so its
-    // Enter/Escape interception fires first (via stopImmediatePropagation).
-    if (window.LeafletUI) {
-      window.LeafletUI.setupTypeahead(queryInput, { onPick: () => doSearch() });
-    }
+            // register typeahead BEFORE the existing keydown handler so its
+            // Enter/Escape interception fires first (via stopImmediatePropagation).
+            if (window.LeafletUI) {
+                window.LeafletUI.setupTypeahead(queryInput, {
+                    onPick: () => doSearch(),
+                });
+            }
 
-    searchBtn.addEventListener('click', doSearch);
-    queryInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') doSearch();
-    });
+            searchBtn.addEventListener("click", doSearch);
+            queryInput.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") doSearch();
+            });
 
-    window.addEventListener('popstate', () => {
-      const params = new URLSearchParams(location.search);
-      queryInput.value = params.get('q') || '';
-      currentTag = params.get('tag') || null;
-      currentPlatform = params.get('platform') || null;
-      currentSince = params.get('since') || null;
-      currentAuthor = params.get('author') || null;
-      currentDatePreset = presetFromSince(currentSince);
-      currentMode = params.get('mode') || 'keyword';
-      renderActiveFilter();
-      renderTags();
-      renderPlatformFilter();
-      renderDateFilter();
-      renderModeToggle();
-      tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
-      dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
-      if (queryInput.value || currentTag || currentPlatform || currentAuthor) search(queryInput.value, currentTag, currentPlatform);
-    });
+            window.addEventListener("popstate", () => {
+                const params = new URLSearchParams(location.search);
+                queryInput.value = params.get("q") || "";
+                currentTag = params.get("tag") || null;
+                currentPlatform = params.get("platform") || null;
+                currentSince = params.get("since") || null;
+                currentAuthor = params.get("author") || null;
+                currentDatePreset = presetFromSince(currentSince);
+                currentMode = params.get("mode") || "keyword";
+                renderActiveFilter();
+                renderTags();
+                renderPlatformFilter();
+                renderDateFilter();
+                renderModeToggle();
+                tagsDiv.style.display = currentMode === "keyword" ? "" : "none";
+                dateFilterDiv.style.display =
+                    currentMode !== "semantic" ? "" : "none";
+                if (
+                    queryInput.value ||
+                    currentTag ||
+                    currentPlatform ||
+                    currentAuthor
+                )
+                    search(queryInput.value, currentTag, currentPlatform);
+            });
 
-    // init
-    const initialParams = new URLSearchParams(location.search);
-    const initialQuery = initialParams.get('q');
-    const initialTag = initialParams.get('tag');
-    const initialPlatform = initialParams.get('platform');
-    const initialSince = initialParams.get('since');
-    const initialAuthor = initialParams.get('author');
-    const initialMode = initialParams.get('mode');
-    if (initialQuery) queryInput.value = initialQuery;
-    if (initialTag) currentTag = initialTag;
-    if (initialPlatform) currentPlatform = initialPlatform;
-    if (initialSince) { currentSince = initialSince; currentDatePreset = presetFromSince(initialSince); }
-    if (initialAuthor) {
-      currentAuthor = initialAuthor;
-      // resolve author handle if it's a DID and not yet cached
-      if (initialAuthor.startsWith('did:') && !authorCache.has(initialAuthor)) {
-        window.LeafletIdentity.resolveProfile(initialAuthor).then(p => {
-          if (p && p.did && p.handle) {
-            authorCache.set(p.did, p.handle);
+            // init
+            const initialParams = new URLSearchParams(location.search);
+            const initialQuery = initialParams.get("q");
+            const initialTag = initialParams.get("tag");
+            const initialPlatform = initialParams.get("platform");
+            const initialSince = initialParams.get("since");
+            const initialAuthor = initialParams.get("author");
+            const initialMode = initialParams.get("mode");
+            if (initialQuery) queryInput.value = initialQuery;
+            if (initialTag) currentTag = initialTag;
+            if (initialPlatform) currentPlatform = initialPlatform;
+            if (initialSince) {
+                currentSince = initialSince;
+                currentDatePreset = presetFromSince(initialSince);
+            }
+            if (initialAuthor) {
+                currentAuthor = initialAuthor;
+                // resolve author handle if it's a DID and not yet cached
+                if (
+                    initialAuthor.startsWith("did:") &&
+                    !authorCache.has(initialAuthor)
+                ) {
+                    window.LeafletIdentity.resolveProfile(initialAuthor).then(
+                        (p) => {
+                            if (p && p.did && p.handle) {
+                                authorCache.set(p.did, p.handle);
+                                renderActiveFilter();
+                            }
+                        },
+                    );
+                }
+            }
+            if (initialMode) currentMode = initialMode;
             renderActiveFilter();
-          }
-        });
-      }
-    }
-    if (initialMode) currentMode = initialMode;
-    renderActiveFilter();
-    renderPlatformFilter();
-    renderDateFilter();
-    renderModeToggle();
-    tagsDiv.style.display = currentMode === 'keyword' ? '' : 'none';
-    dateFilterDiv.style.display = currentMode !== 'semantic' ? '' : 'none';
+            renderPlatformFilter();
+            renderDateFilter();
+            renderModeToggle();
+            tagsDiv.style.display = currentMode === "keyword" ? "" : "none";
+            dateFilterDiv.style.display =
+                currentMode !== "semantic" ? "" : "none";
 
-    if (initialQuery || initialTag || initialPlatform || initialAuthor) {
-      search(initialQuery || '', initialTag, initialPlatform);
-    }
+            if (
+                initialQuery ||
+                initialTag ||
+                initialPlatform ||
+                initialAuthor
+            ) {
+                search(initialQuery || "", initialTag, initialPlatform);
+            }
 
-    async function loadRelated(topResult) {
-      // show loading state
-      const loadingEl = document.createElement('div');
-      loadingEl.className = 'related-loading';
-      loadingEl.textContent = 'finding related...';
-      resultsDiv.appendChild(loadingEl);
+            async function loadRelated(topResult) {
+                // show loading state
+                const loadingEl = document.createElement("div");
+                loadingEl.className = "related-loading";
+                loadingEl.textContent = "finding related...";
+                resultsDiv.appendChild(loadingEl);
 
-      try {
-        const res = await fetch(`${API_URL}/similar?uri=${encodeURIComponent(topResult.uri)}&format=v2`);
-        const data = await res.json();
+                try {
+                    const res = await fetch(
+                        `${API_URL}/similar?uri=${encodeURIComponent(topResult.uri)}&format=v2`,
+                    );
+                    const data = await res.json();
 
-        loadingEl.remove();
+                    loadingEl.remove();
 
-        const extracted = extractResults(data);
-        const related = extracted ? extracted.results : (Array.isArray(data) ? data : []);
+                    const extracted = extractResults(data);
+                    const related = extracted
+                        ? extracted.results
+                        : Array.isArray(data)
+                          ? data
+                          : [];
 
-        if (!related || related.length === 0) return;
+                    if (!related || related.length === 0) return;
 
-        // filter out the top result itself and limit to 4
-        const filtered = related
-          .filter(r => r.uri !== topResult.uri)
-          .slice(0, 4);
+                    // filter out the top result itself and limit to 4
+                    const filtered = related
+                        .filter((r) => r.uri !== topResult.uri)
+                        .slice(0, 4);
 
-        if (filtered.length === 0) return;
+                    if (filtered.length === 0) return;
 
-        const items = filtered.map(doc => {
-          const platform = doc.platform || 'leaflet';
-          const url = doc.url || null;
-          return url
-            ? `<a href="${url}" target="_blank" class="related-item">${escapeHtml(doc.title || 'Untitled')}</a>`
-            : `<span class="related-item">${escapeHtml(doc.title || 'Untitled')}</span>`;
-        }).join('');
+                    const items = filtered
+                        .map((doc) => {
+                            const platform = doc.platform || "leaflet";
+                            const url = doc.url || null;
+                            return url
+                                ? `<a href="${url}" target="_blank" class="related-item">${escapeHtml(doc.title || "Untitled")}</a>`
+                                : `<span class="related-item">${escapeHtml(doc.title || "Untitled")}</span>`;
+                        })
+                        .join("");
 
-        const relatedHtml = `
+                    const relatedHtml = `
           <div class="related-section">
-            <div class="related-header">related to "${escapeHtml(topResult.title?.slice(0, 30) || 'top result')}${topResult.title?.length > 30 ? '...' : ''}"</div>
+            <div class="related-header">related to "${escapeHtml(topResult.title?.slice(0, 30) || "top result")}${topResult.title?.length > 30 ? "..." : ""}"</div>
             <div class="related-items">${items}</div>
           </div>
         `;
 
-        resultsDiv.insertAdjacentHTML('beforeend', relatedHtml);
-      } catch (e) {
-        loadingEl.remove();
-      }
-    }
+                    resultsDiv.insertAdjacentHTML("beforeend", relatedHtml);
+                } catch (e) {
+                    loadingEl.remove();
+                }
+            }
 
-    loadTags();
-    loadPopular();
+            loadTags();
+            loadPopular();
 
-    fetch(`${API_URL}/stats`)
-      .then(r => r.json())
-      .then(data => {
-        statsDiv.innerHTML = `<a href="/stats">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a> · <a href="/subscribed.html">subscribed</a>`;
-        const headerStats = document.getElementById('header-stats');
-        headerStats.href = '/stats';
-        headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
-      })
-      .catch(() => {
-        statsDiv.textContent = 'connecting...';
-      });
-  </script>
-</body>
+            fetch(`${API_URL}/stats`)
+                .then((r) => r.json())
+                .then((data) => {
+                    statsDiv.innerHTML = `<a href="/stats">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a> · <a href="/subscribed.html">subscribed</a>`;
+                    const headerStats = document.getElementById("header-stats");
+                    headerStats.href = "/stats";
+                    headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
+                })
+                .catch(() => {
+                    statsDiv.textContent = "connecting...";
+                });
+        </script>
+    </body>
 </html>
