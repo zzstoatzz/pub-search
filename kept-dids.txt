@@ -1,0 +1,9 @@
+# Kept DIDs — accounts pub-search deliberately keeps in the corpus DESPITE a
+# true bulk-generated label. The taste-based counterpart to banned-dids.txt:
+# the label states what an account IS (and stays on the public stream); this
+# list is pub-search's own consumer policy about what to DO. The hard-drop
+# (when wired) skips these; /labels shows them as "labeled · kept".
+#
+# Format: one DID per line; inline '# <domain> <why kept>' comment.
+
+did:plc:4z33k5fjzw2ew3u373pg7ku5  # thefestivusproject.com a Seinfeld episode catalog, kept because it is delightful

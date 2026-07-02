@@ -65,6 +65,8 @@ pub fn build(b: *std.Build) void {
     // by policy.zig. mirrored at runtime by scripts/purge-*. see banned-dids.txt.
     const banned_dids_mod = b.createModule(.{ .root_source_file = b.path("../banned-dids.txt") });
     exe.root_module.addImport("banned_dids", banned_dids_mod);
+    const kept_dids_mod = b.createModule(.{ .root_source_file = b.path("../kept-dids.txt") });
+    exe.root_module.addImport("kept_dids", kept_dids_mod);
 
     b.installArtifact(exe);
 
@@ -89,6 +91,7 @@ pub fn build(b: *std.Build) void {
     });
 
     unit_tests.root_module.addImport("banned_dids", banned_dids_mod);
+    unit_tests.root_module.addImport("kept_dids", kept_dids_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");

@@ -405,6 +405,8 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
         }
         try jw.objectField("state");
         try jw.write(stateName(row.int(6)));
+        try jw.objectField("kept");
+        try jw.write(policy.isKept(row.text(0)));
         try jw.objectField("reason");
         try jw.write(row.text(7));
         try jw.objectField("docs");

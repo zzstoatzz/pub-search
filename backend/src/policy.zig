@@ -43,6 +43,19 @@ fn parseBannedEntries(comptime data: []const u8) []const BannedEntry {
     }
 }
 
+/// Accounts pub-search deliberately KEEPS despite a true bulk-generated label
+/// (taste is allowed in consumer policy, never in the label itself). The
+/// hard-drop must skip these; /labels shows them as labeled · kept.
+/// Source of truth: /kept-dids.txt (repo root).
+pub const KEPT_ENTRIES = parseBannedEntries(@embedFile("kept_dids"));
+
+pub fn isKept(did: []const u8) bool {
+    for (KEPT_ENTRIES) |e| {
+        if (std.mem.eql(u8, did, e.did)) return true;
+    }
+    return false;
+}
+
 pub fn isBanned(did: []const u8) bool {
     for (BANNED_DIDS) |banned| {
         if (std.mem.eql(u8, did, banned)) return true;
@@ -64,6 +77,11 @@ test "isBanned matches only the banned list" {
     try std.testing.expect(isBanned("did:plc:2s32mlusc66sjb256aenynfc"));
     try std.testing.expect(isBanned("did:plc:llnmp5t7s3u4dzjqyhp76h62"));
     try std.testing.expect(!isBanned("did:plc:ragtjsm2j2vknwkz3zp4oxrd"));
+}
+
+test "kept list: labeled-but-kept accounts, disjoint from banned" {
+    try std.testing.expect(isKept("did:plc:4z33k5fjzw2ew3u373pg7ku5")); // thefestivusproject
+    for (KEPT_ENTRIES) |e| try std.testing.expect(!isBanned(e.did)); // kept ∩ banned = ∅
 }
 
 test "banned entries carry their inline notes" {

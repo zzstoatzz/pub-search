@@ -41,6 +41,7 @@
     .site:hover { text-decoration: underline; }
     .site.nosite { color: var(--text-secondary); font-size: 0.8rem; }
     .docs { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; }
+    .kept { color: #2a9d5c; font-size: 0.68rem; border: 1px solid #1B7340; border-radius: 4px; padding: 0 0.35rem; cursor: help; }
     .reason { color: var(--text); font-size: 0.85rem; line-height: 1.45; margin-top: 0.4rem; }
     .reason.muted { color: var(--text-dim); }
     .evidence { color: var(--text-muted); font-size: 0.68rem; margin-top: 0.45rem; cursor: help; }
@@ -66,7 +67,8 @@
       Accounts that generate documents from a dataset (one per patent, recall, chart,
       episode, alert) get a signed
       <a href="https://atproto.com/specs/label" target="_blank" rel="noopener"><code>bulk-generated</code></a>
-      label and are excluded from search. The decision is automated: a pattern filter nominates,
+      label and are excluded from search — unless deliberately <span style="color:#2a9d5c">kept</span>.
+      The decision is automated: a pattern filter nominates,
       a model on <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a> decides.
     </p>
 
@@ -119,8 +121,11 @@
       const reason = a.reason
         ? `<div class="reason${muted ? ' muted' : ''}">${esc(a.reason)}</div>`
         : `<div class="reason muted">—</div>`;
+      const kept = a.kept
+        ? `<span class="kept" title="the label is true — but pub-search deliberately keeps this account in the index anyway. the label states what a thing is; whether to exclude it is our policy, and policy is allowed to have taste.">kept</span>`
+        : '';
       return `<div class="item">
-        <div class="item-top">${site}${docs}</div>
+        <div class="item-top">${site}${kept}${docs}</div>
         ${reason}
         ${evidence}
         <div class="did"><a href="${labelsUrl(a.did)}" target="_blank" rel="noopener" title="the signed label history for this account, straight from the labeler">${esc(a.did)}</a></div>
