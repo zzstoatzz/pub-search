@@ -77,7 +77,8 @@ the tools are popular and well-established. the assembly — wiring the firehose
 - [search-architecture.md](search-architecture.md) — FTS5 details, scaling considerations, future options
 - [content-extraction.md](content-extraction.md) — how content is extracted from each platform
 - [api.md](api.md) — API endpoint reference
-- [exclusions.md](exclusions.md) — the registry of manually excluded authors: the policy line, enforcement layers, and the evidence for each ban
+- [exclusions.md](exclusions.md) — the registry of manually excluded authors: the policy line (composed vs generated), enforcement layers, and the evidence for each ban
+- [spam-detection-plan.md](spam-detection-plan.md) — the labeler: pub-search autonomously labels accounts that generate documents from datasets (`machine-generated`, see [/labels](https://pub-search.waow.tech/labels)); doc is the original plan with an as-built status header
 - [agent-surfaces.md](agent-surfaces.md) — adopting pub-search for agents: MCP vs HTTP API, when to use which
 - [snapshot-pipeline.md](snapshot-pipeline.md) — how the keyword index ships (builder → manifest → R2 → verified adoption), what scales, and how to do production data surgery
 - [scaling-plan.md](scaling-plan.md) — the plan of record: snapshot builder → R2 → verified swap → live overlay (largely executed; see status header)

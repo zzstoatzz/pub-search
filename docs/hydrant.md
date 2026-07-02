@@ -1,6 +1,9 @@
-# hydrant: potential tap replacement
+# hydrant: potential tap replacement (HISTORICAL)
 
-evaluated 2026-03-22. **decision: not adopting now**, but worth revisiting.
+evaluated 2026-03-22. **decision: not adopting.** OBE — we replaced tap with
+our own verified firehose ingester (`ingester/`) on 2026-06-09, which covers
+the needs weighed here (verification, filtering, no ACK-blocking class of
+bugs). kept for the evaluation record.
 
 ## what is hydrant
 

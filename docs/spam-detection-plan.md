@@ -1,7 +1,13 @@
 # spam / bulk-mirror detection + a pub-search labeler
 
-status: **plan** (2026-06-29). supersedes the "next step" note in
-[exclusions.md](exclusions.md) about moving bans off a compiled-in list.
+status: **BUILT** (labeler live 2026-06-30; this doc is the original plan and
+drifts from the as-built system). as built: the label is `machine-generated`
+(renamed from `bulk-mirror`), the classifier is autonomous
+(`backend/src/ingest/classifier.zig`: heuristic pre-filter → majority-of-3
+model votes on co/core → emit), and the policy line evolved to **composed vs
+generated** (see [exclusions.md](exclusions.md)). the public face is
+[pub-search.waow.tech/labels](https://pub-search.waow.tech/labels). hard-drop
+(acting on labels) is still pending the notify/appeal loop.
 
 the design, in AT Protocol terms ([labels spec](https://atproto.com/specs/label)):
 labeling **is** the primitive — there is no review queue. a labeler *emits*

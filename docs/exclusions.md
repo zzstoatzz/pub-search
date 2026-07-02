@@ -68,11 +68,15 @@ cleanup after a ban (the stores that don't self-heal):
 > frequent, is a `banned_dids` turso table read at runtime so a ban becomes a
 > data change instead of a deploy.
 >
-> the planned end-state for that "next step" is a pub-search **labeler**: a ban
-> is a signed account label (`bulk-mirror`) that backs the `banned_dids` store
-> and that other AT Protocol readers can subscribe to. detection feeds a
-> human-reviewed queue, not an auto-banner. see
-> [spam-detection-plan.md](spam-detection-plan.md).
+> that labeler now EXISTS (2026-06-30): pub-search emits signed
+> `machine-generated` account labels autonomously — a firehose classifier
+> nominates, a model gate confirms (majority-of-3 votes), and a mislabel is
+> corrected by negation (`/admin/label?neg=1`), not a review queue. labels are
+> public at labeler.pub-search.waow.tech and explained at
+> [pub-search.waow.tech/labels](https://pub-search.waow.tech/labels). the
+> `banned_dids`-backed hard-drop is still pending (gated on the notify/appeal
+> loop). see [spam-detection-plan.md](spam-detection-plan.md) for the original
+> plan.
 
 ## the registry
 
