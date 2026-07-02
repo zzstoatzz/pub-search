@@ -110,12 +110,17 @@
         ? `<a class="site" href="https://${esc(host(a.site))}" target="_blank" rel="noopener">${esc(host(a.site))}</a>`
         : `<span class="site nosite">${esc(a.did)}</span>`;
       const pats = (a.patterns || []).slice(0, 2).map(esc).join(' · ');
-      const evidence = `<div class="evidence" title="what the pattern filter saw: its 0–1 score (≥ 0.50 nominates) and the repeated title shapes, digits shown as #. the verdict above came from the model, not this score.">score ${a.score.toFixed(2)}${pats ? ' · patterns: ' + pats : ''}</div>`;
+      // hand-banned entries never flowed through the pipeline — no docs in the
+      // corpus, no meaningful score. their evidence is the exclusions registry.
+      const evidence = a.docs > 0
+        ? `<div class="evidence" title="what the pattern filter saw: its 0–1 score (≥ 0.50 nominates) and the repeated title shapes, digits shown as #. the verdict above came from the model, not this score.">score ${a.score.toFixed(2)}${pats ? ' · patterns: ' + pats : ''}</div>`
+        : '';
+      const docs = a.docs > 0 ? `<span class="docs">${a.docs} docs</span>` : '<span class="docs">excluded before indexing</span>';
       const reason = a.reason
         ? `<div class="reason${muted ? ' muted' : ''}">${esc(a.reason)}</div>`
         : `<div class="reason muted">—</div>`;
       return `<div class="item">
-        <div class="item-top">${site}<span class="docs">${a.docs} docs</span></div>
+        <div class="item-top">${site}${docs}</div>
         ${reason}
         ${evidence}
         <div class="did"><a href="${labelsUrl(a.did)}" target="_blank" rel="noopener" title="the signed label history for this account, straight from the labeler">${esc(a.did)}</a></div>

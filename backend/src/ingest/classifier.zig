@@ -118,6 +118,9 @@ pub fn init() void {
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN state INTEGER NOT NULL DEFAULT 0") catch {};
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN review_attempts INTEGER NOT NULL DEFAULT 0") catch {};
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN reason TEXT NOT NULL DEFAULT ''") catch {};
+    // display identity for authors with no replica presence (seeded bans):
+    // the replica can't resolve a site for a DID it has zero docs for.
+    conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN site TEXT NOT NULL DEFAULT ''") catch {};
     g_conn = conn;
     logfire.info("classifier: author-stats ready (floor={d} threshold={d:.2})", .{ FLOOR, THRESHOLD });
 }
@@ -203,20 +206,27 @@ pub fn bootstrap() void {
 /// Idempotent per scoring version (re-emits after each version's negate+wipe).
 fn seedBannedRegistry(conn: zqlite.Conn) void {
     for (policy.BANNED_ENTRIES) |entry| {
-        const existing = (conn.row("SELECT state FROM author_stats WHERE did = ?", .{entry.did}) catch continue) orelse null;
-        if (existing) |row| {
-            const done = row.int(0) == STATE_LABELED;
-            row.deinit();
-            if (done) continue;
-        }
+        const was_labeled = blk: {
+            const row = (conn.row("SELECT state FROM author_stats WHERE did = ?", .{entry.did}) catch break :blk false) orelse break :blk false;
+            defer row.deinit();
+            break :blk row.int(0) == STATE_LABELED;
+        };
+        // note format: "drivepatents.com patent bot" — first token is the site,
+        // the rest describes what it is.
+        const site = if (std.mem.indexOfScalar(u8, entry.note, ' ')) |sp| entry.note[0..sp] else entry.note;
+        const kind = if (std.mem.indexOfScalar(u8, entry.note, ' ')) |sp| entry.note[sp + 1 ..] else "bulk-generated mirror";
         var reason_buf: [256]u8 = undefined;
-        const reason = std.fmt.bufPrint(&reason_buf, "{s} — hand-banned bulk-generated mirror; evidence in docs/exclusions.md", .{if (entry.note.len > 0) entry.note else entry.did}) catch entry.did;
+        const reason = std.fmt.bufPrint(&reason_buf, "hand-banned {s} — evidence in docs/exclusions.md", .{kind}) catch entry.note;
+        // row upsert is unconditional (refreshes site/reason wording); the
+        // stream emit happens once — re-emitting on every boot would be spam.
         conn.exec(
-            "INSERT OR REPLACE INTO author_stats (did, doc_count, len_sum, empty_titles, digit_titles, title_sample, sample_count, state, reason) VALUES (?, 0, 0, 0, 0, '', 0, ?, ?)",
-            .{ entry.did, STATE_LABELED, reason },
+            "INSERT OR REPLACE INTO author_stats (did, doc_count, len_sum, empty_titles, digit_titles, title_sample, sample_count, state, reason, site) VALUES (?, 0, 0, 0, 0, '', 0, ?, ?, ?)",
+            .{ entry.did, STATE_LABELED, reason, site },
         ) catch continue;
-        _ = labeler.emit(entry.did, labeler.LABEL_BULK_GENERATED, false) catch {};
-        logfire.info("classifier: seeded banned-registry label for {s} ({s})", .{ entry.did, entry.note });
+        if (!was_labeled) {
+            _ = labeler.emit(entry.did, labeler.LABEL_BULK_GENERATED, false) catch {};
+            logfire.info("classifier: seeded banned-registry label for {s} ({s})", .{ entry.did, entry.note });
+        }
     }
 }
 
@@ -367,7 +377,7 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
     try jw.objectField("authors");
     try jw.beginArray();
     var r = try conn.rows(
-        \\SELECT did, doc_count, len_sum, empty_titles, digit_titles, title_sample, state, reason
+        \\SELECT did, doc_count, len_sum, empty_titles, digit_titles, title_sample, state, reason, site
         \\FROM author_stats WHERE state != 0
         \\ORDER BY CASE state WHEN 2 THEN 0 WHEN 1 THEN 1 WHEN 4 THEN 2 ELSE 3 END, doc_count DESC
         \\LIMIT 500
@@ -387,7 +397,12 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
         try jw.objectField("did");
         try jw.write(row.text(0));
         try jw.objectField("site");
-        try jw.write(authorSite(arena.allocator(), row.text(0)) orelse "");
+        const stored_site = row.text(8);
+        if (stored_site.len > 0) {
+            try jw.write(stored_site);
+        } else {
+            try jw.write(authorSite(arena.allocator(), row.text(0)) orelse "");
+        }
         try jw.objectField("state");
         try jw.write(stateName(row.int(6)));
         try jw.objectField("reason");
