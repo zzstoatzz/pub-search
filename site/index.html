@@ -1186,9 +1186,8 @@
           const entityType = doc.type || 'article';
           const plat = doc.platform || 'leaflet';
           const docUrl = doc.url || null;
-          const platformConfig = window.PubPlatforms.byId[plat];
-          const platformBadge = platformConfig
-            ? `<span class="platform-badge" onclick="event.stopPropagation(); setPlatform('${escapeHtml(plat)}')" style="cursor:pointer">${escapeHtml(platformConfig.label)}</span>`
+          const platformBadge = window.PubPlatforms.byId[plat]
+            ? `<span class="platform-badge" onclick="event.stopPropagation(); setPlatform('${escapeHtml(plat)}')" style="cursor:pointer">${escapeHtml(window.PubPlatforms.labelOf(plat))}</span>`
             : '';
           const date = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '';
           const platformHome = getPlatformHome(plat, doc.basePath);
