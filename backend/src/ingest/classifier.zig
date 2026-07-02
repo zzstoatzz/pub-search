@@ -511,6 +511,14 @@ fn reviewWorker(allocator: Allocator, cfg: ReviewCfg, io: Io) void {
         // protocol can't carry it on the label, so we keep it ourselves) is
         // stored for the dashboard.
         const verdict: ?Verdict = reviewAuthor(allocator, cfg, io, did) catch |err| blk: {
+            if (err == error.NoCapacity) {
+                // nobody is serving the model (cocore has no queue — we are
+                // the queue). Pause; the candidate stays PENDING at its
+                // current attempt count.
+                logfire.info("classifier: no review capacity — queue paused 10m ({s} stays pending)", .{did});
+                io.sleep(Io.Duration.fromSeconds(600), .awake) catch {};
+                continue;
+            }
             logfire.warn("classifier: review error for {s}: {s} (will retry)", .{ did, @errorName(err) });
             break :blk null;
         };
@@ -585,6 +593,9 @@ fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8) !
 
     for (0..VOTES) |vote| {
         const v = (reviewVote(allocator, cfg, io, did, vote) catch |err| {
+            // capacity errors abort the whole review — the worker pauses the
+            // queue instead of counting an offline provider as a failed attempt
+            if (err == error.NoCapacity) return err;
             logfire.warn("classifier: vote {d} error for {s}: {s}", .{ vote, did, @errorName(err) });
             continue;
         }) orelse continue;
@@ -787,7 +798,11 @@ fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) !
     const text = try resp.toOwnedSlice();
     if (res.status != .ok) {
         defer allocator.free(text);
-        logfire.err("classifier: cocore {}: {s}", .{ res.status, text[0..@min(text.len, 200)] });
+        logfire.err("classifier: review provider {}: {s}", .{ res.status, text[0..@min(text.len, 200)] });
+        // 503 = no provider serving the model right now (cocore dispatch is
+        // fail-fast, no server-side queue — WE are the queue). Distinct error
+        // so the worker pauses instead of burning review attempts.
+        if (res.status == .service_unavailable) return error.NoCapacity;
         return error.CocoreApiError;
     }
     return text;
