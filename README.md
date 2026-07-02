@@ -38,7 +38,7 @@ GET /stats
 GET /health
 ```
 
-search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, offprint, greengale, whitewind, or other). use `format=v2` for a wrapped response with `total`, `hasMore`, and `results` fields.
+search returns three entity types: `article` (document in a publication), `looseleaf` (standalone document), `publication` (newsletter itself). each result includes a `platform` field (leaflet, pckt, offprint, greengale, whitewind, lemma, or other). use `format=v2` for a wrapped response with `total`, `hasMore`, and `results` fields.
 
 **modes**: `keyword` (default) uses FTS5 with BM25 + recency scoring. `semantic` uses voyage embeddings + [turbopuffer](https://turbopuffer.com) ANN. `hybrid` merges both via reciprocal rank fusion.
 

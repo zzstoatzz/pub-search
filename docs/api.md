@@ -17,7 +17,7 @@ full-text search across documents and publications.
 |-------|------|----------|-------------|
 | `q` | string | no* | search query (titles and content) |
 | `tag` | string | no | filter by tag (documents only) |
-| `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `whitewind`, `other` |
+| `platform` | string | no | filter by platform: `leaflet`, `pckt`, `offprint`, `greengale`, `whitewind`, `lemma`, `other` |
 | `since` | string | no | ISO date, filter to documents created after |
 | `author` | string | no | filter by author: DID (`did:plc:xyz`) or handle (`nate.bsky.social`). handles are resolved server-side via AT Protocol. |
 | `mode` | string | no | `keyword` (default), `semantic`, or `hybrid`. semantic uses voyage-4-lite embeddings + turbopuffer ANN. hybrid merges keyword + semantic via reciprocal rank fusion. |

@@ -19,8 +19,8 @@
 - **R2**: `leaflet-search-index` bucket for builder snapshots (`INDEX_R2_*` secrets on the backend app)
 
 ## platforms
-- leaflet, pckt, offprint, greengale, whitewind: known platforms
-- leaflet/pckt/offprint/greengale detected via basePath; whitewind via `com.whtwnd.*` collection
+- leaflet, pckt, offprint, greengale, whitewind, lemma: known platforms
+- leaflet/pckt/offprint/greengale/lemma detected via basePath; whitewind via `com.whtwnd.*` collection
 - other: site.standard.* documents not from a known platform
 
 ## search ranking
