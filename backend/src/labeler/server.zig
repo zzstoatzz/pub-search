@@ -200,12 +200,16 @@ pub const Server = struct {
 
     fn handleQueryLabels(self: *Server, conn: *websocket.Conn, query: []const u8) void {
         // parse uriPatterns param
-        const uri = queryParam(query, "uriPatterns") orelse {
+        const raw = queryParam(query, "uriPatterns") orelse {
             httpRespond(conn, "400 Bad Request", "application/json",
                 \\{"error":"InvalidRequest","message":"uriPatterns parameter required"}
             );
             return;
         };
+        // standards-following clients percent-encode the DID's colons
+        // (did%3Aplc%3A…); the store matches exact strings, so decode first.
+        var uri_buf: [512]u8 = undefined;
+        const uri = percentDecode(&uri_buf, raw) orelse raw;
 
         const labels = self.store.queryBySubject(self.allocator, uri) catch {
             httpRespond(conn, "500 Internal Server Error", "application/json",
@@ -296,6 +300,27 @@ fn httpRespond(conn: *websocket.Conn, status: []const u8, content_type: []const 
     if (body.len > 0) conn.writeFramed(body) catch return;
 }
 
+/// %XX-decode into buf (also '+' → space). Returns null if the input doesn't
+/// fit or has malformed escapes — caller falls back to the raw value.
+fn percentDecode(buf: []u8, s: []const u8) ?[]const u8 {
+    if (s.len > buf.len) return null;
+    var w: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) : (w += 1) {
+        if (s[i] == '%') {
+            if (i + 2 >= s.len) return null;
+            const hi = std.fmt.charToDigit(s[i + 1], 16) catch return null;
+            const lo = std.fmt.charToDigit(s[i + 2], 16) catch return null;
+            buf[w] = @intCast(hi * 16 + lo);
+            i += 3;
+        } else {
+            buf[w] = if (s[i] == '+') ' ' else s[i];
+            i += 1;
+        }
+    }
+    return buf[0..w];
+}
+
 fn queryParam(query: []const u8, name: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, query, '&');
     while (it.next()) |pair| {
@@ -353,6 +378,14 @@ fn writeJsonLabel(w: anytype, stored: *const store_mod.StoredLabel) !void {
 // === tests ===
 
 test "query param parsing" {
+    {
+        var buf: [64]u8 = undefined;
+        try std.testing.expectEqualStrings("did:plc:abc", percentDecode(&buf, "did%3Aplc%3Aabc").?);
+        try std.testing.expectEqualStrings("did:plc:abc", percentDecode(&buf, "did:plc:abc").?); // no-op
+        try std.testing.expectEqualStrings("a b", percentDecode(&buf, "a+b").?);
+        try std.testing.expect(percentDecode(&buf, "bad%2") == null); // truncated escape
+        try std.testing.expect(percentDecode(&buf, "bad%zz") == null); // non-hex
+    }
     try std.testing.expectEqualStrings("hello", queryParam("foo=hello&bar=world", "foo").?);
     try std.testing.expectEqualStrings("world", queryParam("foo=hello&bar=world", "bar").?);
     try std.testing.expect(queryParam("foo=hello", "bar") == null);
