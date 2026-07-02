@@ -134,12 +134,19 @@
       min-height: 3.5em; /* reserve space so rotation never shifts the form */
       opacity: 0; transition: opacity 0.9s ease;
     }
-    .factoid.show { opacity: 0.7; }
-    .factoid .fact-text { color: var(--text-secondary); }
+    .factoid.show { opacity: 0.9; }
+    /* halo in the page bg so the line stays legible over the star field
+       (same trick as the canvas neighborhood labels) */
+    .factoid .fact-text, .factoid .fact-detail {
+      text-shadow:
+        0 0 4px var(--bg), 0 0 8px var(--bg), 0 0 12px var(--bg),
+        0 1px 2px var(--bg);
+    }
+    .factoid .fact-text { color: var(--text); }
     .factoid a.fact-text:hover { color: var(--text-bright); }
     .factoid .fact-detail {
       display: block; margin-top: 0.2rem;
-      color: var(--text-muted); font-size: 11px;
+      color: var(--text-dim); font-size: 11px;
     }
     @media (prefers-reduced-motion: reduce) {
       .factoid { transition: none; }
