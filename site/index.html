@@ -1102,7 +1102,6 @@
       if (currentSince) searchUrl += `&since=${encodeURIComponent(currentSince)}`;
       if (currentAuthor) searchUrl += `&author=${encodeURIComponent(currentAuthor)}`;
       if (currentMode !== 'keyword') searchUrl += `&mode=${currentMode}`;
-      if (localStorage.getItem('showLabeled') === 'show') searchUrl += '&labeled=show';
 
       try {
         const res = await fetch(searchUrl);
@@ -1154,7 +1153,7 @@
           // bulk-generated accounts are hidden by default; when shown (opt-in
           // or kept), they wear the label. see /labels.
           const labeledBadge = doc.labeled
-            ? `<a href="/labels" class="labeled-badge" title="this account's documents are generated from a database rather than composed — ${doc.kept ? 'kept in results deliberately' : 'shown because you opted in'}. click for details.">bulk-generated</a>`
+            ? `<a href="/labels" class="labeled-badge" title="this account's documents are generated from a database rather than composed${doc.kept ? ' — kept in results deliberately' : ''}. click for details.">bulk-generated</a>`
             : '';
 
           // source badge (only shown in hybrid/semantic modes)

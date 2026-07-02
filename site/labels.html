@@ -56,10 +56,6 @@
     details.cleared[open] > summary::before { content: "▾ "; }
 
     .empty { color: var(--text-dim); font-size: 0.8rem; padding: 1rem 0; }
-    .pref { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.75rem; color: var(--text-dim); flex-wrap: wrap; }
-    .pref button { font: inherit; font-size: 0.72rem; background: var(--bg-subtle); color: var(--text-dim); border: 1px solid var(--border-subtle); border-radius: 5px; padding: 0.2rem 0.6rem; cursor: pointer; }
-    .pref button.active { color: var(--text-bright); border-color: #1B7340; }
-    .pref button:hover { color: var(--text-secondary); }
     .foot { color: var(--text-muted); font-size: 0.7rem; line-height: 1.7; margin-top: 2.2rem; border-top: 1px solid var(--row-border); padding-top: 0.8rem; }
   </style>
 </head>
@@ -93,12 +89,6 @@
         <div class="stage-name">label</div>
         <div class="stage-value" id="st-labeled">…</div>
       </div>
-    </div>
-
-    <div class="pref" id="pref">
-      <span class="pref-label">in <a href="/">your search results</a>, these accounts are</span>
-      <button type="button" data-v="hide">hidden</button>
-      <button type="button" data-v="show">shown, with a badge</button>
     </div>
 
     <div id="list"><div class="empty">loading…</div></div>
@@ -144,21 +134,6 @@
         <div class="did"><a href="${labelsUrl(a.did)}" target="_blank" rel="noopener" title="the signed label history for this account, straight from the labeler">${esc(a.did)}</a></div>
       </div>`;
     }
-
-    // per-browser preference, honored by the search page (&labeled=show).
-    // kept accounts are always shown either way.
-    (function () {
-      const buttons = document.querySelectorAll('#pref button');
-      const apply = () => {
-        const v = localStorage.getItem('showLabeled') === 'show' ? 'show' : 'hide';
-        buttons.forEach(b => b.classList.toggle('active', b.dataset.v === v));
-      };
-      buttons.forEach(b => b.addEventListener('click', () => {
-        localStorage.setItem('showLabeled', b.dataset.v);
-        apply();
-      }));
-      apply();
-    })();
 
     (async function () {
       let data;
