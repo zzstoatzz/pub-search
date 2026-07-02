@@ -18,6 +18,7 @@ WORKDIR /app
 # at the repo root, outside this dir's context). build.zig embeds it via
 # ../banned-dids.txt, which resolves to /banned-dids.txt from WORKDIR /app.
 COPY banned-dids.txt /banned-dids.txt
+COPY kept-dids.txt /kept-dids.txt
 COPY build.zig build.zig.zon ./
 COPY scripts ./scripts
 COPY src ./src

@@ -6,6 +6,7 @@ on:
     paths:
       - 'backend/**'
       - 'banned-dids.txt'
+      - 'kept-dids.txt'
 
 concurrency:
   group: backend-deploy
@@ -25,8 +26,8 @@ jobs:
 
       # banned-dids.txt is the repo-root single source of truth; the backend
       # build context is backend/, so stage a copy in before the remote build.
-      - name: Stage shared banned-dids.txt
-        run: cp banned-dids.txt backend/banned-dids.txt
+      - name: Stage shared DID lists
+        run: cp banned-dids.txt kept-dids.txt backend/
 
       - name: Deploy to Fly.io
         working-directory: backend

@@ -63,11 +63,11 @@
   <div class="container">
     <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span></h1>
     <p class="lead">
-      pub-search indexes writing that an author — a person or an AI — composed.
-      Accounts that generate documents from a dataset (one per patent, recall, chart,
-      episode, alert) get a signed
-      <a href="https://atproto.com/specs/label" target="_blank" rel="noopener"><code>bulk-generated</code></a>
-      label and are excluded from search — unless deliberately <span style="color:#2a9d5c">kept</span>.
+      pub-search indexes writing that someone — a person or an AI — actually composed.
+      Accounts that publish documents generated from a database (one page per patent,
+      recall, chart, or episode) are marked
+      <a href="https://atproto.com/specs/label" target="_blank" rel="noopener" title="the mark is an AT Protocol label — a signed, public annotation other services can subscribe to"><code>bulk-generated</code></a>
+      and left out of search results — unless deliberately <span style="color:#2a9d5c">kept</span>.
       The decision is automated: a pattern filter nominates,
       a model on <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a> decides.
     </p>
@@ -95,9 +95,10 @@
     <div id="cleared-wrap"></div>
 
     <p class="foot">
-      labels are emitted by <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank" rel="noopener">@pub-search.waow.tech</a>
-      and served at <a href="https://labeler.pub-search.waow.tech/xrpc/com.atproto.label.queryLabels?uriPatterns=did:plc:aywbh7hovtsqpv2pzkldmqdv" target="_blank" rel="noopener">labeler.pub-search.waow.tech</a>
-      — each account's DID links to its signed label history. wrong call? every label is reversible; reach out and we'll re-review.
+      these marks are <a href="https://atproto.com/specs/label" target="_blank" rel="noopener" title="AT Protocol labels: signed annotations served at labeler.pub-search.waow.tech — anyone can query or subscribe to them">published openly</a>,
+      so anyone can check them or build on them. think we got something wrong? every label is
+      reversible — <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank" rel="noopener">reach out</a>
+      and we'll take another look.
     </p>
   </div>
 
@@ -115,17 +116,19 @@
       // hand-banned entries never flowed through the pipeline — no docs in the
       // corpus, no meaningful score. their evidence is the exclusions registry.
       const evidence = a.docs > 0
-        ? `<div class="evidence" title="what the pattern filter saw: its 0–1 score (≥ 0.50 nominates) and the repeated title shapes, digits shown as #. the verdict above came from the model, not this score.">score ${a.score.toFixed(2)}${pats ? ' · patterns: ' + pats : ''}</div>`
+        ? `<div class="evidence" title="what the pattern filter saw: ${a.docs} documents, its 0–1 score (≥ 0.50 nominates) and the repeated title shapes, digits shown as #. the verdict above came from the model, not this score.">${a.docs} docs · score ${a.score.toFixed(2)}${pats ? ' · patterns: ' + pats : ''}</div>`
         : '';
-      const docs = a.docs > 0 ? `<span class="docs">${a.docs} docs</span>` : '<span class="docs">excluded before indexing</span>';
+      // the right-hand chip answers the question a visitor actually has:
+      // is this account in the search index or not?
+      const status = a.state !== 'labeled' ? ''
+        : a.kept
+          ? `<span class="kept" title="the label is true — but pub-search deliberately keeps this account in the index anyway. the label states what a thing is; whether to exclude it is our policy, and policy is allowed to have taste.">kept in search</span>`
+          : '<span class="docs">not in search</span>';
       const reason = a.reason
         ? `<div class="reason${muted ? ' muted' : ''}">${esc(a.reason)}</div>`
         : `<div class="reason muted">—</div>`;
-      const kept = a.kept
-        ? `<span class="kept" title="the label is true — but pub-search deliberately keeps this account in the index anyway. the label states what a thing is; whether to exclude it is our policy, and policy is allowed to have taste.">kept</span>`
-        : '';
       return `<div class="item">
-        <div class="item-top">${site}${kept}${docs}</div>
+        <div class="item-top">${site}${status}</div>
         ${reason}
         ${evidence}
         <div class="did"><a href="${labelsUrl(a.did)}" target="_blank" rel="noopener" title="the signed label history for this account, straight from the labeler">${esc(a.did)}</a></div>
