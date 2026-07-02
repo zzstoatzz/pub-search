@@ -124,12 +124,21 @@ def month_year(d: datetime.datetime) -> str:
 facts: list[dict] = []
 
 
-def fact(text: str, detail: str | None = None, url: str | None = None) -> None:
+def fact(
+    text: str,
+    detail: str | None = None,
+    url: str | None = None,
+    did: str | None = None,
+) -> None:
+    """`url` links to a document; `did` lets the frontend link to the
+    person's profile in the viewer's preferred client."""
     f: dict = {"text": text}
     if detail:
         f["detail"] = detail
     if url:
         f["url"] = url
+    if did:
+        f["did"] = did
     facts.append(f)
     print(f"  + {text}")
 
@@ -207,6 +216,7 @@ if best:
         f"the deepest import: “{title}” is dated {month_year(t_created)}, "
         f"but its record was written {span} later — a blog carrying its history onto the network",
         detail="the record key encodes its true write time",
+        did=did,
     )
 
 # ---- extremes -------------------------------------------------------------
@@ -250,7 +260,7 @@ rows = query(
 )
 if rows:
     did, n = rows[0]
-    fact(f"the most prolific author is {handle_for(did)} — {int(n):,} documents")
+    fact(f"the most prolific author is {handle_for(did)} — {int(n):,} documents", did=did)
 
 # ---- shape of the network ---------------------------------------------------
 

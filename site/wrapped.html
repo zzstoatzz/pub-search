@@ -151,22 +151,46 @@
       animation: fact-pip 2.4s ease-in-out infinite;
     }
     @keyframes fact-pip { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.9; } }
+    /* the readout is one visible face of a wheel on a horizontal axle:
+       each fact ticks in rotating up from below while the old face tips
+       away above, then the garbled text snaps into focus. */
+    .fact-stage {
+      position: relative; perspective: 800px;
+      min-height: 3.1em;
+      transition: height 0.4s ease;
+    }
+    .fact-face {
+      position: absolute; top: 0; left: 0; right: 0;
+      backface-visibility: hidden; will-change: transform, opacity;
+      transition:
+        transform 0.5s cubic-bezier(0.22, 1.22, 0.36, 1),
+        opacity 0.5s ease;
+    }
+    .fact-face.enter { transform: rotateX(-76deg) translateY(46%); opacity: 0; }
+    .fact-face.out   { transform: rotateX(76deg) translateY(-46%); opacity: 0; }
     .fact-text {
       display: block; color: var(--text); font-size: 13px; line-height: 1.55;
-      min-height: 3.1em; /* ~2 lines reserved; longer facts grow the panel,
-                            which sits at the end of the flow so nothing shifts */
       text-decoration: none; overflow-wrap: break-word;
     }
-    a.fact-text:hover { color: var(--text-bright); }
-    .fact-text .scramble { color: var(--text-muted); }
+    .fact-text.link { cursor: pointer; }
+    .fact-text.link:hover { color: var(--text-bright); }
+    /* linked facts get a quiet affordance once decoded: dotted underline + ↗ */
+    .fact-text.link.decoded {
+      text-decoration: underline dotted color-mix(in srgb, var(--accent) 55%, transparent);
+      text-underline-offset: 3px;
+    }
+    .fact-goto { color: var(--accent); margin-left: 0.35em; font-size: 12px; }
+    .fact-text .scramble, .fact-detail .scramble { color: var(--text-muted); }
     .fact-detail {
       display: block; margin-top: 0.35rem;
       color: var(--text-dim); font-size: 11px; line-height: 1.45;
-      min-height: 1.45em;
     }
     @media (prefers-reduced-motion: reduce) {
       .factoid-panel { transition: none; }
       .factoid-head .pip { animation: none; opacity: 0.6; }
+      .fact-stage { transition: none; }
+      .fact-face { transition: opacity 0.2s ease; }
+      .fact-face.enter, .fact-face.out { transform: none; }
     }
 
     .entry form { display: flex; gap: 0.5rem; }
@@ -498,8 +522,7 @@
           '</form>' +
           '<div class="factoid-panel" id="factoid-panel" aria-live="polite">' +
             '<div class="factoid-head"><span class="pip"></span>corpus telemetry</div>' +
-            '<span class="fact-text" id="fact-text"></span>' +
-            '<span class="fact-detail" id="fact-detail"></span>' +
+            '<div class="fact-stage" id="fact-stage"></div>' +
           '</div>' +
         '</div>';
       startFactoids();
@@ -615,65 +638,121 @@
         .catch(function() {});
     }
 
-    // scramble-decode `text` into `el`: characters resolve left to right,
-    // the still-encoded tail churns through random glyphs. ~35 lines, no lib.
-    function decodeInto(el, text, done) {
+    function randGlyph() {
+      return SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)];
+    }
+    function garble(text) {
+      var out = '';
+      for (var i = 0; i < text.length; i++) out += text[i] === ' ' ? ' ' : randGlyph();
+      return out;
+    }
+
+    // snap `el` from garbled to `text`: every character position resolves
+    // independently, in random order, over ~`dur` ms — the whole line comes
+    // into focus at once rather than being drawn out left to right. still
+    // ~30 lines of vanilla js, no lib.
+    function snapDecode(el, text, dur, done) {
       var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (reduce) { el.textContent = text; if (done) done(); return; }
-      var len = text.length;
-      var resolved = 0;
-      var TICK_MS = 24;
-      // resolve rate scales with length so long and short facts decode in
-      // roughly the same ~1.6s
-      var perTick = Math.max(1, Math.ceil(len / (1600 / TICK_MS)));
+      if (reduce || !text.length) { el.textContent = text; if (done) done(); return; }
+      dur = dur || 620;
+      // shuffled queue of positions still garbled (spaces resolve for free)
+      var queue = [];
+      for (var i = 0; i < text.length; i++) if (text[i] !== ' ') queue.push(i);
+      for (var j = queue.length - 1; j > 0; j--) {
+        var k = Math.floor(Math.random() * (j + 1));
+        var t = queue[j]; queue[j] = queue[k]; queue[k] = t;
+      }
+      var locked = new Array(text.length);
+      var TICK_MS = 40;
+      var perTick = Math.max(1, Math.ceil(queue.length / (dur / TICK_MS)));
       var timer = setInterval(function() {
         if (!el.isConnected) { clearInterval(timer); return; }
-        resolved = Math.min(len, resolved + perTick);
-        var head = text.slice(0, resolved);
-        var tailLen = Math.min(12, len - resolved); // churn only a short frontier
-        var tail = '';
-        for (var i = 0; i < tailLen; i++) {
-          var src = text[resolved + i];
-          tail += (src === ' ') ? ' '
-            : SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)];
-        }
-        el.textContent = '';
-        el.appendChild(document.createTextNode(head));
-        if (tailLen) {
-          var s = document.createElement('span');
-          s.className = 'scramble';
-          s.textContent = tail;
-          el.appendChild(s);
-        }
-        if (resolved >= len) {
+        for (var n = 0; n < perTick && queue.length; n++) locked[queue.pop()] = true;
+        if (!queue.length) {
           clearInterval(timer);
+          el.textContent = text;
           if (done) done();
+          return;
         }
+        // resolved chars in place; the rest keep churning
+        var html = document.createDocumentFragment();
+        var run = '', runLocked = null;
+        function flush() {
+          if (!run) return;
+          if (runLocked) html.appendChild(document.createTextNode(run));
+          else {
+            var s = document.createElement('span');
+            s.className = 'scramble'; s.textContent = run;
+            html.appendChild(s);
+          }
+          run = '';
+        }
+        for (var p = 0; p < text.length; p++) {
+          var isLocked = locked[p] || text[p] === ' ';
+          if (runLocked !== null && isLocked !== runLocked) flush();
+          runLocked = isLocked;
+          run += isLocked ? text[p] : randGlyph();
+        }
+        flush();
+        el.textContent = '';
+        el.appendChild(html);
       }, TICK_MS);
     }
 
     function runFactoids() {
       var next = 0;
-      var HOLD_MS = 8000;
+      var HOLD_MS = 7500;
       function show() {
         var panel = document.getElementById('factoid-panel');
-        var textEl = document.getElementById('fact-text');
-        var detailEl = document.getElementById('fact-detail');
-        if (!panel || !textEl) return; // left the entry screen — rotation ends
+        var stage = document.getElementById('fact-stage');
+        if (!panel || !stage) return; // left the entry screen — rotation ends
         panel.classList.add('on');
         var f = FACTS[next]; next = (next + 1) % FACTS.length;
-        // the whole readout links out when the fact points at a document
-        if (f.url) {
-          textEl.style.cursor = 'pointer';
-          textEl.onclick = function() { window.open(f.url, '_blank', 'noopener'); };
-        } else {
-          textEl.style.cursor = '';
-          textEl.onclick = null;
+
+        // the wheel ticks: the old face tips away over the top while the new
+        // face rotates up from below, arriving garbled
+        var old = stage.querySelector('.fact-face:not(.out)');
+        if (old) {
+          old.classList.add('out');
+          setTimeout(function() { old.remove(); }, 550);
         }
-        detailEl.textContent = '';
-        decodeInto(textEl, f.text, function() {
-          if (f.detail && detailEl.isConnected) decodeInto(detailEl, f.detail);
-        });
+
+        var face = document.createElement('div');
+        face.className = 'fact-face enter';
+        // a fact links to its document, or (via the viewer's preferred
+        // client) to the person it's about
+        var href = f.url || (f.did ? profileUrl(f.did) : null);
+        if (href === '#') href = null;
+        var textEl = document.createElement('span');
+        textEl.className = 'fact-text' + (href ? ' link' : '');
+        textEl.textContent = garble(f.text);
+        if (href) textEl.onclick = function() { window.open(href, '_blank', 'noopener'); };
+        face.appendChild(textEl);
+        var detailEl = null;
+        if (f.detail) {
+          detailEl = document.createElement('span');
+          detailEl.className = 'fact-detail';
+          detailEl.textContent = garble(f.detail);
+          face.appendChild(detailEl);
+        }
+        stage.appendChild(face);
+        stage.style.height = face.offsetHeight + 'px'; // faces are absolute — drive height explicitly
+        requestAnimationFrame(function() { requestAnimationFrame(function() {
+          face.classList.remove('enter');
+          // decode as the face lands: everything snaps into focus together
+          setTimeout(function() {
+            snapDecode(textEl, f.text, 620, function() {
+              if (!href || !textEl.isConnected) return;
+              textEl.classList.add('decoded');
+              var go = document.createElement('span');
+              go.className = 'fact-goto';
+              go.textContent = '↗';
+              textEl.appendChild(go);
+            });
+            if (detailEl) snapDecode(detailEl, f.detail);
+          }, 220);
+        }); });
+
         setTimeout(show, HOLD_MS);
       }
       show();
