@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-07-02T03:43:14+00:00",
+  "facts": [
+    {
+      "text": "the first document this index watched arrive live off the firehose was “do we not token predict?” by @enflux.bsky.social, January 1, 2026",
+      "detail": "verified: its self-reported date, record-key timestamp, and arrival time all agree",
+      "url": "https://enflux.leaflet.pub/3mbd77x5xp22u"
+    },
+    {
+      "text": "the earliest verifiably-dated leaflet document is “Tyler Angert's Stream” by @charlesharri.es, May 16, 2022",
+      "detail": "its record-key timestamp corroborates the date it claims",
+      "url": "https://charlesharries.leaflet.pub/stream/tyler-angerts-stream"
+    },
+    {
+      "text": "the earliest verifiably-dated pckt document is “The Algorithmic and Systemic Accountability Project: A Very Short Story” by @hamnox.bsky.social, November 5, 2024",
+      "detail": "its record-key timestamp corroborates the date it claims",
+      "url": "https://hamnox.pckt.blog/the-algorithmic-and-systemic-accountability-project-a-very-short-story-zbabdj6"
+    },
+    {
+      "text": "the earliest verifiably-dated greengale document is “some stuff that's kinda sad i guess (poem/lyrics)” by @symmetricalboy.com, May 8, 2025",
+      "detail": "its record-key timestamp corroborates the date it claims",
+      "url": "https://greengale.app/symmetricalboy.com/3lonfyvbkni2s"
+    },
+    {
+      "text": "the earliest verifiably-dated offprint document is “Publishing on the ATmosphere” by @tynanpurdy.com, January 19, 2026",
+      "detail": "its record-key timestamp corroborates the date it claims",
+      "url": "https://tynanistyping.offprint.app/a/3mcsvjjceei23-publishing-on-the-atmosphere"
+    },
+    {
+      "text": "the earliest verifiably-dated whitewind document is “Testing” by @lokxii.bsky.social, March 10, 2024",
+      "detail": "its record-key timestamp corroborates the date it claims"
+    },
+    {
+      "text": "the deepest import: “Direct Examination Of Ron Shipp Afternoon Part 1” is dated february 1995, but its record was written 30.9 years later — a blog carrying its history onto the network",
+      "detail": "the record key encodes its true write time"
+    },
+    {
+      "text": "the longest document in the index is “Grok’s answers about more possible ways to sanction Ruzzia if they were really behind the assassination of Charlie Kirk” by @zendayafan.bsky.social — 18,719 words"
+    },
+    {
+      "text": "the most-used tag is “atproto” — 541 documents carry it"
+    },
+    {
+      "text": "10,961 tags have been used exactly once, ever"
+    },
+    {
+      "text": "the most prolific author is @coryd.dev — 942 documents"
+    },
+    {
+      "text": "1,313 of 3,153 authors have published exactly one document — the long tail is 42% of the network"
+    },
+    {
+      "text": "13% of all 37,261 documents were written in the last 30 days"
+    }
+  ]
+}

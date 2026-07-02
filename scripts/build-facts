@@ -1,0 +1,286 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "pydantic-settings"]
+# ///
+"""build site/facts.json — corpus factoids for the wrapped entry screen.
+
+each fact is display-ready: {"text": ..., "detail": ...?, "url": ...?}.
+the frontend just rotates through them; all judgment lives here.
+
+timestamps are triangulated across three clocks where it matters:
+  - createdAt (self-reported, freely backdatable — imports do this legitimately)
+  - the rkey TID (assigned at write time by convention)
+  - indexed_at (when we saw it on the firehose; unforgeable but only
+    meaningful after our ingester existed)
+"""
+
+import datetime
+import json
+import os
+import time
+from pathlib import Path
+
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+    )
+    turso_url: str
+    turso_token: str
+
+    @property
+    def turso_host(self) -> str:
+        return self.turso_url.removeprefix("libsql://")
+
+
+settings = Settings()  # type: ignore
+
+
+def query(sql: str) -> list[list]:
+    r = httpx.post(
+        f"https://{settings.turso_host}/v2/pipeline",
+        headers={"Authorization": f"Bearer {settings.turso_token}"},
+        json={
+            "requests": [
+                {"type": "execute", "stmt": {"sql": sql}},
+                {"type": "close"},
+            ]
+        },
+        timeout=60,
+    )
+    r.raise_for_status()
+    result = r.json()["results"][0]
+    if result["type"] == "error":
+        raise RuntimeError(f"{result['error']['message']}\n  sql: {sql}")
+    rows = result["response"]["result"]["rows"]
+    time.sleep(0.5)  # pace: don't stack scans on turso
+    return [[c.get("value") for c in row] for row in rows]
+
+
+B32 = "234567abcdefghijklmnopqrstuvwxyz"
+
+
+def tid_time(rkey: str | None) -> datetime.datetime | None:
+    if not rkey or len(rkey) != 13 or any(c not in B32 for c in rkey):
+        return None
+    v = 0
+    for c in rkey:
+        v = v * 32 + B32.index(c)
+    try:
+        t = datetime.datetime.fromtimestamp((v >> 10) / 1e6, datetime.UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+    # sanity window: a "TID" outside the atproto era is a decorative rkey,
+    # not a timestamp
+    now = datetime.datetime.now(datetime.UTC)
+    if t.year < 2022 or t > now + datetime.timedelta(days=1):
+        return None
+    return t
+
+
+def parse_iso(s: str | None) -> datetime.datetime | None:
+    if not s:
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=datetime.UTC)
+
+
+def agree(a: datetime.datetime | None, b: datetime.datetime | None, days: float = 1.0) -> bool:
+    return a is not None and b is not None and abs((a - b).total_seconds()) < days * 86400
+
+
+_handle_cache: dict[str, str] = {}
+
+
+def handle_for(did: str) -> str:
+    if did in _handle_cache:
+        return _handle_cache[did]
+    name = did
+    try:
+        if did.startswith("did:plc:"):
+            r = httpx.get(f"https://plc.directory/{did}", timeout=10)
+            aka = r.json().get("alsoKnownAs") or []
+            if aka:
+                name = "@" + aka[0].removeprefix("at://")
+        elif did.startswith("did:web:"):
+            name = did.removeprefix("did:web:")
+    except Exception:
+        pass
+    _handle_cache[did] = name
+    return name
+
+
+def month_year(d: datetime.datetime) -> str:
+    return d.strftime("%B %Y").lower()
+
+
+facts: list[dict] = []
+
+
+def fact(text: str, detail: str | None = None, url: str | None = None) -> None:
+    f: dict = {"text": text}
+    if detail:
+        f["detail"] = detail
+    if url:
+        f["url"] = url
+    facts.append(f)
+    print(f"  + {text}")
+
+
+LIVE = "is_bridgyfed = 0"
+
+# ---- firsts & provenance --------------------------------------------------
+
+# indexed_at is only firehose truth after the ingester existed; anything
+# earlier was stamped by backfill (often copied from created_at)
+INGESTER_EPOCH = "2026-01-01"
+
+print("firsts...")
+rows = query(
+    f"SELECT rkey, created_at, indexed_at, title, did, base_path, path "
+    f"FROM documents WHERE {LIVE} AND indexed_at >= '{INGESTER_EPOCH}' "
+    f"ORDER BY indexed_at ASC LIMIT 2000"
+)
+for rkey, created, indexed, title, did, base_path, path in rows:
+    t_tid, t_created, t_indexed = tid_time(rkey), parse_iso(created), parse_iso(indexed)
+    if agree(t_tid, t_created) and agree(t_tid, t_indexed):
+        url = f"https://{base_path}{path}" if base_path and path else None
+        fact(
+            f"the first document this index watched arrive live off the firehose was "
+            f"“{title}” by {handle_for(did)}, {t_tid:%B %-d, %Y}",
+            detail="verified: its self-reported date, record-key timestamp, and arrival time all agree",
+            url=url,
+        )
+        break
+
+# earliest verifiably-dated document per platform: the claimed date is
+# corroborated by the record-key timestamp (skip 'other')
+for (platform,) in query(
+    f"SELECT DISTINCT platform FROM documents WHERE {LIVE} AND platform != 'other'"
+):
+    rows = query(
+        f"SELECT rkey, created_at, title, did, base_path, path FROM documents "
+        f"WHERE {LIVE} AND platform = '{platform}' AND created_at >= '2022' "
+        f"ORDER BY created_at ASC LIMIT 500"
+    )
+    for rkey, created, title, did, base_path, path in rows:
+        t_created = parse_iso(created)
+        if agree(tid_time(rkey), t_created):
+            url = f"https://{base_path}{path}" if base_path and path else None
+            fact(
+                f"the earliest verifiably-dated {platform} document is “{title}” "
+                f"by {handle_for(did)}, {t_created:%B %-d, %Y}",
+                detail="its record-key timestamp corroborates the date it claims",
+                url=url,
+            )
+            break
+
+# deepest backdate — framed neutrally: imports legitimately carry original dates
+print("deepest import...")
+rows = query(
+    f"SELECT rkey, created_at, title, did FROM documents "
+    f"WHERE {LIVE} AND created_at >= '1995' ORDER BY created_at ASC LIMIT 300"
+)
+best_gap, best = datetime.timedelta(days=90), None
+for rkey, created, title, did in rows:
+    t_tid, t_created = tid_time(rkey), parse_iso(created)
+    if t_tid and t_created and (t_tid - t_created) > best_gap:
+        best_gap, best = t_tid - t_created, (t_created, t_tid, title, did)
+if best:
+    t_created, t_tid, title, did = best
+    years = best_gap.days / 365.25
+    span = f"{years:.1f} years" if years >= 1 else f"{best_gap.days} days"
+    fact(
+        f"the deepest import: “{title}” is dated {month_year(t_created)}, "
+        f"but its record was written {span} later — a blog carrying its history onto the network",
+        detail="the record key encodes its true write time",
+    )
+
+# ---- extremes -------------------------------------------------------------
+
+print("longest doc...")
+rows = query(
+    f"SELECT title, did, content, base_path, path FROM documents "
+    f"WHERE {LIVE} ORDER BY length(content) DESC LIMIT 10"
+)
+# rank by actual words, not characters — the char champion can be one
+# giant unbroken test string
+best_doc = max(rows, key=lambda r: len((r[2] or "").split()), default=None)
+if best_doc:
+    title, did, content, base_path, path = best_doc
+    words = len((content or "").split())
+    url = f"https://{base_path}{path}" if base_path and path else None
+    fact(
+        f"the longest document in the index is “{title}” by {handle_for(did)} — {words:,} words",
+        url=url,
+    )
+
+print("tags...")
+rows = query(
+    "SELECT tag, COUNT(*) as n FROM document_tags GROUP BY tag ORDER BY n DESC LIMIT 1"
+)
+if rows:
+    tag, n = rows[0]
+    fact(f"the most-used tag is “{tag}” — {int(n):,} documents carry it")
+
+rows = query(
+    "SELECT COUNT(*) FROM (SELECT tag FROM document_tags GROUP BY tag HAVING COUNT(*) = 1)"
+)
+if rows and int(rows[0][0]):
+    fact(f"{int(rows[0][0]):,} tags have been used exactly once, ever")
+
+print("authors...")
+rows = query(
+    f"SELECT did, COUNT(*) as n FROM documents WHERE {LIVE} GROUP BY did ORDER BY n DESC LIMIT 1"
+)
+if rows:
+    did, n = rows[0]
+    fact(f"the most prolific author is {handle_for(did)} — {int(n):,} documents")
+
+# ---- shape of the network ---------------------------------------------------
+
+rows = query(
+    f"SELECT (SELECT COUNT(*) FROM (SELECT did FROM documents WHERE {LIVE} GROUP BY did HAVING COUNT(*) = 1)), "
+    f"(SELECT COUNT(DISTINCT did) FROM documents WHERE {LIVE})"
+)
+if rows:
+    ones, total = int(rows[0][0]), int(rows[0][1])
+    if total:
+        fact(
+            f"{ones:,} of {total:,} authors have published exactly one document — "
+            f"the long tail is {round(ones / total * 100)}% of the network"
+        )
+
+rows = query(
+    f"SELECT (SELECT COUNT(*) FROM documents WHERE {LIVE} AND created_at >= datetime('now', '-30 days')), "
+    f"(SELECT COUNT(*) FROM documents WHERE {LIVE})"
+)
+if rows:
+    recent, total = int(rows[0][0]), int(rows[0][1])
+    if total and recent:
+        fact(
+            f"{round(recent / total * 100)}% of all {total:,} documents were written in the last 30 days"
+        )
+
+# ---- write ------------------------------------------------------------------
+
+out = Path(__file__).parent.parent / "site" / "facts.json"
+out.write_text(
+    json.dumps(
+        {
+            "generated_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+            "facts": facts,
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+    + "\n"
+)
+print(f"\nwrote {len(facts)} facts to {out}")

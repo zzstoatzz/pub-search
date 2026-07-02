@@ -125,6 +125,26 @@
       line-height: 1.4;
     }
     .freshness .dot { color: var(--accent); }
+    /* ephemeral corpus factoid — a quiet rotating line beneath the entry form.
+       text-only and dim, styled like .freshness, so it reads as part of the
+       galaxy backdrop rather than competing with it. */
+    .factoid {
+      margin-top: 2.75rem; text-align: center;
+      font-size: 12px; line-height: 1.5;
+      min-height: 3.5em; /* reserve space so rotation never shifts the form */
+      opacity: 0; transition: opacity 0.9s ease;
+    }
+    .factoid.show { opacity: 0.7; }
+    .factoid .fact-text { color: var(--text-secondary); }
+    .factoid a.fact-text:hover { color: var(--text-bright); }
+    .factoid .fact-detail {
+      display: block; margin-top: 0.2rem;
+      color: var(--text-muted); font-size: 11px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .factoid { transition: none; }
+    }
+
     .entry form { display: flex; gap: 0.5rem; }
     .entry .ta-wrap { position: relative; flex: 1; min-width: 0; }
     .entry input {
@@ -452,7 +472,9 @@
             '</div>' +
             '<button type="submit">go</button>' +
           '</form>' +
+          '<div class="factoid" id="factoid" aria-live="polite"></div>' +
         '</div>';
+      startFactoids();
       var form = document.getElementById('entry-form');
       var input = document.getElementById('entry-input');
       input.focus();
@@ -536,6 +558,47 @@
         if (!input.contains(e.target) && !dd.contains(e.target)) hide();
       });
       input.addEventListener('blur', function() { setTimeout(hide, 150); });
+    }
+
+    // ----- ephemeral corpus factoids (entry screen only) -----------------
+    // facts.json is precomputed by scripts/build-facts (nightly-runnable) so
+    // the fun-but-expensive queries never touch the live database. Each fact
+    // fades through beneath the entry form; the element disappearing (handle
+    // entered) ends the rotation naturally.
+    var FACTS = null;
+    function startFactoids() {
+      var el = document.getElementById('factoid');
+      if (!el) return;
+      if (FACTS) { rotateFactoids(el); return; }
+      fetch('facts.json')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) {
+          if (!d || !Array.isArray(d.facts) || !d.facts.length) return;
+          FACTS = d.facts;
+          if (document.getElementById('factoid')) rotateFactoids(document.getElementById('factoid'));
+        })
+        .catch(function() {});
+    }
+    function rotateFactoids(el) {
+      var i = Math.floor(Math.random() * FACTS.length);
+      var HOLD_MS = 9000, FADE_MS = 950;
+      function show() {
+        if (!document.getElementById('factoid')) return; // left the entry screen
+        var f = FACTS[i];
+        i = (i + 1) % FACTS.length;
+        var inner = f.url
+          ? '<a class="fact-text" href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.text) + '</a>'
+          : '<span class="fact-text">' + esc(f.text) + '</span>';
+        if (f.detail) inner += '<span class="fact-detail">' + esc(f.detail) + '</span>';
+        el.innerHTML = inner;
+        el.classList.add('show');
+        setTimeout(function() {
+          if (!document.getElementById('factoid')) return;
+          el.classList.remove('show');
+          setTimeout(show, FADE_MS);
+        }, HOLD_MS);
+      }
+      show();
     }
 
     // ----- rank badge ---------------------------------------------------
@@ -1072,7 +1135,7 @@
       // gentle parallax drift; mouseOn gates the near-cursor glow.
       var mtx = 0, mty = 0, mx = 0, my = 0, mouseOn = false, overContent = false;
       // foreground blocks the atlas labels should never draw over (text/cards/form)
-      var CONTENT_SEL = '.lead, .sub, #entry-form, .who, .card, .lf-typeahead-dropdown';
+      var CONTENT_SEL = '.lead, .sub, #entry-form, .factoid, .who, .card, .lf-typeahead-dropdown';
       var clusterCentroids = []; // [{cid,label,x,y,n}] in screen space, rebuilt on build()
 
       var bg = '#050505', pal = GALAXY_DARK;
