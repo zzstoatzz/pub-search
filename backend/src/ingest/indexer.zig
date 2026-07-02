@@ -236,6 +236,8 @@ pub fn insertDocument(
             // e.g., "pub.leaflet.content" indicates leaflet even with custom domain
             if (std.mem.startsWith(u8, ct, "pub.leaflet.")) {
                 actual_platform = "leaflet";
+            } else if (std.mem.startsWith(u8, ct, "pub.lemma.")) {
+                actual_platform = "lemma";
             }
         }
     }
