@@ -262,15 +262,15 @@ fn applyLabelPolicy(alloc: Allocator, body: []const u8, show: bool) ![]const u8 
     const root = try json.parseFromSliceLeaky(json.Value, alloc, body, .{});
     if (root != .array) return body; // error payloads etc. pass through
 
-    var out: json.Array = .init(alloc);
+    var out = json.Array.init(alloc);
     for (root.array.items) |item| {
         var result = item;
         if (zat.json.getString(result, "did")) |did| {
             if (classifier.isLabeledDid(did)) {
                 const kept = policy.isKept(did);
                 if (!kept and !show) continue;
-                try result.object.put("labeled", .{ .bool = true });
-                try result.object.put("kept", .{ .bool = kept });
+                try result.object.put(alloc, "labeled", .{ .bool = true });
+                try result.object.put(alloc, "kept", .{ .bool = kept });
             }
         }
         try out.append(result);
