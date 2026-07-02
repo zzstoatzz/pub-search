@@ -69,7 +69,7 @@ cleanup after a ban (the stores that don't self-heal):
 > data change instead of a deploy.
 >
 > that labeler now EXISTS (2026-06-30): pub-search emits signed
-> `machine-generated` account labels autonomously — a firehose classifier
+> `bulk-generated` account labels autonomously — a firehose classifier
 > nominates, a model gate confirms (majority-of-3 votes), and a mislabel is
 > corrected by negation (`/admin/label?neg=1`), not a review queue. labels are
 > public at labeler.pub-search.waow.tech and explained at

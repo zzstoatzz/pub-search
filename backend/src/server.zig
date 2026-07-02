@@ -796,7 +796,7 @@ fn handleLabel(request: *http.Server.Request, target: []const u8) !void {
         try request.respond("{\"error\":\"missing did param\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
         return;
     };
-    const val = parseQueryParam(alloc, target, "val") catch labeler.LABEL_MACHINE_GENERATED;
+    const val = parseQueryParam(alloc, target, "val") catch labeler.LABEL_BULK_GENERATED;
     const neg = blk: {
         const v = parseQueryParam(alloc, target, "neg") catch break :blk false;
         break :blk mem.eql(u8, v, "1") or mem.eql(u8, v, "true");
@@ -813,7 +813,7 @@ fn handleLabel(request: *http.Server.Request, target: []const u8) !void {
 
     // a negation is the operator overruling the model — keep the classifier's
     // book in sync so /labels reflects the retraction and the DID never re-flags.
-    if (neg and mem.eql(u8, val, labeler.LABEL_MACHINE_GENERATED)) classifier.markNegated(did);
+    if (neg and mem.eql(u8, val, labeler.LABEL_BULK_GENERATED)) classifier.markNegated(did);
 
     const body = try std.fmt.allocPrint(alloc, "{{\"ok\":true,\"seq\":{d},\"did\":\"{s}\",\"val\":\"{s}\",\"neg\":{}}}", .{ seq, did, val, neg });
     try request.respond(body, .{ .extra_headers = json_hdr });

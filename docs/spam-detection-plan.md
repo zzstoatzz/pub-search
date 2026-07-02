@@ -1,8 +1,7 @@
 # spam / bulk-mirror detection + a pub-search labeler
 
 status: **BUILT** (labeler live 2026-06-30; this doc is the original plan and
-drifts from the as-built system). as built: the label is `machine-generated`
-(renamed from `bulk-mirror`), the classifier is autonomous
+drifts from the as-built system). as built: the label is `bulk-generated`(renamed from `bulk-mirror`), the classifier is autonomous
 (`backend/src/ingest/classifier.zig`: heuristic pre-filter → majority-of-3
 model votes on co/core → emit), and the policy line evolved to **composed vs
 generated** (see [exclusions.md](exclusions.md)). the public face is

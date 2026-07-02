@@ -4,8 +4,8 @@
 //! document is fed here via observe(), which keeps a rolling per-DID aggregate
 //! in its OWN SQLite (never turso, never the frozen replica, never blocks the
 //! firehose). When a DID crosses a volume floor it is scored in-process; if it
-//! looks like a machine-generated registry/feed mirror, the labeler emits a
-//! signed `machine-generated` account label — no human in the loop.
+//! looks like a bulk-generated registry/feed mirror, the labeler emits a
+//! signed `bulk-generated` account label — no human in the loop.
 //!
 //! Scoring mirrors scripts/classify-bulk-mirror (validated offline): the
 //! decisive axis is authorship/content SHAPE (templated titles, thin/empty
@@ -37,8 +37,8 @@ const THRESHOLD: f64 = 0.50;
 // bump when scoring logic OR threshold changes → bootstrap negates old labels +
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
-// (heuristic flags → LLM confirms content is machine-generated before emit).
-const SCORING_VERSION: i64 = 9; // v9: composed-vs-generated prompt + judge → gemma-4-12B (self-served)
+// (heuristic flags → LLM confirms content is bulk-generated before emit).
+const SCORING_VERSION: i64 = 10; // v10: label renamed machine-generated → bulk-generated (re-emit)
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -47,7 +47,7 @@ const SCORING_VERSION: i64 = 9; // v9: composed-vs-generated prompt + judge → 
 // mislabeled human.
 const STATE_OBSERVING: i64 = 0;
 const STATE_PENDING: i64 = 1; // heuristic flagged; awaiting model review
-const STATE_LABELED: i64 = 2; // model confirmed machine-generated → emitted
+const STATE_LABELED: i64 = 2; // model confirmed bulk-generated → emitted
 const STATE_REJECTED: i64 = 3; // model said human → not labeled
 const STATE_VETOED: i64 = 4; // had curation → never labeled
 const MAX_REVIEW_ATTEMPTS: i64 = 5; // give up after this many inconclusive reviews
@@ -152,7 +152,12 @@ pub fn bootstrap() void {
         var rows = conn.rows("SELECT did FROM author_stats WHERE labeled = 1", .{}) catch return;
         while (rows.next()) |row| prev.append(a, a.dupe(u8, row.text(0)) catch continue) catch {};
         rows.deinit();
-        for (prev.items) |did| _ = labeler.emit(did, labeler.LABEL_MACHINE_GENERATED, true) catch {};
+        for (prev.items) |did| {
+            _ = labeler.emit(did, labeler.LABEL_BULK_GENERATED, true) catch {};
+            // negation matches on (src, uri, val) — labels emitted before the
+            // v10 rename carry the old value and need their own retraction.
+            _ = labeler.emit(did, "machine-generated", true) catch {};
+        }
         if (prev.items.len > 0)
             logfire.info("classifier: cleared {d} prior labels for re-scoring (v{d})", .{ prev.items.len, SCORING_VERSION });
         conn.execNoArgs("DELETE FROM author_stats") catch {};
@@ -528,13 +533,13 @@ fn reviewWorker(allocator: Allocator, cfg: ReviewCfg, io: Io) void {
             const state = if (v.machine) STATE_LABELED else STATE_REJECTED;
             conn.exec("UPDATE author_stats SET state = ?, reason = ? WHERE did = ?", .{ state, v.reason, did }) catch {};
             if (v.machine) {
-                _ = labeler.emit(did, labeler.LABEL_MACHINE_GENERATED, false) catch {};
-                logfire.info("classifier: model CONFIRMED {s} → machine-generated ({s})", .{ did, v.reason });
+                _ = labeler.emit(did, labeler.LABEL_BULK_GENERATED, false) catch {};
+                logfire.info("classifier: model CONFIRMED {s} → bulk-generated ({s})", .{ did, v.reason });
                 // DRAFT notification — NOT posted yet. We draft to the log (review
                 // on /labels first) the heads-up the labeled account would get.
                 const site = authorSite(allocator, did);
                 defer if (site) |s| allocator.free(s);
-                logfire.info("labeler DRAFT notify (NOT posted) → @{s}: pub-search indexes human writing on atproto; this account was classified machine-generated ({s}) and excluded from search. reply to appeal · pub-search.waow.tech/labels", .{ site orelse did, v.reason });
+                logfire.info("labeler DRAFT notify (NOT posted) → @{s}: pub-search indexes writing composed by an author; this account was classified bulk-generated ({s}) and excluded from search. reply to appeal · pub-search.waow.tech/labels", .{ site orelse did, v.reason });
             } else {
                 logfire.info("classifier: model REJECTED {s} ({s})", .{ did, v.reason });
             }
@@ -580,7 +585,7 @@ const TITLES_PER_VOTE: usize = 30;
 const EXCERPTS_PER_VOTE: usize = 5;
 const EXCERPT_LEN: usize = 800;
 
-/// Ask the LLM whether the author is a machine-generated mirror: VOTES
+/// Ask the LLM whether the author is a bulk-generated mirror: VOTES
 /// independent reviews over different corpus slices, VOTE_MAJORITY clear
 /// agreeing answers decide. Returns null = no majority (retry). The returned
 /// reason (from the first vote on the winning side) is owned by `allocator`.

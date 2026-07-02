@@ -52,10 +52,10 @@ SECP256K1_MULTICODEC = b"\xe7\x01"  # varint of 0xe7 (secp256k1-pub)
 LABEL_DECLARATION = {
     "$type": "app.bsky.labeler.service",
     "policies": {
-        "labelValues": ["machine-generated"],
+        "labelValues": ["bulk-generated"],
         "labelValueDefinitions": [
             {
-                "identifier": "machine-generated",
+                "identifier": "bulk-generated",
                 "severity": "inform",
                 "blurs": "none",
                 "defaultSetting": "ignore",
@@ -63,7 +63,7 @@ LABEL_DECLARATION = {
                 "locales": [
                     {
                         "lang": "en",
-                        "name": "machine-generated",
+                        "name": "bulk-generated",
                         "description": (
                             "this account's documents are generated from a data "
                             "source — one per database row, feed event, or catalog "

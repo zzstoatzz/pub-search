@@ -259,14 +259,14 @@ reader (publications subscribed to + a recent slice). Local-replica only, no cac
 GET /api/labeler
 ```
 
-read-only summary of the machine-generated labeler's state: counts by review
+read-only summary of the bulk-generated labeler's state: counts by review
 state plus every decided author (site, state, model reason, heuristic score,
 title patterns). backs the [/labels](https://pub-search.waow.tech/labels)
 page. the labels themselves are served over standard XRPC at
 `labeler.pub-search.waow.tech` (`com.atproto.label.queryLabels` /
 `subscribeLabels`).
 
-`GET /admin/label?token=…&did=…&val=machine-generated&neg=0|1` (BACKFILL_TOKEN-
+`GET /admin/label?token=…&did=…&val=bulk-generated&neg=0|1` (BACKFILL_TOKEN-
 gated) emits or negates a label manually — the negation path is the appeal /
 correction lever; it also updates the classifier's state so the account is
 never re-flagged.

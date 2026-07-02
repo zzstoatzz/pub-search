@@ -89,12 +89,12 @@ pub fn main() !void {
     // available" for the whole startup window. keepalive (network) stays async.
     tpuf.init(io);
 
-    // labeler: serves com.atproto.label.* on its own port + emits machine-generated
+    // labeler: serves com.atproto.label.* on its own port + emits bulk-generated
     // account labels. No-op unless LABELER_DID is set, so this is safe to ship
     // before the labeler identity is provisioned.
     labeler.start(allocator, io);
 
-    // autonomous machine-generated classifier — fed per-document from the firehose
+    // autonomous bulk-generated classifier — fed per-document from the firehose
     // (see ingest/ingester.zig processDocument); emits via the labeler on its own.
     labeler_classifier.init();
 
@@ -141,7 +141,7 @@ fn initServices(allocator: std.mem.Allocator, io: Io) void {
     if (Thread.spawn(.{}, labeler_classifier.bootstrap, .{})) |t| t.detach() else |_| {}
 
     // model-pass gate: background worker that confirms flagged authors are
-    // machine-generated (reads content, asks an LLM) before the labeler emits.
+    // bulk-generated (reads content, asks an LLM) before the labeler emits.
     // No-op without COCORE_API_KEY — flagged authors just queue unlabeled.
     labeler_classifier.startReview(allocator, io);
 
