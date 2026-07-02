@@ -56,7 +56,7 @@ h1 {
   flex-wrap: wrap;
   gap: 0.4rem;
 }
-h1 .theme-toggle { margin-left: auto; }
+h1 .lf-settings-btn { margin-left: auto; }
 h1 a.title { color: var(--text-secondary); }
 h1 a.title:hover { color: var(--text-bright); }
 h1 .dim { color: var(--text-dim); }

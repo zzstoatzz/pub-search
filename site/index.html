@@ -943,14 +943,14 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="components.css?v=1779600001">
+  <link rel="stylesheet" href="components.css?v=1782991000">
   <script src="clients.js"></script>
   <script src="identity.js"></script>
   <script src="ui.js"></script>
 </head>
 <body>
   <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="what is this? (+ search syntax)">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
+    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="what is this? (+ search syntax)">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button></h1>
 
     <div class="search-box">
       <div class="lf-typeahead-wrap">
@@ -1005,34 +1005,6 @@
     const API_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
       ? 'http://localhost:8080'
       : 'https://leaflet-search-backend.fly.dev';
-
-    // theme toggle
-    let currentTheme = localStorage.getItem('theme') || 'dark';
-    function applyTheme(theme) {
-      currentTheme = theme;
-      localStorage.setItem('theme', theme);
-      let resolved = theme;
-      if (theme === 'system') resolved = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', resolved);
-      renderThemeToggle();
-    }
-    const THEME_ICONS = { dark: '\u263E', light: '\u263C', system: '\u25D1' };
-    const THEME_CYCLE = ['dark', 'light', 'system'];
-    function cycleTheme() {
-      const next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3];
-      applyTheme(next);
-    }
-    function renderThemeToggle() {
-      const el = document.getElementById('theme-toggle');
-      if (!el) return;
-      el.textContent = THEME_ICONS[currentTheme];
-      el.title = currentTheme;
-      el.onclick = cycleTheme;
-    }
-    matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
-      if (currentTheme === 'system') applyTheme('system');
-    });
-    renderThemeToggle();
 
     // syntax help toggle
     const syntaxHelpBtn = document.getElementById('syntax-help-btn');

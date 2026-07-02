@@ -14,6 +14,7 @@
     })();
   </script>
   <link rel="stylesheet" href="dashboard.css?v=1782991000">
+  <link rel="stylesheet" href="components.css?v=1782991000">
   <style>
     .lead { color: var(--text-secondary); font-size: 0.82rem; line-height: 1.55; margin: -0.4rem 0 1.4rem; }
     .lead code { background: var(--bg-hover); padding: 0.05rem 0.3rem; border-radius: 3px; color: var(--text-secondary); }
@@ -62,7 +63,7 @@
 </head>
 <body>
   <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button></h1>
     <p class="lead">
       pub-search is a search engine for writing that someone — a person or an AI —
       actually wrote. Some accounts publish pages that look stamped out by a system
@@ -105,29 +106,6 @@
   </div>
 
   <script>
-    // theme cycle — same pattern as every other page
-    var THEME_ICONS = { dark: '☾', light: '☼', system: '◑' };
-    var THEME_CYCLE = ['dark', 'light', 'system'];
-    var currentTheme = localStorage.getItem('theme') || 'dark';
-    function applyTheme(t) {
-      currentTheme = t;
-      localStorage.setItem('theme', t);
-      var resolved = t === 'system'
-        ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-        : t;
-      document.documentElement.setAttribute('data-theme', resolved);
-      var el = document.getElementById('theme-toggle');
-      if (el) { el.textContent = THEME_ICONS[t]; el.title = t; }
-    }
-    document.getElementById('theme-toggle').textContent = THEME_ICONS[currentTheme];
-    document.getElementById('theme-toggle').title = currentTheme;
-    document.getElementById('theme-toggle').addEventListener('click', function() {
-      applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3]);
-    });
-    matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
-      if (currentTheme === 'system') applyTheme('system');
-    });
-
     const API_URL = 'https://leaflet-search-backend.fly.dev';
     function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
     function host(s) { return (s || '').replace(/^https?:\/\//, ''); }
@@ -193,6 +171,13 @@
           </details>`;
       }
     })();
+  </script>
+  <script src="clients.js"></script>
+  <script src="ui.js"></script>
+  <script>
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      if (window.LeafletUI && window.LeafletUI.openSettings) window.LeafletUI.openSettings();
+    });
   </script>
 </body>
 </html>

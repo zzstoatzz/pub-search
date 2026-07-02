@@ -23,7 +23,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="components.css?v=1779600001">
+  <link rel="stylesheet" href="components.css?v=1782991000">
   <style>
     :root, [data-theme="dark"] {
       --bg: #050505;
@@ -566,7 +566,7 @@
 </head>
 <body>
   <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="dim">/ subscribed</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
+    <h1><a href="/" class="title">pub search</a> <span class="dim">/ subscribed</span> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button></h1>
 
     <div class="views" role="tablist" aria-label="view">
       <button class="view-pill" data-view="publications" role="tab">publications</button>
@@ -593,27 +593,6 @@
   </div>
 
   <script>
-    var THEME_ICONS = { dark: '☾', light: '☼', system: '◑' };
-    var THEME_CYCLE = ['dark', 'light', 'system'];
-    var currentTheme = localStorage.getItem('theme') || 'dark';
-    function applyTheme(t) {
-      currentTheme = t;
-      localStorage.setItem('theme', t);
-      var resolved = t === 'system'
-        ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-        : t;
-      document.documentElement.setAttribute('data-theme', resolved);
-      var el = document.getElementById('theme-toggle');
-      if (el) { el.textContent = THEME_ICONS[t]; el.title = t; }
-    }
-    document.getElementById('theme-toggle').textContent = THEME_ICONS[currentTheme];
-    document.getElementById('theme-toggle').title = currentTheme;
-    document.getElementById('theme-toggle').addEventListener('click', function() {
-      applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme) + 1) % 3]);
-    });
-    matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
-      if (currentTheme === 'system') applyTheme('system');
-    });
   </script>
   <script src="clients.js"></script>
   <script src="identity.js"></script>

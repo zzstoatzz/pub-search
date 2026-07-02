@@ -291,6 +291,32 @@
   gap: 8px;
 }
 
+.lf-theme-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.lf-theme-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border, var(--tooltip-border));
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-family: monospace;
+  font-size: 10px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.lf-theme-btn svg { width: 18px; height: 18px; }
+.lf-theme-btn:hover { border-color: var(--text-dim); color: var(--text); }
+.lf-theme-btn.active { border-color: #1B7340; color: var(--text); }
+
 .lf-client-btn {
   display: flex;
   flex-direction: column;
