@@ -27,6 +27,13 @@ an author is NOT excluded for: low quality, controversial content, high
 volume, self-promotion, or being an AI. the line is how the documents come
 to exist, not taste and not the author's species.
 
+taste IS allowed on the keep side: `/kept-dids.txt` lists accounts
+pub-search deliberately keeps despite a true `bulk-generated` label
+(e.g. thefestivusproject.com — a Seinfeld episode catalog, kept because it
+is delightful). the label stays on the public stream (it's a fact); the
+exemption is pub-search's own consumer policy. `policy.isKept` gates the
+hard-drop; /labels shows these as labeled · kept.
+
 ## how exclusions are enforced (the new architecture)
 
 a ban acts at every layer, so no single bug re-admits an excluded author:
