@@ -37,7 +37,8 @@
 
     .item { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.75rem 0.9rem; margin-bottom: 0.6rem; background: var(--bg-subtle); }
     .item-top { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
-    .site { color: var(--text-bright); font-size: 0.95rem; text-decoration: none; }
+    .site { color: var(--text-bright); font-size: 0.95rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.45rem; }
+    .fav { width: 16px; height: 16px; border-radius: 3px; }
     .site:hover { text-decoration: underline; }
     .site.nosite { color: var(--text-secondary); font-size: 0.8rem; }
     .docs { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; white-space: nowrap; }
@@ -63,29 +64,30 @@
   <div class="container">
     <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span></h1>
     <p class="lead">
-      pub-search indexes writing that someone — a person or an AI — actually composed.
-      Accounts that publish documents generated from a database (one page per patent,
-      recall, chart, or episode) are marked
-      <a href="https://atproto.com/specs/label" target="_blank" rel="noopener" title="the mark is an AT Protocol label — a signed, public annotation other services can subscribe to"><code>bulk-generated</code></a>
-      and left out of search results — unless deliberately <span style="color:#2a9d5c">kept</span>.
-      The decision is automated: a pattern filter nominates,
-      a model on <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a> decides.
+      pub-search is a search engine for writing that someone — a person or an AI —
+      actually wrote. Some accounts publish pages that look stamped out by a system
+      instead: one per TV episode, per patent filing, per recall notice. Those accounts
+      get a public
+      <a href="https://atproto.com/specs/label" target="_blank" rel="noopener" title="an AT Protocol label: a signed, public note attached to an account. other apps can subscribe to a labeler and use its labels however they choose."><code>bulk-generated</code></a>
+      label and are left out of search results — unless deliberately <span style="color:#2a9d5c">kept</span>.
+      The call is automated: a pattern check nominates, a model on
+      <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a> decides.
     </p>
 
     <div class="pipeline" id="pipeline">
-      <div class="stage" title="every published document on the AT Protocol firehose feeds a rolling per-author profile. an account is only judged after 50+ documents.">
+      <div class="stage" title="the firehose is the live public feed of everything published on the AT Protocol network. pub-search follows it and keeps a running profile of every account that publishes writing; an account is only ever evaluated after 50+ documents.">
         <div class="stage-name">firehose</div>
         <div class="stage-value" id="st-observing">…</div>
       </div>
-      <div class="stage" title="a cheap heuristic scores each author's title patterns 0–1 for repeated machine structure. score ≥ 0.50 nominates a candidate — it never decides on its own.">
-        <div class="stage-name">pattern filter</div>
+      <div class="stage" title="a cheap check for repeated structure across an account's titles, scored 0–1. reaching 0.50 only nominates the account for review — this step never decides anything.">
+        <div class="stage-name">pattern check</div>
         <div class="stage-value">score ≥ 0.50</div>
       </div>
-      <div class="stage" title="a language model reads titles and excerpts sampled across the account's whole history and votes: composed by an author, or generated one-per-record from a dataset? two of three votes decide, and each vote sees a different sample. inconclusive votes retry — no verdict is forced.">
+      <div class="stage" title="a language model reads titles and excerpts drawn from across the account's whole history and answers one question: did someone write this, or was it stamped out one-per-record? two of three votes decide; each vote sees a different sample, and unclear answers are retried, never forced.">
         <div class="stage-name">model review</div>
         <div class="stage-value" id="st-review">2-of-3 votes</div>
       </div>
-      <div class="stage" title="a confirmed account is labeled bulk-generated and drops out of search results. labels are signed, public, and reversible — a wrong call is retracted by negation.">
+      <div class="stage" title="a confirmed account gets the bulk-generated label — public, signed, and reversible — and its pages leave search results (unless kept).">
         <div class="stage-name">label</div>
         <div class="stage-value" id="st-labeled">…</div>
       </div>
@@ -95,7 +97,7 @@
     <div id="cleared-wrap"></div>
 
     <p class="foot">
-      these marks are <a href="https://atproto.com/specs/label" target="_blank" rel="noopener" title="AT Protocol labels: signed annotations served at labeler.pub-search.waow.tech — anyone can query or subscribe to them">published openly</a>,
+      these labels are <a href="https://atproto.com/specs/label" target="_blank" rel="noopener" title="served at labeler.pub-search.waow.tech — anyone can query or subscribe to them">published openly</a>,
       so anyone can check them or build on them. think we got something wrong? every label is
       reversible — <a href="https://bsky.app/profile/pub-search.waow.tech" target="_blank" rel="noopener">reach out</a>
       and we'll take another look.
@@ -109,14 +111,19 @@
     function labelsUrl(did) { return `https://labeler.pub-search.waow.tech/xrpc/com.atproto.label.queryLabels?uriPatterns=${encodeURIComponent(did)}`; }
 
     function itemHtml(a, muted) {
+      const h = a.site ? esc(host(a.site)) : '';
+      const favicon = h
+        ? `<img class="fav" src="https://icons.duckduckgo.com/ip3/${h}.ico" alt="" loading="lazy" onerror="this.remove()">`
+        : '';
       const site = a.site
-        ? `<a class="site" href="https://${esc(host(a.site))}" target="_blank" rel="noopener">${esc(host(a.site))}</a>`
+        ? `<a class="site" href="https://${h}" target="_blank" rel="noopener">${favicon}${h}</a>`
         : `<span class="site nosite">${esc(a.did)}</span>`;
+      // raw pattern shapes are for the curious — hover only, never inline
       const pats = (a.patterns || []).slice(0, 2).map(esc).join(' · ');
       // hand-banned entries never flowed through the pipeline — no docs in the
       // corpus, no meaningful score. their evidence is the exclusions registry.
       const evidence = a.docs > 0
-        ? `<div class="evidence" title="what the pattern filter saw: ${a.docs} documents, its 0–1 score (≥ 0.50 nominates) and the repeated title shapes, digits shown as #. the verdict above came from the model, not this score.">${a.docs} docs · score ${a.score.toFixed(2)}${pats ? ' · patterns: ' + pats : ''}</div>`
+        ? `<div class="evidence" title="the pattern check scored this account ${a.score.toFixed(2)} of 1 across ${a.docs} documents (0.50 nominates for review)${pats ? '. repeated title shapes it saw (digits as #): ' + pats : ''}. the verdict above came from the model, not this score.">${a.docs} docs · pattern score ${a.score.toFixed(2)}</div>`
         : '';
       // the right-hand chip answers the question a visitor actually has:
       // is this account in the search index or not?
