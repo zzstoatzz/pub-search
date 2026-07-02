@@ -219,6 +219,42 @@
     .syntax-help .about-blurb { color: var(--text); margin-bottom: 0.6rem; line-height: 1.7; }
     .syntax-help .about-blurb + .syntax-row { border-top: 1px solid var(--row-border); padding-top: 0.5rem; }
 
+    /* platform logo marquee (empty state) — a slow drift of who's indexed.
+     * duplicated track content makes the loop seamless; hover pauses. */
+    .platform-marquee {
+      overflow: hidden;
+      margin: 1rem auto 0;
+      max-width: 420px;
+      -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
+      mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
+    }
+    .marquee-track {
+      display: flex;
+      gap: 1.6rem;
+      width: max-content;
+      animation: marquee-drift 28s linear infinite;
+    }
+    .platform-marquee:hover .marquee-track { animation-play-state: paused; }
+    @keyframes marquee-drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .marquee-track { animation: none; flex-wrap: wrap; justify-content: center; width: auto; }
+      .platform-marquee { -webkit-mask-image: none; mask-image: none; }
+      .marquee-track .pf-chip.dup { display: none; }
+    }
+    .pf-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .pf-chip:hover { color: var(--text); }
+    .pf-chip img { width: 16px; height: 16px; border-radius: 3px; }
+    .join-hint { font-size: 11px; margin-top: 0.9rem; }
+    .join-hint a { color: var(--text-dim); border-bottom: 1px dashed var(--border-focus); }
+    .join-hint a:hover { color: #2a9d5c; }
+
     input[type="text"] {
       flex: 1;
       padding: 0.5rem;
@@ -944,6 +980,7 @@
     }
   </style>
   <link rel="stylesheet" href="components.css?v=1782991000">
+  <script src="platforms.js"></script>
   <script src="clients.js"></script>
   <script src="identity.js"></script>
   <script src="ui.js"></script>
@@ -993,8 +1030,11 @@
 
     <div id="results" class="results">
       <div class="empty-state">
-        <p>search writing published on <a href="https://standard.site" target="_blank">standard.site</a> platforms</p>
-        <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://greengale.app" target="_blank">greengale</a> · <a href="https://whtwnd.com" target="_blank">whitewind</a> · <a href="https://standard.site" target="_blank">other</a></p>
+        <p>search writing on <a href="https://standard.site" target="_blank">standard.site</a></p>
+        <div class="platform-marquee" aria-label="platforms indexed">
+          <div class="marquee-track" id="marquee-track"></div>
+        </div>
+        <p class="join-hint"><a href="https://wil.to/posts/implementing-standard-site/" target="_blank" title="a step-by-step guide to publishing your own site on standard.site — found with this search engine">your site could be here</a></p>
       </div>
     </div>
 
@@ -1005,6 +1045,18 @@
     const API_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
       ? 'http://localhost:8080'
       : 'https://leaflet-search-backend.fly.dev';
+
+    // platform marquee — logos of who's indexed, drifting slowly. content is
+    // duplicated once so the -50% translate loops seamlessly; the dup set is
+    // hidden from a11y and from the reduced-motion static layout.
+    (function () {
+      const PLATFORM_SITES = window.PubPlatforms.named().map(id => [id, window.PubPlatforms.domainOf(id)]);
+      const track = document.getElementById('marquee-track');
+      if (!track) return;
+      const chip = (p, dup) =>
+        `<a class="pf-chip${dup ? ' dup' : ''}" href="https://${p[1]}" target="_blank" rel="noopener"${dup ? ' aria-hidden="true" tabindex="-1"' : ''}><img src="https://icons.duckduckgo.com/ip3/${p[1]}.ico" alt="" loading="lazy" onerror="this.remove()"><span>${p[0]}</span></a>`;
+      track.innerHTML = PLATFORM_SITES.map(p => chip(p, false)).join('') + PLATFORM_SITES.map(p => chip(p, true)).join('');
+    })();
 
     // syntax help toggle
     const syntaxHelpBtn = document.getElementById('syntax-help-btn');
@@ -1134,7 +1186,7 @@
           const entityType = doc.type || 'article';
           const plat = doc.platform || 'leaflet';
           const docUrl = doc.url || null;
-          const platformConfig = PLATFORM_CONFIG[plat];
+          const platformConfig = window.PubPlatforms.byId[plat];
           const platformBadge = platformConfig
             ? `<span class="platform-badge" onclick="event.stopPropagation(); setPlatform('${escapeHtml(plat)}')" style="cursor:pointer">${escapeHtml(platformConfig.label)}</span>`
             : '';
@@ -1339,22 +1391,12 @@
       return `"${escaped}"`;
     }
 
-    const PLATFORM_CONFIG = {
-      leaflet: { home: 'https://leaflet.pub', label: 'leaflet.pub' },
-      pckt: { home: 'https://pckt.blog', label: 'pckt.blog' },
-      offprint: { home: 'https://offprint.app', label: 'offprint.app' },
-      greengale: { home: 'https://greengale.app', label: 'greengale.app' },
-      whitewind: { home: 'https://whtwnd.com', label: 'whtwnd.com' },
-      other: { home: 'https://standard.site', label: 'other' },
-    };
-
     function getPlatformHome(platform, basePath) {
       if (basePath) {
         return { url: `https://${basePath}`, label: basePath };
       }
-      const config = PLATFORM_CONFIG[platform];
-      if (config) {
-        return { url: config.home, label: config.label };
+      if (window.PubPlatforms.domainOf(platform)) {
+        return { url: window.PubPlatforms.homeOf(platform), label: window.PubPlatforms.labelOf(platform) };
       }
       // fallback for documents without a known platform - link to standard.site lexicon
       return { url: 'https://standard.site', label: 'other' };
@@ -1486,14 +1528,7 @@
     }
 
     function renderPlatformFilter() {
-      const platforms = [
-        { id: 'leaflet', label: 'leaflet' },
-        { id: 'pckt', label: 'pckt' },
-        { id: 'offprint', label: 'offprint' },
-        { id: 'greengale', label: 'greengale' },
-        { id: 'whitewind', label: 'whitewind' },
-        { id: 'other', label: 'other' },
-      ];
+      const platforms = window.PubPlatforms.order.map(id => ({ id: id, label: id }));
       const html = platforms.map(p => `
         <span class="platform-option${currentPlatform === p.id ? ' active' : ''}" onclick="setPlatform('${p.id}')">${p.label}</span>
       `).join('');

@@ -1,25 +1,10 @@
 (function() {
   'use strict';
 
-  var PLATFORM_COLORS = {
-    leaflet:   { core: '#4ade80', mid: '#22c55e', edge: '#166534' },
-    whitewind: { core: '#60a5fa', mid: '#3b82f6', edge: '#1e3a8a' },
-    pckt:      { core: '#fbbf24', mid: '#f59e0b', edge: '#92400e' },
-    offprint:  { core: '#fb7185', mid: '#f43f5e', edge: '#881337' },
-    greengale: { core: '#2dd4bf', mid: '#14b8a6', edge: '#134e4a' },
-    other:     { core: '#9ca3af', mid: '#6b7280', edge: '#374151' },
-  };
-
-  var PLATFORM_COLORS_LIGHT = {
-    leaflet:   { core: '#16a34a', mid: '#15803d', edge: '#a7f3d0' },
-    whitewind: { core: '#2563eb', mid: '#1d4ed8', edge: '#bfdbfe' },
-    pckt:      { core: '#d97706', mid: '#b45309', edge: '#fde68a' },
-    offprint:  { core: '#e11d48', mid: '#be123c', edge: '#fecdd3' },
-    greengale: { core: '#0d9488', mid: '#0f766e', edge: '#99f6e4' },
-    other:     { core: '#4b5563', mid: '#374151', edge: '#d1d5db' },
-  };
-
-  var PLATFORMS = ['leaflet', 'whitewind', 'pckt', 'offprint', 'greengale', 'other'];
+  // platform identity/colors come from the shared registry (platforms.js)
+  var PLATFORM_COLORS = window.PubPlatforms.colors('dark');
+  var PLATFORM_COLORS_LIGHT = window.PubPlatforms.colors('light');
+  var PLATFORMS = window.PubPlatforms.order;
 
   // --- atlas tuning --------------------------------------------------------
   // Every label-density / avatar / cluster-pane knob lives here instead of as
@@ -1960,7 +1945,9 @@
     for (var i = 0; i < PLATFORMS.length; i++) {
       var p = PLATFORMS[i];
       var dimmed = activePlatforms && !activePlatforms.has(p) ? ' dimmed' : '';
-      html += '<div class="legend-item' + dimmed + '" data-platform="' + p + '"><span class="legend-dot" style="background:' + frameColors[p].mid + '"></span>' + p + '</div>';
+      var icon = window.PubPlatforms.iconUrl(p);
+      var logo = icon ? '<img class="legend-logo" src="' + icon + '" alt="" loading="lazy" onerror="this.remove()">' : '';
+      html += '<div class="legend-item' + dimmed + '" data-platform="' + p + '"><span class="legend-dot" style="background:' + frameColors[p].mid + '"></span>' + logo + p + '</div>';
     }
     el.innerHTML = html;
     // attach click handlers

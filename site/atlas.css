@@ -238,6 +238,13 @@ canvas:active {
   flex-shrink: 0;
 }
 
+.legend-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 .stats {
   font-size: 10px;
   color: var(--text-muted);
