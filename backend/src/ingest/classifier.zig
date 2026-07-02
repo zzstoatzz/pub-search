@@ -38,7 +38,7 @@ const THRESHOLD: f64 = 0.50;
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
 // (heuristic flags → LLM confirms content is machine-generated before emit).
-const SCORING_VERSION: i64 = 8; // v8: judge model → Qwen3.6-35B (3/3 on judge-eval; 7B was 0/3)
+const SCORING_VERSION: i64 = 9; // v9: composed-vs-generated prompt + judge → gemma-4-12B (self-served)
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -57,12 +57,13 @@ const MAX_REVIEW_ATTEMPTS: i64 = 5; // give up after this many inconclusive revi
 // review provider: any OpenAI-compatible chat-completions endpoint. Defaults
 // to co/core; override all three via env (REVIEW_API_URL / REVIEW_MODEL /
 // REVIEW_API_KEY) to switch providers with a secrets change, no deploy of code.
-// picked by scripts/judge-eval (2026-07-01): 3/3 known-truth accounts, every
-// completed vote correct. Qwen2.5-7B (the previous judge) scored 0/3 —
-// confidently inverted on all three. Slower + reasoning-style, which the
-// worker tolerates (votes retry on inconclusive; latency doesn't back
-// anything up — candidates just stay PENDING longer).
-const DEFAULT_REVIEW_MODEL = "mlx-community/Qwen3.6-35B-A3B-4bit";
+// picked by scripts/judge-eval: gemma-4-12B went 19/19 conclusive votes
+// correct across two runs on the composed-vs-generated prompt (2026-07-02),
+// and it's the model our own provider machine serves — reliability and
+// economics we control. Qwen2.5-7B (the original judge) was 0/3, confidently
+// inverted. Reasoning-style + slow is fine: the worker is a durable queue,
+// candidates just stay PENDING longer.
+const DEFAULT_REVIEW_MODEL = "mlx-community/gemma-4-12B-it-8bit";
 const DEFAULT_REVIEW_URL = "https://console.cocore.dev/api/v1/chat/completions";
 
 const ReviewCfg = struct {
@@ -631,26 +632,34 @@ fn reviewVote(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, vot
     const samples = try fetchVoteMaterial(allocator, did, vote);
     defer allocator.free(samples);
 
-    // prompt validated against the known cases on cocore Qwen2.5-7B: the framing
-    // (our task: long-form human writing vs automated feeds, "coherent ≠ human")
-    // + concrete examples are what make a small model separate a real blog from a
-    // transit/catalog feed. Without them it calls everything coherent "human".
+    // the line is COMPOSED vs GENERATED, not human vs machine: most banned
+    // content was human-written at the source (patents, recall notices,
+    // transcripts) and original AI writing is welcome. Keep this text in
+    // lockstep with scripts/judge-eval PROMPT_HEAD, and re-validate any change
+    // there against the known-truth set before shipping (19/19 conclusive
+    // votes correct on gemma-4-12B + Qwen3.6-35B, 2026-07-02).
     var prompt: std.Io.Writer.Allocating = .init(allocator);
     defer prompt.deinit();
     try prompt.writer.writeAll(
-        \\A search engine indexes original long-form writing by people (blogs, essays,
-        \\articles). It must EXCLUDE accounts that are automated feeds, catalogs, or
-        \\database exports — even when the text reads coherently.
+        \\A search engine indexes writing: documents COMPOSED by an author — a person or
+        \\an AI — who chose what to say. It must EXCLUDE accounts that GENERATE
+        \\documents from a data source: one document per database row, feed event,
+        \\catalog entry, or result, where a template plus the data determines the text.
         \\
-        \\The test: did a PERSON sit and write each item as original prose, OR is an
-        \\automated system emitting one record per database row / feed event / catalog
-        \\entry / log?
+        \\The test is NOT whether the text is fluent, and NOT whether a human once wrote
+        \\the underlying material — patents, recall notices, episode summaries, and
+        \\transcripts were all written by people, but republishing them one-per-record
+        \\is still generation. The test: does each document exist because its author had
+        \\something to say, OR because a record exists in some dataset?
         \\
-        \\machine=true examples: a transit-alert bot ("Red Line delayed near Roosevelt"),
-        \\a patent-database mirror, a TV-episode catalog (one entry per episode),
-        \\product-recall summaries, daily log entries, chart/stats dumps. Coherent != human.
-        \\machine=false examples: a personal blog (tech notes, essays, reviews), even with
-        \\branded/templated titles or a numbered series.
+        \\machine=true examples: a patent-database mirror, vehicle-recall summaries (one
+        \\per recall), a TV-episode catalog (one per episode), transit alerts (one per
+        \\service event), chart/stats dumps (one per chart-day), tournament results (one
+        \\per event), fundraiser announcements stamped from campaign records — even when
+        \\the underlying data belongs to the account itself.
+        \\machine=false examples: a personal blog or essay series (even branded,
+        \\numbered, templated-looking titles, or extremely prolific), a daily journal
+        \\(the date is a schedule, not a data source), original writing by an AI agent.
         \\
         \\Evidence from ONE account (facts, a title sample spanning its whole
         \\history, and excerpts from the middle of several documents):

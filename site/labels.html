@@ -62,8 +62,9 @@
   <div class="container">
     <h1><a href="/" class="title">pub search</a> <span class="dim">/ labels</span></h1>
     <p class="lead">
-      pub-search indexes original writing. Accounts that emit records rather than prose —
-      feeds, catalogs, database exports — get a signed
+      pub-search indexes writing that an author — a person or an AI — composed.
+      Accounts that generate documents from a dataset (one per patent, recall, chart,
+      episode, alert) get a signed
       <a href="https://atproto.com/specs/label" target="_blank" rel="noopener"><code>machine-generated</code></a>
       label and are excluded from search. The decision is automated: a pattern filter nominates,
       a model on <a href="https://cocore.dev" target="_blank" rel="noopener">co/core</a> decides.
@@ -78,7 +79,7 @@
         <div class="stage-name">pattern filter</div>
         <div class="stage-value">score ≥ 0.50</div>
       </div>
-      <div class="stage" title="a language model reads titles and excerpts sampled across the account's whole history and votes: authored writing, or mechanical output? two of three votes decide, and each vote sees a different sample. inconclusive votes retry — no verdict is forced.">
+      <div class="stage" title="a language model reads titles and excerpts sampled across the account's whole history and votes: composed by an author, or generated one-per-record from a dataset? two of three votes decide, and each vote sees a different sample. inconclusive votes retry — no verdict is forced.">
         <div class="stage-name">model review</div>
         <div class="stage-value" id="st-review">2-of-3 votes</div>
       </div>

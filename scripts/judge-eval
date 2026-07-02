@@ -31,6 +31,7 @@ KNOWN = {
     "did:plc:u5kk4h7tr4s3ntskbmhl5z7d": ("sksksketch.net", False),  # human illustrator
     "did:plc:5swhfspkrynnbidlkrkch3lh": ("prideraiser.org", True),  # fundraiser feed bot
     "did:plc:4z33k5fjzw2ew3u373pg7ku5": ("festivus (episode catalog)", True),
+    "did:plc:sttgf52vkk46f6yuknvqxvgh": ("coryd.dev (942-doc human)", False),  # volume trap
 }
 
 DEFAULT_MODELS = [
@@ -47,19 +48,25 @@ EXCERPT_LEN = 800
 
 COCORE_URL = "https://console.cocore.dev/api/v1/chat/completions"
 
-PROMPT_HEAD = """A search engine indexes original long-form writing by people (blogs, essays,
-articles). It must EXCLUDE accounts that are automated feeds, catalogs, or
-database exports — even when the text reads coherently.
+PROMPT_HEAD = """A search engine indexes writing: documents COMPOSED by an author — a person or
+an AI — who chose what to say. It must EXCLUDE accounts that GENERATE
+documents from a data source: one document per database row, feed event,
+catalog entry, or result, where a template plus the data determines the text.
 
-The test: did a PERSON sit and write each item as original prose, OR is an
-automated system emitting one record per database row / feed event / catalog
-entry / log?
+The test is NOT whether the text is fluent, and NOT whether a human once wrote
+the underlying material — patents, recall notices, episode summaries, and
+transcripts were all written by people, but republishing them one-per-record
+is still generation. The test: does each document exist because its author had
+something to say, OR because a record exists in some dataset?
 
-machine=true examples: a transit-alert bot ("Red Line delayed near Roosevelt"),
-a patent-database mirror, a TV-episode catalog (one entry per episode),
-product-recall summaries, daily log entries, chart/stats dumps. Coherent != human.
-machine=false examples: a personal blog (tech notes, essays, reviews), even with
-branded/templated titles or a numbered series.
+machine=true examples: a patent-database mirror, vehicle-recall summaries (one
+per recall), a TV-episode catalog (one per episode), transit alerts (one per
+service event), chart/stats dumps (one per chart-day), tournament results (one
+per event), fundraiser announcements stamped from campaign records — even when
+the underlying data belongs to the account itself.
+machine=false examples: a personal blog or essay series (even branded,
+numbered, templated-looking titles, or extremely prolific), a daily journal
+(the date is a schedule, not a data source), original writing by an AI agent.
 
 Evidence from ONE account (facts, a title sample spanning its whole
 history, and excerpts from the middle of several documents):

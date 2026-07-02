@@ -65,10 +65,12 @@ LABEL_DECLARATION = {
                         "lang": "en",
                         "name": "machine-generated",
                         "description": (
-                            "this account's content is produced by an automated "
-                            "system, not written by a person — e.g. registry/feed "
-                            "mirrors, transit-alert bots, catalogs, database exports. "
-                            "pub-search excludes these from its human-writing search."
+                            "this account's documents are generated from a data "
+                            "source — one per database row, feed event, or catalog "
+                            "entry — rather than composed by an author (a person or "
+                            "an AI). e.g. registry mirrors, transit-alert bots, "
+                            "catalogs, database exports. pub-search excludes these "
+                            "from search."
                         ),
                     }
                 ],

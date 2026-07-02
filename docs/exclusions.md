@@ -1,17 +1,22 @@
 # exclusions: what we keep out of the corpus, and why
 
-pub-search indexes **long-form writing by people**. some actors publish
-valid, well-signed AT Protocol records that are nonetheless not that —
+pub-search indexes **composed writing** — documents an author (a person or
+an AI) wrote because they had something to say. some actors publish valid,
+well-signed AT Protocol records that are nonetheless not that —
 machine-generated registry mirrors, scraper bridges, bulk archives. this
 file is the registry of every manual exclusion: who, when, why, and the
 evidence. if we're going to editorialize, we explain ourselves.
 
 ## what qualifies (the policy line)
 
-an author is excluded when **all** of these hold:
+the line is **composed vs. generated**, not human vs. machine: most banned
+content was human-written at the source (patents, recall notices,
+transcripts), and original writing by an AI is welcome. an author is
+excluded when **all** of these hold:
 
-1. **no human authorship** — the records are generated from an external
-   database/feed, not written
+1. **generated, not composed** — each document exists because a record
+   exists in some dataset (external or the account's own), with a template
+   determining the text; not because an author chose to write it
 2. **bulk scale** — the volume materially distorts the corpus or a topic's
    search results (rule of thumb: would be >1% of the corpus, or owns a
    topic's semantic results)
@@ -19,7 +24,8 @@ an author is excluded when **all** of these hold:
    removes noise, not voices
 
 an author is NOT excluded for: low quality, controversial content, high
-(human) volume, or self-promotion. the line is authorship, not taste.
+volume, self-promotion, or being an AI. the line is how the documents come
+to exist, not taste and not the author's species.
 
 ## how exclusions are enforced (the new architecture)
 
