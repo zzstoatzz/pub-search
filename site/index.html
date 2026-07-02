@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>pub search</title>
-  <meta name="description" content="search atproto publishing platforms">
+  <meta name="description" content="search standard.site publishing platforms">
   <meta property="og:title" content="pub search">
-  <meta property="og:description" content="search atproto publishing platforms">
+  <meta property="og:description" content="search standard.site publishing platforms">
   <meta property="og:type" content="website">
   <meta property="og:image" content="https://pub-search.waow.tech/og-image">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="pub search">
-  <meta name="twitter:description" content="search atproto publishing platforms">
+  <meta name="twitter:description" content="search standard.site publishing platforms">
   <meta name="twitter:image" content="https://pub-search.waow.tech/og-image">
   <script>
     // prevent flash: apply theme before CSS loads
@@ -216,6 +216,8 @@
 
     .syntax-help .syntax-example { min-width: 110px; }
     .syntax-help .syntax-desc { color: var(--text-secondary); }
+    .syntax-help .about-blurb { color: var(--text); margin-bottom: 0.6rem; line-height: 1.7; }
+    .syntax-help .about-blurb + .syntax-row { border-top: 1px solid var(--row-border); padding-top: 0.5rem; }
 
     input[type="text"] {
       flex: 1;
@@ -948,7 +950,7 @@
 </head>
 <body>
   <div class="container">
-    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="search syntax">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button></h1>
+    <h1><a href="/" class="title">pub search</a> <span class="by">by <a href="https://bsky.app/profile/zzstoatzz.io" target="_blank">@zzstoatzz.io</a></span> <a href="https://tangled.sh/@zzstoatzz.io/leaflet-search" target="_blank" class="src">[src]</a> <a id="header-stats" class="stats-link"></a> <button class="syntax-help-btn" id="syntax-help-btn" title="what is this? (+ search syntax)">?</button> <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button> <button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></h1>
 
     <div class="search-box">
       <div class="lf-typeahead-wrap">
@@ -959,6 +961,21 @@
     </div>
 
     <div class="syntax-help" id="syntax-help">
+      <p class="about-blurb">
+        a search engine for writing published on the open social web — blogs and essays
+        from <a href="https://leaflet.pub" target="_blank">leaflet</a>, <a href="https://pckt.blog" target="_blank">pckt</a>,
+        <a href="https://offprint.app" target="_blank">offprint</a>, <a href="https://greengale.app" target="_blank">greengale</a>,
+        <a href="https://whtwnd.com" target="_blank">whitewind</a>, and anything else on
+        <a href="https://standard.site" target="_blank">standard.site</a>. search by keyword, by meaning, or both.
+      </p>
+      <p class="about-blurb">
+        built on top: <a href="/atlas.html">atlas</a> <span class="syntax-desc">(a map of everything, by meaning)</span> ·
+        <a href="/recommended">recommended</a> <span class="syntax-desc">(what people vouch for)</span> ·
+        <a href="/subscribed">subscribed</a> <span class="syntax-desc">(who people follow)</span> ·
+        <a href="/wrapped">wrapped</a> <span class="syntax-desc">(your year in publishing)</span> ·
+        <a href="/stats">stats</a> ·
+        <a href="/labels">labels</a> <span class="syntax-desc">(what we exclude, and why)</span>
+      </p>
       <div class="syntax-row"><span class="syntax-example"><code>cat dog</code></span><span class="syntax-desc">matches either term</span></div>
       <div class="syntax-row"><span class="syntax-example"><code>"exact phrase"</code></span><span class="syntax-desc">matches exact phrase</span></div>
       <div class="syntax-row"><span class="syntax-example"><code>@handle query</code></span><span class="syntax-desc">filter by author (quote to search literally)</span></div>
@@ -976,13 +993,12 @@
 
     <div id="results" class="results">
       <div class="empty-state">
-        <p>search atproto publishing platforms</p>
+        <p>search writing published on <a href="https://standard.site" target="_blank">standard.site</a> platforms</p>
         <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://greengale.app" target="_blank">greengale</a> · <a href="https://whtwnd.com" target="_blank">whitewind</a> · <a href="https://standard.site" target="_blank">other</a></p>
       </div>
     </div>
 
     <div id="stats" class="stats"></div>
-    <div class="stats" style="margin-top:0.5rem"><button type="button" class="theme-toggle" id="theme-toggle" aria-label="cycle theme"></button></div>
   </div>
 
   <script>
@@ -1009,7 +1025,9 @@
     function renderThemeToggle() {
       const el = document.getElementById('theme-toggle');
       if (!el) return;
-      el.innerHTML = `<span onclick="cycleTheme()" title="${currentTheme}">${THEME_ICONS[currentTheme]}</span>`;
+      el.textContent = THEME_ICONS[currentTheme];
+      el.title = currentTheme;
+      el.onclick = cycleTheme;
     }
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
       if (currentTheme === 'system') applyTheme('system');
@@ -1689,7 +1707,7 @@
     function renderEmptyState() {
       resultsDiv.innerHTML = `
         <div class="empty-state">
-          <p>search atproto publishing platforms</p>
+          <p>search writing published on <a href="https://standard.site" target="_blank">standard.site</a> platforms</p>
           <p style="font-size:11px;margin-top:0.5rem"><a href="https://leaflet.pub" target="_blank">leaflet</a> · <a href="https://pckt.blog" target="_blank">pckt</a> · <a href="https://offprint.app" target="_blank">offprint</a> · <a href="https://greengale.app" target="_blank">greengale</a> · <a href="https://whtwnd.com" target="_blank">whitewind</a> · <a href="https://standard.site" target="_blank">other</a></p>
         </div>
       `;
