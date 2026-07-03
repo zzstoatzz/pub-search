@@ -1,0 +1,85 @@
+# pub-search
+
+> pub-search indexes long-form writing across AT Protocol publishing platforms
+> (leaflet, pckt, offprint, greengale, whitewind, and self-hosted
+> standard.site sites) as one curated corpus. it exposes that corpus over an
+> HTTP API, an MCP server, and an AT Protocol labeler. bulk/scraper sources are
+> banned at ingest, so results are human writing. keyword (FTS5/BM25),
+> semantic (voyage-4-lite + turbopuffer), and hybrid (RRF) search modes.
+
+## Project contracts
+
+- [Site](https://pub-search.waow.tech) — the human surface (search + atlas)
+- [Adopting pub-search for agents](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/agent-surfaces.md) — start here; which surface to pick and why
+- [HTTP API reference](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/api.md)
+- [Search syntax](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/search-syntax.md) — quotes, OR, prefix behavior
+- [Content extraction](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/content-extraction.md) — why full text is per-platform work
+- [Source repository](https://github.com/zzstoatzz/leaflet-search)
+
+## Surfaces you can consume
+
+### MCP server — default for tool-calling agents
+
+- hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
+- local stdio: `claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=pub-search-mcp/server' pub-search`
+- a curated layer, not a 1:1 of the HTTP API. tools: `search`,
+  `get_document` (fetches + flattens full article text from the author's PDS —
+  the API only returns snippets), `find_similar`, `discover_focal_post`,
+  `describe_cluster`, `recommended_by_top_authors`, `get_tags`, `get_stats`,
+  `get_popular`. prompts: `usage_guide`, `search_tips`. resource:
+  `pub-search://stats`.
+
+### HTTP API — for code-mode agents, scripts, pipelines
+
+- base URL: `https://leaflet-search-backend.fly.dev` (no auth, GET only)
+- `curl -s 'https://leaflet-search-backend.fly.dev/search?q=relay&mode=hybrid&format=v2&limit=5' | jq`
+- endpoints: `/search`, `/similar`, `/tags`, `/popular`, `/stats`,
+  `/activity`, `/api/dashboard`, `/subscribed`, `/subscribers`, `/wrapped`,
+  `/api/labeler`, `/health`. full parameters + response shapes in api.md.
+
+### AT Protocol labeler — a subscribable trust signal
+
+- `labeler.pub-search.waow.tech` serves standard XRPC
+  `com.atproto.label.queryLabels` (HTTP) and `com.atproto.label.subscribeLabels`
+  (WebSocket). an autonomous classifier emits the `bulk-generated` label on
+  accounts that generate documents from a dataset rather than composing them;
+  those accounts are excluded from search. subscribe if you want the same
+  signal in your own pipeline. see [/labels](https://pub-search.waow.tech/labels).
+
+### the corpus itself lives on AT Protocol
+
+- every result is an `at://` record on its author's PDS. search returns enough
+  metadata (`uri`, `did`, `rkey`, `basePath`, `path`, `platform`) to build a
+  web URL or fetch the record directly (`com.atproto.repo.getRecord`, or
+  `uvx pdsx`). the MCP `get_document` does this fetch + extraction for you.
+
+## Agent guidance
+
+- read [agent-surfaces.md](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/agent-surfaces.md)
+  first — it has a decision table (MCP vs HTTP) and the sharp edges.
+- MCP if the consumer is a tool-calling agent and you want it productive with
+  no code of yours. HTTP if your agent writes code anyway or needs pagination /
+  raw response shapes the tools don't expose.
+- hit the `fly.dev` backend directly for API calls. `pub-search.waow.tech` has
+  no API proxy — unknown paths return the SPA's HTML with a 200, so trusting
+  status codes there will "succeed" against a page of HTML. inspect bodies.
+- at least one of `q`, `tag`, or `author` is required; an empty query is
+  rejected by design.
+- filters vary by mode: `tag`/`since` apply to keyword only; `platform`/`author`
+  work everywhere; hybrid applies each filter to the half that supports it.
+- `author` accepts a handle or a DID (handles resolve server-side).
+  `search("", author="someone.com")` browses an author's everything.
+- freshness is bounded, not real-time — the keyword replica refreshes by
+  snapshot swap (minutes-to-hours of lag). `get_stats` / `/api/dashboard` show
+  current counts if staleness matters.
+
+## Source docs
+
+- `README.md` documents the overall architecture (ingester → backend → builder
+  → labeler → site → mcp).
+- `docs/agent-surfaces.md` is the canonical guide for consuming pub-search.
+- `docs/api.md` is the full HTTP endpoint reference, including URL-building
+  patterns per platform.
+- `docs/search-syntax.md` documents query syntax; `docs/search-architecture.md`
+  documents how the three modes dispatch.
+- `pub-search-mcp/server/` is the installable MCP server.
