@@ -854,6 +854,46 @@
                 color: #38bdf8;
             }
 
+            /* filters toggle — hidden on desktop; the panel is always shown.
+               only the mobile media query surfaces the toggle and collapses
+               the panel behind it. */
+            .filters-toggle {
+                display: none;
+                align-items: center;
+                gap: 0.4rem;
+                margin-bottom: 1rem;
+                font-family: inherit;
+                font-size: 11px;
+                color: var(--text-dim);
+                background: var(--bg-hover);
+                border: 1px solid var(--border-subtle);
+                border-radius: 3px;
+                padding: 0.5rem 0.75rem;
+                cursor: pointer;
+            }
+
+            .filters-toggle:hover {
+                border-color: var(--border-focus);
+                color: var(--text);
+            }
+
+            .filters-active-count {
+                font-size: 10px;
+                color: #38bdf8;
+                background: rgba(14, 165, 233, 0.2);
+                border-radius: 999px;
+                padding: 1px 7px;
+            }
+
+            .filters-toggle-caret {
+                margin-left: auto;
+                transition: transform 0.15s ease;
+            }
+
+            .filters-toggle[aria-expanded="true"] .filters-toggle-caret {
+                transform: rotate(180deg);
+            }
+
             .active-filters {
                 display: flex;
                 flex-wrap: wrap;
@@ -1038,6 +1078,21 @@
                 body {
                     padding: 0.75rem;
                     font-size: 13px;
+                }
+
+                /* collapse the filter stack behind the toggle to reclaim
+                   vertical space; expanding is opt-in per session. */
+                .filters-toggle {
+                    display: flex;
+                    width: 100%;
+                }
+
+                .filters-panel {
+                    display: none;
+                }
+
+                .filters-panel.open {
+                    display: block;
                 }
 
                 .container {
@@ -1301,11 +1356,25 @@
 
             <div id="suggestions"></div>
 
-            <div id="tags" class="tags"></div>
+            <button
+                id="filters-toggle"
+                class="filters-toggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="filters-panel"
+            >
+                <span class="filters-toggle-label">filters</span>
+                <span class="filters-active-count" hidden></span>
+                <span class="filters-toggle-caret" aria-hidden="true">▾</span>
+            </button>
 
-            <div id="platform-filter" class="platform-filter"></div>
+            <div id="filters-panel" class="filters-panel">
+                <div id="tags" class="tags"></div>
 
-            <div id="date-filter" class="date-filter"></div>
+                <div id="platform-filter" class="platform-filter"></div>
+
+                <div id="date-filter" class="date-filter"></div>
+            </div>
 
             <div id="results" class="results">
                 <div class="empty-state">
@@ -1984,7 +2053,7 @@
       `,
                     )
                     .join("");
-                dateFilterDiv.innerHTML = `<div class="date-filter-label">date:</div><div class="date-filter-list">${html}</div>`;
+                dateFilterDiv.innerHTML = `<div class="date-filter-label">filter by date:</div><div class="date-filter-list">${html}</div>`;
             }
 
             function setDateFilter(preset) {
@@ -2055,7 +2124,28 @@
                 year: "last year",
             };
 
+            // mobile: the filter panel is collapsed behind a toggle. keep the
+            // toggle's badge in sync so a collapsed panel still shows how many
+            // panel filters (tag / platform / date) are active. does NOT force
+            // the panel open — that would fight a user who collapsed it.
+            function updateFiltersToggle() {
+                const toggle = document.getElementById("filters-toggle");
+                if (!toggle) return;
+                const countEl = toggle.querySelector(".filters-active-count");
+                let n = 0;
+                if (currentTag) n++;
+                if (currentPlatform) n++;
+                if (currentSince) n++;
+                if (n > 0) {
+                    countEl.textContent = String(n);
+                    countEl.hidden = false;
+                } else {
+                    countEl.hidden = true;
+                }
+            }
+
             function renderActiveFilter() {
+                updateFiltersToggle();
                 // chips render inline inside the search input wrapper; emit just
                 // the chips (no outer wrapper, no "active filters:" label).
                 if (
@@ -2266,6 +2356,23 @@
             renderPlatformFilter();
             renderDateFilter();
             renderModeToggle();
+
+            // filter panel toggle (mobile only — hidden on desktop via CSS).
+            (function () {
+                const toggle = document.getElementById("filters-toggle");
+                const panel = document.getElementById("filters-panel");
+                if (!toggle || !panel) return;
+                toggle.addEventListener("click", function () {
+                    const open = panel.classList.toggle("open");
+                    toggle.setAttribute("aria-expanded", String(open));
+                });
+                // arrived with a filter already applied → reveal it so it's
+                // never hidden behind a collapsed toggle.
+                if (currentTag || currentPlatform || currentSince) {
+                    panel.classList.add("open");
+                    toggle.setAttribute("aria-expanded", "true");
+                }
+            })();
             tagsDiv.style.display = currentMode === "keyword" ? "" : "none";
             dateFilterDiv.style.display =
                 currentMode !== "semantic" ? "" : "none";
