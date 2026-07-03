@@ -860,16 +860,21 @@
             .filters-toggle {
                 display: none;
                 align-items: center;
-                gap: 0.4rem;
+                gap: 0.5rem;
                 margin-bottom: 1rem;
                 font-family: inherit;
-                font-size: 11px;
+                font-size: 12px;
+                letter-spacing: 0.02em;
                 color: var(--text-dim);
                 background: var(--bg-hover);
                 border: 1px solid var(--border-subtle);
-                border-radius: 3px;
-                padding: 0.5rem 0.75rem;
+                border-radius: 6px;
+                padding: 0.6rem 0.85rem;
                 cursor: pointer;
+                transition:
+                    border-color 0.15s ease,
+                    color 0.15s ease,
+                    background 0.15s ease;
             }
 
             .filters-toggle:hover {
@@ -877,21 +882,48 @@
                 color: var(--text);
             }
 
-            .filters-active-count {
-                font-size: 10px;
-                color: #38bdf8;
-                background: rgba(14, 165, 233, 0.2);
-                border-radius: 999px;
-                padding: 1px 7px;
+            .filters-toggle-icon {
+                width: 15px;
+                height: 15px;
+                flex-shrink: 0;
+            }
+
+            .filters-toggle-label {
+                font-weight: 500;
             }
 
             .filters-toggle-caret {
+                width: 15px;
+                height: 15px;
                 margin-left: auto;
-                transition: transform 0.15s ease;
+                opacity: 0.7;
+                transition: transform 0.18s ease;
             }
 
             .filters-toggle[aria-expanded="true"] .filters-toggle-caret {
                 transform: rotate(180deg);
+            }
+
+            .filters-active-count {
+                font-size: 10px;
+                font-weight: 600;
+                line-height: 1;
+                color: #38bdf8;
+                background: rgba(14, 165, 233, 0.2);
+                border-radius: 999px;
+                padding: 3px 7px;
+            }
+
+            /* engaged state: filters are actually applied. the whole control
+               tints to the accent so it reads as active even at a glance. */
+            .filters-toggle.has-active {
+                color: #38bdf8;
+                border-color: rgba(14, 165, 233, 0.45);
+                background: rgba(14, 165, 233, 0.08);
+            }
+
+            .filters-toggle.has-active .filters-toggle-caret {
+                opacity: 1;
             }
 
             .active-filters {
@@ -1363,9 +1395,34 @@
                 aria-expanded="false"
                 aria-controls="filters-panel"
             >
+                <svg
+                    class="filters-toggle-icon"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <polygon
+                        points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"
+                    ></polygon>
+                </svg>
                 <span class="filters-toggle-label">filters</span>
                 <span class="filters-active-count" hidden></span>
-                <span class="filters-toggle-caret" aria-hidden="true">▾</span>
+                <svg
+                    class="filters-toggle-caret"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
             </button>
 
             <div id="filters-panel" class="filters-panel">
@@ -2139,8 +2196,10 @@
                 if (n > 0) {
                     countEl.textContent = String(n);
                     countEl.hidden = false;
+                    toggle.classList.add("has-active");
                 } else {
                     countEl.hidden = true;
+                    toggle.classList.remove("has-active");
                 }
             }
 
