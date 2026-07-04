@@ -217,4 +217,5 @@ test {
     _ = @import("labeler/store.zig");
     _ = @import("labeler/server.zig");
     _ = @import("ingest/classifier.zig");
+    _ = @import("metrics/timing.zig");
 }

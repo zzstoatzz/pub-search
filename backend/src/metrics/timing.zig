@@ -22,6 +22,14 @@ pub const Endpoint = enum {
     pub fn name(self: Endpoint) []const u8 {
         return @tagName(self);
     }
+
+    /// Whether this endpoint counts toward the aggregate traffic chart. The
+    /// dashboard's live indicator polls `/activity` once a second per open
+    /// tab, so a single stats page left open dwarfs real request volume —
+    /// that's an implementation detail of the UI, not traffic to the product.
+    pub fn countsAsTraffic(self: Endpoint) bool {
+        return self != .activity;
+    }
 };
 
 const SAMPLE_COUNT = 1000;
@@ -181,7 +189,8 @@ pub fn flushToTurso() void {
     for (pending[0..n]) |p| {
         const ep_name = @tagName(@as(Endpoint, @enumFromInt(p.ep)));
         var buf: [384]u8 = undefined;
-        const sql = std.fmt.bufPrint(&buf,
+        const sql = std.fmt.bufPrint(
+            &buf,
             "INSERT INTO traffic_hourly (hour, endpoint, count, sum_us, max_us) VALUES ({d}, '{s}', {d}, {d}, {d}) ON CONFLICT(hour, endpoint) DO UPDATE SET count=excluded.count, sum_us=excluded.sum_us, max_us=excluded.max_us",
             .{ p.hour, ep_name, p.b.count, p.b.sum_us, p.b.max_us },
         ) catch continue;
@@ -499,6 +508,7 @@ pub fn getTrafficSeries() [HOURS_TO_KEEP]TrafficPoint {
 
         var total: u32 = 0;
         for (0..ENDPOINT_COUNT) |ep| {
+            if (!@as(Endpoint, @enumFromInt(ep)).countsAsTraffic()) continue;
             const bucket = hourly[ep][idx];
             if (bucket.hour == hour) {
                 total += bucket.count;
@@ -507,4 +517,14 @@ pub fn getTrafficSeries() [HOURS_TO_KEEP]TrafficPoint {
         result[i] = .{ .hour = hour, .count = total };
     }
     return result;
+}
+
+test "activity poll is excluded from traffic aggregate" {
+    // /activity is a per-tab liveness poll (1/s); it must not inflate the
+    // aggregate traffic chart. Every other endpoint counts as real traffic.
+    try std.testing.expect(!Endpoint.activity.countsAsTraffic());
+    inline for (@typeInfo(Endpoint).@"enum".fields) |f| {
+        const ep = @field(Endpoint, f.name);
+        if (ep != .activity) try std.testing.expect(ep.countsAsTraffic());
+    }
 }
