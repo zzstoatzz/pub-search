@@ -382,12 +382,12 @@
     }
     // starlight core — a pinpoint, not the old wide glow-orb halo
     if (starness > 0.01) {
-      var coreCol = frameDark ? mixHex(colors.core, '#ffffff', 0.7) : colors.mid;
+      var coreCol = frameDark ? mixHex(colors.core, '#ffffff', 0.42) : colors.mid;
       var sg = c.createRadialGradient(half, half, 0, half, half, r * 1.4);
       sg.addColorStop(0, coreCol);
-      sg.addColorStop(0.3, hexToRgba(colors.core, 0.55));
+      sg.addColorStop(0.3, hexToRgba(colors.core, 0.5));
       sg.addColorStop(1, hexToRgba(colors.core, 0));
-      c.globalAlpha = alpha * starness * 0.9;
+      c.globalAlpha = alpha * starness * 0.78;
       c.fillStyle = sg;
       c.beginPath();
       c.arc(half, half, r * 1.4, 0, Math.PI * 2);
@@ -412,12 +412,12 @@
       cv.width = s; cv.height = s;
       var c = cv.getContext('2d');
       var half = s / 2;
-      var coreCol = frameDark ? mixHex(colors.core, '#ffffff', 0.6) : colors.mid;
+      var coreCol = frameDark ? mixHex(colors.core, '#ffffff', 0.38) : colors.mid;
       var sg = c.createRadialGradient(half, half, 0, half, half, half);
       sg.addColorStop(0, coreCol);
       sg.addColorStop(0.4, hexToRgba(colors.mid, 0.5));
       sg.addColorStop(1, hexToRgba(colors.mid, 0));
-      c.globalAlpha = 0.6;
+      c.globalAlpha = 0.55;
       c.fillStyle = sg;
       c.beginPath();
       c.arc(half, half, half, 0, Math.PI * 2);
@@ -796,8 +796,8 @@
 
   // --- label helper: strokeText outline instead of shadowBlur ---
   function drawLabel(text, x, y, dark) {
-    ctx.strokeStyle = dark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.7)';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = dark ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.88)';
+    ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
     ctx.strokeText(text, x, y);
     ctx.fillText(text, x, y);
@@ -1429,8 +1429,8 @@
 
     if (coarseAlpha > 0.01) {
       ctx.font = (small ? '9px' : '12px') + ' monospace';
-      ctx.globalAlpha = 0.85 * coarseAlpha;
-      ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
+      ctx.globalAlpha = 0.95 * coarseAlpha;
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.88)';
       var fontSize = small ? 9 : 12;
       // Cap region labels hard — a handful of the biggest regions is enough to
       // orient; more just clutters, especially on a phone.
@@ -1449,8 +1449,8 @@
 
     if (fineAlpha > 0.01) {
       ctx.font = (small ? '8px' : '11px') + ' monospace';
-      ctx.globalAlpha = 0.75 * fineAlpha;
-      ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
+      ctx.globalAlpha = 0.9 * fineAlpha;
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.88)';
       var fontSize = small ? 8 : 11;
       var maxFine = ATLAS_TUNE.labels.fine[small ? 's' : 'l'];
       var shownFine = 0;
@@ -1475,8 +1475,8 @@
       var baseFont = small ? 9 : 11;
       var fontSize = baseFont + (small ? 0 : Math.min(2, Math.max(0, Math.floor((zoom - 25) / 10))));
       ctx.font = fontSize + 'px monospace';
-      ctx.globalAlpha = 0.7 * titleAlpha;
-      ctx.fillStyle = dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
+      ctx.globalAlpha = 0.9 * titleAlpha;
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.88)';
       // Far fewer titles than before, and the ones we DO show are the most
       // popular (publication size + real recommend counts) rather than whoever
       // sorted early in the array \u2014 see labelOrder. On a phone a small handful
