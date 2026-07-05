@@ -9,6 +9,7 @@
     "workers-og": "^0.0.20"
   },
   "devDependencies": {
+    "workbox-cli": "^7.4.1",
     "wrangler": "^4.0.0"
   }
 }
