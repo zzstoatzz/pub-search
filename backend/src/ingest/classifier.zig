@@ -39,7 +39,9 @@ const THRESHOLD: f64 = 0.50;
 // re-scores the whole corpus from a clean slate. v2 = precision fix (content-word
 // scaffold only, curation veto). v3 = threshold 0.55→0.50. v4 = model-pass gate
 // (heuristic flags → LLM confirms content is bulk-generated before emit).
-const SCORING_VERSION: i64 = 10; // v10: label renamed machine-generated → bulk-generated (re-emit)
+// v11 = rotating-slot template fix (short mostly-scaffold titles count fully
+// templated) + thin-volume promotion (eligundry mood tracker sat at 0.47).
+const SCORING_VERSION: i64 = 11;
 
 // review pipeline states. The heuristic is a cheap PRE-FILTER: it never emits
 // directly (titles can't tell a branded real blog from a registry mirror). It
@@ -290,7 +292,7 @@ fn maybeEvaluate(conn: zqlite.Conn, did: []const u8) void {
         .sample = row.text(4),
     };
     const score = stats.score(arena.allocator());
-    if (score < THRESHOLD) return;
+    if (score < THRESHOLD and !stats.thinPromote()) return;
 
     // curation veto: any recommends/subscriptions → never label (human signal a
     // mirror won't have). Decided; stop re-scoring.
@@ -462,6 +464,16 @@ const Stats = struct {
         return @max(0.0, @min(1.0, x));
     }
 
+    /// Prolific author with near-empty bodies — worth model review even when
+    /// the title scaffold misses. The model gate is the precision layer; this
+    /// only decides who's worth tokens.
+    fn thinPromote(self: Stats) bool {
+        const avg_len = frac(self.len_sum, self.doc_count);
+        const dc: f64 = @floatFromInt(self.doc_count);
+        const volume = clamp01((std.math.log10(@max(dc, 1.0)) - 2.0) / 2.0);
+        return (1.0 - avg_len / 800.0) > 0.9 and volume > 0.3;
+    }
+
     /// composite 0..1 — same shape as scripts/classify-bulk-mirror.
     fn score(self: Stats, alloc: Allocator) f64 {
         const avg_len = frac(self.len_sum, self.doc_count);
@@ -516,7 +528,16 @@ const Stats = struct {
                 if (@as(f64, @floatFromInt(f)) >= half) scaffold_toks += 1;
             }
             // no content words (date/symbol/non-ASCII) → NOT templated.
-            coverage_sum += if (toks == 0) 0.0 else frac(@intCast(scaffold_toks), @intCast(toks));
+            // short titles where at least half the words are scaffold ("i felt
+            // rad" / "i felt meh") are fully templated: a rotating fill-in slot
+            // splits unigram doc-frequency so the slot word never crosses the
+            // 50% bar, halving coverage on exactly the spammiest shape.
+            coverage_sum += if (toks == 0)
+                0.0
+            else if (toks <= 3 and scaffold_toks * 2 >= toks)
+                1.0
+            else
+                frac(@intCast(scaffold_toks), @intCast(toks));
         }
         return coverage_sum / @as(f64, @floatFromInt(n));
     }
@@ -1088,6 +1109,37 @@ test "parseVerdict: reasoning-model thought stream — LAST verdict wins, reason
     defer a.free(v.reason);
     try std.testing.expect(!v.machine);
     try std.testing.expectEqualStrings("varied personal prose across years", v.reason);
+}
+
+test "rotating-slot template is flagged (regression: eligundry mood tracker)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // "I felt <mood>" — the mood enum splits unigram doc-frequency so no slot
+    // word reaches the 50% scaffold bar; old coverage maxed out at ~0.5 and the
+    // composite sat at 0.47, just under THRESHOLD.
+    const mood = Stats{
+        .doc_count = 643,
+        .len_sum = 643 * 66, // one-line bodies
+        .empty_titles = 0,
+        .digit_titles = 13,
+        .sample = "i felt rad\ni felt good\ni felt meh\ni felt rad\ni felt bad\ni felt good\n# days ago i felt rad",
+    };
+    try std.testing.expect(mood.score(a) >= THRESHOLD);
+    // and the thin-volume promotion catches it independently of title shape
+    try std.testing.expect(mood.thinPromote());
+
+    // diverse short-titled human must NOT be swept up by the short-title rule
+    const human = Stats{
+        .doc_count = 203,
+        .len_sum = 203 * 143,
+        .empty_titles = 0,
+        .digit_titles = 5,
+        .sample = "struggling with typescript\nbreaking the cycle\ntiny improvements\nwhat to do when\nserendipity isnt\nopen source your work",
+    };
+    try std.testing.expect(human.score(a) < THRESHOLD);
+    try std.testing.expect(!human.thinPromote());
 }
 
 test "date-titled journal is NOT flagged (precision regression: firstwaterbottle)" {
