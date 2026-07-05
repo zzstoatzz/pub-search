@@ -1,6 +1,6 @@
 # turso and hrana
 
-leaflet-search uses [Turso](https://turso.tech) (hosted libsql) via the HTTP API.
+pub-search uses [Turso](https://turso.tech) (hosted libsql) via the HTTP API.
 
 ## what is hrana?
 

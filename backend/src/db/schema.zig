@@ -51,7 +51,7 @@ pub fn init(allocator: Allocator, client: *Client) !void {
     std.debug.print("schema initialized\n", .{});
 }
 
-/// App-specific predicate: does this turso DB already have leaflet-search's
+/// App-specific predicate: does this turso DB already have pub-search's
 /// schema? Used to distinguish "fresh DB — let zug create everything" from
 /// "existing pre-zug DB — record baseline migrations as already-applied so
 /// zug doesn't re-run them." `documents` is the load-bearing table; if it

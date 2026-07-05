@@ -10,18 +10,18 @@
 ## Project contracts
 
 - [Site](https://pub-search.waow.tech) — the human surface (search + atlas)
-- [Adopting pub-search for agents](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/agent-surfaces.md) — start here; which surface to pick and why
-- [HTTP API reference](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/api.md)
-- [Search syntax](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/search-syntax.md) — quotes, OR, prefix behavior
-- [Content extraction](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/content-extraction.md) — why full text is per-platform work
-- [Source repository](https://github.com/zzstoatzz/leaflet-search)
+- [Adopting pub-search for agents](https://github.com/zzstoatzz/pub-search/blob/main/docs/agent-surfaces.md) — start here; which surface to pick and why
+- [HTTP API reference](https://github.com/zzstoatzz/pub-search/blob/main/docs/api.md)
+- [Search syntax](https://github.com/zzstoatzz/pub-search/blob/main/docs/search-syntax.md) — quotes, OR, prefix behavior
+- [Content extraction](https://github.com/zzstoatzz/pub-search/blob/main/docs/content-extraction.md) — why full text is per-platform work
+- [Source repository](https://github.com/zzstoatzz/pub-search)
 
 ## Surfaces you can consume
 
 ### MCP server — default for tool-calling agents
 
 - hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
-- local stdio: `claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=pub-search-mcp/server' pub-search`
+- local stdio: `claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/pub-search#subdirectory=pub-search-mcp/server' pub-search`
 - a curated layer, not a 1:1 of the HTTP API. tools: `search`,
   `get_document` (fetches + flattens full article text from the author's PDS —
   the API only returns snippets), `find_similar`, `discover_focal_post`,
@@ -55,7 +55,7 @@
 
 ## Agent guidance
 
-- read [agent-surfaces.md](https://github.com/zzstoatzz/leaflet-search/blob/main/docs/agent-surfaces.md)
+- read [agent-surfaces.md](https://github.com/zzstoatzz/pub-search/blob/main/docs/agent-surfaces.md)
   first — it has a decision table (MCP vs HTTP) and the sharp edges.
 - MCP if the consumer is a tool-calling agent and you want it productive with
   no code of yours. HTTP if your agent writes code anyway or needs pagination /

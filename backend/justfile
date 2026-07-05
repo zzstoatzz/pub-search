@@ -1,4 +1,4 @@
-# leaflet-search backend
+# pub-search backend
 
 build:
     zig build

@@ -4,7 +4,7 @@
 # dependencies = ["httpx"]
 # ///
 """
-Exercise all leaflet-search API endpoints to generate traffic.
+Exercise all pub-search API endpoints to generate traffic.
 
 Usage:
     ./scripts/exercise-api              # run with defaults

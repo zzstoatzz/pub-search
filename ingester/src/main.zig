@@ -1,7 +1,7 @@
-//! leaflet-search firehose ingester.
+//! pub-search firehose ingester.
 //!
 //! Standalone service: our own verified firehose consumer. It consumes the
-//! real firehose (com.atproto.sync.subscribeRepos), filters to leaflet-search's
+//! real firehose (com.atproto.sync.subscribeRepos), filters to pub-search's
 //! collections, verifies each matched commit (signature + MST, see
 //! verifier.zig) in process, and re-emits verified records over the `/channel`
 //! websocket the backend consumes (live path since the 2026-06-09 cutover).

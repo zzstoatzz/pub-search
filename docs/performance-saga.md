@@ -147,7 +147,7 @@ onEnd:          lock (instant) → enqueue → unlock
 changes pushed through the dependency chain:
 - `otel-zig` (zzstoatzz/otel-zig trunk): fix in `batch_span_processor.zig`
 - `logfire-zig` (zzstoatzz.io/logfire-zig main): bumped otel-zig hash
-- `leaflet-search` backend: bumped logfire-zig hash, re-enabled logfire
+- `pub-search` backend: bumped logfire-zig hash, re-enabled logfire
 
 ### final results
 

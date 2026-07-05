@@ -1,4 +1,4 @@
-/* shared component styles for leaflet-search.
+/* shared component styles for pub-search.
  * relies on css vars set per-page: --bg, --bg-subtle, --text, --text-secondary,
  * --text-dim, --text-muted, --border, --border-focus (or --tooltip-border),
  * --result-hover (or --bg-hover), --row-border.

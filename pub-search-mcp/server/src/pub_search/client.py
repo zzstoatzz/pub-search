@@ -1,4 +1,4 @@
-"""HTTP client for leaflet-search API."""
+"""HTTP client for pub-search API."""
 
 import os
 from contextlib import asynccontextmanager

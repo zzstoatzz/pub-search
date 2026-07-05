@@ -1,6 +1,6 @@
 # COSTS.md
 
-> **Mandate.** This file tracks the infrastructure costs attributed to **leaflet-search** and
+> **Mandate.** This file tracks the infrastructure costs attributed to **pub-search** and
 > what we're doing to bring them down. It is the running record of what this project
 > spends, why, and a changelog of changes that moved the number. If the spend here is
 > unjustified, that's a signal to clean up — not to ignore it.

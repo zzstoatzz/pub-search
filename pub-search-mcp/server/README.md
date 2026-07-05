@@ -15,13 +15,13 @@ claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-z
 run the MCP server locally with `uvx`:
 
 ```bash
-uvx --from git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp pub-search
+uvx --from git+https://github.com/zzstoatzz/pub-search#subdirectory=mcp pub-search
 ```
 
 to add it to claude code as a local stdio server:
 
 ```bash
-claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=mcp' pub-search
+claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/pub-search#subdirectory=mcp' pub-search
 ```
 
 ## tools
@@ -53,8 +53,8 @@ the `author` param accepts either a handle (`nate.bsky.social`) or a DID (`did:p
 ## development
 
 ```bash
-git clone https://github.com/zzstoatzz/leaflet-search
-cd leaflet-search/mcp
+git clone https://github.com/zzstoatzz/pub-search
+cd pub-search/mcp
 uv sync
 uv run pytest
 ```

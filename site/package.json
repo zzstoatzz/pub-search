@@ -1,5 +1,5 @@
 {
-  "name": "leaflet-search-site",
+  "name": "pub-search-site",
   "type": "module",
   "scripts": {
     "dev": "wrangler pages dev --port 8788",

@@ -4,7 +4,7 @@
 # dependencies = ["httpx", "pydantic-settings"]
 # ///
 """
-Backfill embeddings for leaflet-search documents.
+Backfill embeddings for pub-search documents.
 
 Usage:
     ./scripts/backfill-embeddings              # process all documents missing embeddings
@@ -140,7 +140,7 @@ def voyage_embed(settings: Settings, texts: list[str]) -> list[list[float]]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backfill embeddings for leaflet-search")
+    parser = argparse.ArgumentParser(description="Backfill embeddings for pub-search")
     parser.add_argument("--limit", type=int, default=0, help="max documents to process (0 = all)")
     parser.add_argument("--batch-size", type=int, default=20, help="documents per Voyage API call")
     parser.add_argument("--dry-run", action="store_true", help="show what would be processed")

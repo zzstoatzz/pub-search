@@ -33,7 +33,7 @@ corpus characteristics that matter for agent design:
 claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'
 
 # local stdio
-claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/leaflet-search#subdirectory=pub-search-mcp/server' pub-search
+claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/pub-search#subdirectory=pub-search-mcp/server' pub-search
 ```
 
 the MCP server is **not** a 1:1 mapping of the HTTP API. it's a curated layer

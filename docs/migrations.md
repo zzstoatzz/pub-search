@@ -1,6 +1,6 @@
 # schema migrations
 
-leaflet-search runs Turso schema migrations via [zug](https://tangled.sh/@zzstoatzz.io/zug), a small Zig 0.16 SQLite migration runner. Migrations are ordered, recorded in a `zug_migrations` table, run-once-and-checksummed, and halt on dirty failures.
+pub-search runs Turso schema migrations via [zug](https://tangled.sh/@zzstoatzz.io/zug), a small Zig 0.16 SQLite migration runner. Migrations are ordered, recorded in a `zug_migrations` table, run-once-and-checksummed, and halt on dirty failures.
 
 ## the system at a glance
 

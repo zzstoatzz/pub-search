@@ -47,8 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
 
 WORKDIR /app
-COPY --from=builder /app/zig-out/bin/leaflet-search .
+COPY --from=builder /app/zig-out/bin/pub-search .
 
 EXPOSE 3000
 
-CMD ["./leaflet-search"]
+CMD ["./pub-search"]

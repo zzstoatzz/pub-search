@@ -6,7 +6,7 @@ The `my-prefect-server` deployment `rebuild-atlas/rebuild-atlas` crashed on the
 scheduled run `rebuild-atlas-9f0c8f46` because the atlas build process triggered
 global node OOM on the single-node k3s cluster.
 
-This report is intentionally left in the `leaflet-search` repository because
+This report is intentionally left in the `pub-search` repository because
 the memory-heavy code path lives in `scripts/build-atlas`.
 
 ## Observed failure

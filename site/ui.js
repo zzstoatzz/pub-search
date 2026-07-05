@@ -1,4 +1,4 @@
-// shared UI primitives for leaflet-search:
+// shared UI primitives for pub-search:
 //   - longPress(el, fn): 300ms hold on touch OR right-click on pointer
 //   - bindContextMenu(triggerEl, getItems): wraps longPress + showMenu
 //   - showMenu(items, anchor): bottom-sheet on phone, popover on pointer

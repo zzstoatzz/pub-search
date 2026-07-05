@@ -1,4 +1,4 @@
-# leaflet-search notes
+# pub-search notes
 
 ## deployment
 - **backend**: push to `main` touching `backend/**` → auto-deploys via GitHub Actions
@@ -7,8 +7,8 @@
 - `--app` does NOT protect against deploying from the wrong directory — it only renames the target; the config (ports, env, mounts) still comes from that directory's `fly.toml`. Always `cd` into the app dir first. (2026-06-10: root-dir deploy with `--app leaflet-search-ingester` was stopped only by a volume-name mismatch.)
 
 ## remotes
-- `origin`: tangled.sh:zzstoatzz.io/leaflet-search
-- `github`: github.com/zzstoatzz/leaflet-search (CI runs here)
+- `origin`: tangled.sh:zzstoatzz.io/pub-search
+- `github`: github.com/zzstoatzz/pub-search (CI runs here)
 - push to both: `git push origin main && git push github main`
 
 ## architecture
