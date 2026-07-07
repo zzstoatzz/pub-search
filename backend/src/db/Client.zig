@@ -213,7 +213,7 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
     var response_body: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer response_body.deinit();
 
-    const res = self.http_client.fetch(.{
+    const res = fetchEvictRetry(&self.http_client, self.io, .{
         .location = .{ .url = url },
         .method = .POST,
         .headers = .{
@@ -248,6 +248,44 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
     }
 
     return try response_body.toOwnedSlice();
+}
+
+/// `fetch` with a one-shot retry when a pooled keep-alive connection turns
+/// out to be dead (turso / fly NAT close idle connections; the pool has no
+/// liveness check). Works around ziglang/zig#21316: std.http.Client releases
+/// a connection whose *send* failed back into the pool as reusable
+/// (Request.deinit sees reader.state == .ready), so without eviction every
+/// subsequent request pops the same dead connection and fails forever —
+/// this wedged prod for 15min on 2026-07-06 (WriteFailed burst alert).
+/// MRE: repros/zig-21316-pool-poisoning.zig.
+///
+/// Both retryable errors fire before any response bytes are written, so
+/// retrying cannot duplicate output into `response_writer`. Retrying the
+/// POST is safe for the same reason curl/Go do it: the server never began
+/// processing a request it didn't finish reading.
+fn fetchEvictRetry(http_client: *http.Client, io: Io, options: http.Client.FetchOptions) http.Client.FetchError!http.Client.FetchResult {
+    return http_client.fetch(options) catch |err| switch (err) {
+        error.WriteFailed, error.HttpConnectionClosing => {
+            evictIdleConnections(http_client, io);
+            return http_client.fetch(options);
+        },
+        else => err,
+    };
+}
+
+/// Close and free every idle pooled connection. Mirrors what
+/// ConnectionPool.deinit does for the free list (ConnectionPool.resize
+/// doesn't compile in zig 0.16 — it predates the intrusive-list rework).
+/// In-flight connections (`used` list) are untouched.
+fn evictIdleConnections(http_client: *http.Client, io: Io) void {
+    const pool = &http_client.connection_pool;
+    pool.mutex.lockUncancelable(io);
+    defer pool.mutex.unlock(io);
+    while (pool.free.popFirst()) |node| {
+        const connection: *http.Client.Connection = @alignCast(@fieldParentPtr("pool_node", node));
+        connection.destroy(io);
+    }
+    pool.free_len = 0;
 }
 
 fn buildBatchRequestBody(self: *Client, statements: []const Statement) ![]const u8 {
@@ -523,4 +561,73 @@ test "buildTypedRequestBody: no args produces null args field" {
     // args field is omitted (emit_null_optional_fields = false)
     const stmt = parsed.value.object.get("requests").?.array.items[0].object.get("stmt").?.object;
     try std.testing.expect(stmt.get("args") == null);
+}
+
+// regression for the 2026-07-06 WriteFailed wedge (ziglang/zig#21316): a
+// server that answers one keep-alive request per connection then RST-closes
+// it. plain fetch poisons the pool and fails forever; fetchEvictRetry must
+// recover on every request.
+const StaleConnServer = struct {
+    server: Io.net.Server,
+    port: u16,
+    thread: std.Thread,
+
+    fn start(io: Io) !*StaleConnServer {
+        const s = try std.testing.allocator.create(StaleConnServer);
+        errdefer std.testing.allocator.destroy(s);
+        var addr = try Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+        s.server = try addr.listen(io, .{});
+        var bound: std.posix.sockaddr.in = undefined;
+        var len: std.posix.socklen_t = @sizeOf(@TypeOf(bound));
+        _ = std.c.getsockname(s.server.socket.handle, @ptrCast(&bound), &len);
+        s.port = std.mem.bigToNative(u16, bound.port);
+        s.thread = try std.Thread.spawn(.{}, run, .{ s, io });
+        return s;
+    }
+
+    fn run(s: *StaleConnServer, io: Io) void {
+        while (true) {
+            const stream = s.server.accept(io) catch return;
+            const fd = stream.socket.handle;
+            var buf: [4096]u8 = undefined;
+            _ = std.c.recv(fd, &buf, buf.len, 0);
+            const resp = "HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n";
+            _ = std.c.send(fd, resp, resp.len, 0);
+            const linger = std.c.linger{ .onoff = 1, .linger = 0 };
+            _ = std.c.setsockopt(fd, std.c.SOL.SOCKET, std.c.SO.LINGER, &linger, @sizeOf(std.c.linger));
+            stream.close(io);
+        }
+    }
+
+    fn stop(s: *StaleConnServer, io: Io) void {
+        s.server.deinit(io); // unblocks accept -> thread returns
+        s.thread.join();
+        std.testing.allocator.destroy(s);
+    }
+};
+
+test "fetchEvictRetry recovers from a dead pooled connection" {
+    var threaded: Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const server = try StaleConnServer.start(io);
+    defer server.stop(io);
+
+    var url_buf: [64]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/", .{server.port});
+
+    var http_client: http.Client = .{ .allocator = std.testing.allocator, .io = io };
+    defer http_client.deinit();
+
+    for (0..3) |i| {
+        // idle long enough for the server's RST close to land before reuse
+        if (i > 0) try io.sleep(.fromMilliseconds(100), .awake);
+        const res = try fetchEvictRetry(&http_client, io, .{
+            .location = .{ .url = url },
+            .method = .POST,
+            .payload = "{}",
+        });
+        try std.testing.expectEqual(http.Status.ok, res.status);
+    }
 }
