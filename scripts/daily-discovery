@@ -21,8 +21,10 @@ The post is built to be simultaneously human-readable and Phi-actionable:
   has wired (no URL→AT-URI lookup needed)
 - standard external embed with title + url → rich card render in bsky clients
 
-Dedups against pub-search's own recent posts: if the same focal URL was
-posted in the last 20h, skip (don't repost on quiet days).
+Dedups against pub-search's own recent posts: fetches several candidates
+and posts the first focal URL not already posted within the lookback
+(default 7 days — matched to the endorsement window so a doc that stays
+on top of the rolling-week leaderboard isn't reposted daily).
 
 Creds: ATPROTO_HANDLE / ATPROTO_PASSWORD (from .env, or env / ENV_FILE).
 
@@ -47,7 +49,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND = "https://leaflet-search-backend.fly.dev"
 DEFAULT_POOL = 25
 DEFAULT_WINDOW = "week"
-DEDUP_HOURS_DEFAULT = 20
+DEDUP_HOURS_DEFAULT = 24 * 7
+CANDIDATES = 10
 
 
 class Settings(BaseSettings):
@@ -58,16 +61,15 @@ class Settings(BaseSettings):
     atproto_password: str = ""
 
 
-def fetch_focal(pool: int, window: str) -> dict | None:
-    """Top item from the top-author cascade. Returns None on quiet days."""
+def fetch_candidates(pool: int, window: str) -> list[dict]:
+    """Ranked items from the top-author cascade. Empty on quiet days."""
     r = httpx.get(
         f"{BACKEND}/recommended-by-top-authors",
-        params={"pool": pool, "since": window, "limit": 1},
+        params={"pool": pool, "since": window, "limit": CANDIDATES},
         timeout=30,
     )
     r.raise_for_status()
-    items = r.json()
-    return items[0] if items else None
+    return r.json()
 
 
 def compose_text(focal: dict, pool: int, window: str) -> str:
@@ -96,28 +98,30 @@ def build_embed(focal: dict) -> models.AppBskyEmbedExternal.Main:
     )
 
 
-def already_posted(client: Client, focal_url: str, hours: int) -> bool:
-    """True if pub-search already posted this focal URL within the window."""
+def recently_posted_urls(client: Client, hours: int) -> set[str]:
+    """External-embed URLs pub-search itself posted within the lookback."""
     try:
-        feed = client.get_author_feed(client.me.did, limit=10).feed
+        feed = client.get_author_feed(client.me.did, limit=30).feed
     except Exception:
-        return False
+        return set()
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
+    urls: set[str] = set()
     for item in feed:
         rec = getattr(item.post, "record", None)
         emb = getattr(rec, "embed", None)
         ext = getattr(emb, "external", None) if emb is not None else None
-        if ext is None or getattr(ext, "uri", None) != focal_url:
+        url = getattr(ext, "uri", None) if ext is not None else None
+        if not url:
             continue
         created = getattr(rec, "created_at", None)
-        if not created:
-            return True
-        try:
-            if datetime.datetime.fromisoformat(created.replace("Z", "+00:00")) > cutoff:
-                return True
-        except ValueError:
-            return True
-    return False
+        if created:
+            try:
+                if datetime.datetime.fromisoformat(created.replace("Z", "+00:00")) < cutoff:
+                    continue
+            except ValueError:
+                pass
+        urls.add(url)
+    return urls
 
 
 def main() -> None:
@@ -139,9 +143,23 @@ def main() -> None:
         print("ATPROTO_HANDLE/ATPROTO_PASSWORD not set — skipping (configure to enable)")
         return
 
-    focal = fetch_focal(args.top_authors, args.window)
-    if not focal:
+    candidates = fetch_candidates(args.top_authors, args.window)
+    if not candidates:
         print(f"no focal in pool={args.top_authors} window={args.window} — quiet day, skipping")
+        return
+
+    client = None
+    if not args.dry_run:
+        client = Client()
+        client.login(settings.atproto_handle, settings.atproto_password)
+
+    posted = set()
+    if client is not None and not args.force:
+        posted = recently_posted_urls(client, args.dedup_hours)
+
+    focal = next((c for c in candidates if c["url"] not in posted), None)
+    if focal is None:
+        print(f"skipped — all {len(candidates)} candidates already posted within {args.dedup_hours}h")
         return
 
     text = compose_text(focal, args.top_authors, args.window)
@@ -162,13 +180,6 @@ def main() -> None:
         print(f"\n=== focal ===  endorsements={focal['recommendCount']}  platform={focal['platform']}")
         print(f"  at-uri:  {focal['uri']}")
         print(f"  web url: {focal['url']}")
-        return
-
-    client = Client()
-    client.login(settings.atproto_handle, settings.atproto_password)
-
-    if not args.force and already_posted(client, focal["url"], args.dedup_hours):
-        print(f"skipped — already posted within {args.dedup_hours}h: {focal['url']}")
         return
 
     resp = client.send_post(text=text, embed=embed)
