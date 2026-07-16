@@ -222,6 +222,10 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
         },
         .payload = body,
         .response_writer = &response_body.writer,
+        // Batch builders favor bounded completion over connection reuse. Zig's
+        // HTTP client has no read timeout, so a silently-dead pooled socket can
+        // accept the request write and then wait forever for a response.
+        .keep_alive = std.c.getenv("TURSO_DISABLE_KEEPALIVE") == null,
     }) catch |err| {
         logfire.err("{s} http failed: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
         span.recordError(error.HttpError);

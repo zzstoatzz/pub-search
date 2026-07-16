@@ -84,9 +84,11 @@ key properties, mostly stolen from typeahead:
   and the system freezes on the current snapshot indefinitely.
 
 observability: `GET /snapshot` on the backend returns the live replica's
-manifest (what build is prod actually serving). the watchdog alerts when
-snapshot age exceeds 3h — a dead builder or watcher stalls freshness
-loudly instead of failing silently.
+manifest (what build is prod actually serving). the builder has a 45-minute
+process deadline; an independent 15-minute guardian stops runs over 50 minutes
+and starts a missed run when snapshot age exceeds 90 minutes. the watchdog alerts
+when age exceeds 120 minutes. see
+[the July 15 stale-snapshot retro](retro-2026-07-15-stale-snapshot-builder-hang.md).
 
 ## what happens at arbitrary scale
 
@@ -144,10 +146,10 @@ surgery footgun.
 1. add the DID to `backend/src/policy.zig` `BANNED_DIDS` → deploy. the
    indexer refuses new inserts, the builder excludes existing rows, and
    the promote watcher will reject any snapshot containing them.
-2. **recreate the scheduled builder machine** — it pins the image it was
-   created with, so it builds with the old policy until you do. (the
-   `schema_version` gate makes a stale-image builder stall freshness
-   rather than serve wrong data, but policy lives in the same image.)
+2. deploy the backend. CI reconciles the scheduled builder to the serving
+   image's immutable digest and stamps the source revision into
+   `BUILDER_VERSION`. Verify digest parity with
+   `scripts/reconcile-snapshot-builder --version <git-sha> --dry-run`.
 3. purge vectors (`scripts/purge-bridgyfed-vectors` handles the banned
    list) and, eventually, turso history (`scripts/purge-banned-turso` —
    paced, canary-gated; turso rows are invisible to serving meanwhile,
@@ -175,8 +177,9 @@ semantic removal.
 - **document edits are expensive turso-side** (the O(corpus) FTS update)
   until the rowid-FTS migration lands. fine at edit rates of today;
   not fine for a mass-rewrite backfill.
-- **ban propagation requires a deploy + builder recreate.** policy is
-  code, deliberately — but it means the ban list isn't a runtime knob.
+- **ban propagation requires a deploy.** policy is code, deliberately -- but
+  it means the ban list isn't a runtime knob. CI advances serving and builder
+  from the same image digest.
 - **adopt restarts drop in-flight requests** (once per hour, ~seconds).
   the zero-downtime answer is a leased read pool + live ATTACH swap
   (typeahead's design); the boot-adopt path was chosen first because it
@@ -186,5 +189,6 @@ semantic removal.
 
 - [scaling-plan.md](scaling-plan.md) — the invariants and the original plan of record
 - [retro-2026-06-10-cutover-cascade.md](retro-2026-06-10-cutover-cascade.md) — the night that motivated all of this
+- [retro-2026-07-15-stale-snapshot-builder-hang.md](retro-2026-07-15-stale-snapshot-builder-hang.md) — why schedule, timeout, deploy, and paging are separate guarantees
 - [search-architecture.md](search-architecture.md) — FTS5 internals and the if-we-outgrow-sqlite options
 - typeahead: [tangled.sh/@zzstoatzz.io/typeahead](https://tangled.sh/@zzstoatzz.io/typeahead) — the architectural prior art (builder/manifest/promote/overlay at 7M-actor scale)

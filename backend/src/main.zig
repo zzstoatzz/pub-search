@@ -200,6 +200,7 @@ fn setSocketTimeout(fd: std.posix.fd_t, secs: u32) !void {
 // a module via `pub const X = @import("x.zig").X` does not pull in `x.zig`'s
 // test blocks. Add new test-bearing files here as they appear.
 test {
+    _ = @import("builder.zig");
     _ = @import("db/Client.zig");
     _ = @import("db/zug_conn.zig");
     _ = @import("db/migrations.zig");

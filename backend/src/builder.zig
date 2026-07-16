@@ -28,13 +28,30 @@ const r2 = @import("r2.zig");
 pub const MANIFEST_VERSION = 1;
 
 const Channel = enum { staging, prod };
+const DEFAULT_TIMEOUT_SECS: u64 = 45 * 60;
 
 fn getenv(name: [*:0]const u8) ?[]const u8 {
     return if (std.c.getenv(name)) |v| std.mem.span(v) else null;
 }
 
+fn parseTimeoutSeconds(raw: ?[]const u8) u64 {
+    const value = std.fmt.parseInt(u64, raw orelse return DEFAULT_TIMEOUT_SECS, 10) catch
+        return DEFAULT_TIMEOUT_SECS;
+    return if (value == 0) DEFAULT_TIMEOUT_SECS else value;
+}
+
+fn timeoutWatchdog(io: Io, timeout_s: u64) void {
+    io.sleep(Io.Duration.fromSeconds(@intCast(timeout_s)), .awake) catch return;
+    logfire.err("builder: exceeded {d}s wall-clock timeout; terminating", .{timeout_s});
+    std.process.exit(1);
+}
+
 pub fn run(allocator: Allocator, io: Io) !void {
     const started_s: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
+    const timeout_s = parseTimeoutSeconds(getenv("BUILDER_TIMEOUT_SECS"));
+    const watchdog = try std.Thread.spawn(.{}, timeoutWatchdog, .{ io, timeout_s });
+    watchdog.detach();
+    logfire.info("builder: watchdog armed ({d}s)", .{timeout_s});
 
     const channel: Channel = blk: {
         const raw = getenv("BUILDER_CHANNEL") orelse "staging";
@@ -106,6 +123,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     // mismatch beyond deletes-during-build is a real bug; keep a small
     // tolerance for those deletes only.
     {
+        logfire.info("builder: phase=verify_remote", .{});
         var result = try turso.query(sync.BUILD_DOC_COUNT_SQL, &.{watermark});
         defer result.deinit();
         const expected: usize = if (result.first()) |row| @intCast(row.int(0)) else 0;
@@ -134,6 +152,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     local.deinit();
 
     {
+        logfire.info("builder: phase=compact", .{});
         const path_z = try std.fmt.allocPrintSentinel(allocator, "{s}", .{db_path}, 0);
         const solo = try zqlite.open(path_z.ptr, zqlite.OpenFlags.ReadWrite);
         defer solo.close();
@@ -207,6 +226,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     }
 
     const cfg = try r2.configure(allocator, io);
+    logfire.info("builder: phase=upload", .{});
     try r2.upload(allocator, io, cfg, db_path, snapshot_key);
     try r2.upload(allocator, io, cfg, manifest_path, manifest_key);
     // latest pointer LAST — readers can never see a pointer to a partial build
@@ -214,6 +234,14 @@ pub fn run(allocator: Allocator, io: Io) !void {
 
     const took_s: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s) - started_s);
     logfire.info("builder: published {s} to {s} channel ({d} docs, {d}s)", .{ build_id, @tagName(channel), counts.documents, took_s });
+}
+
+test "builder timeout parser uses a safe nonzero default" {
+    try std.testing.expectEqual(DEFAULT_TIMEOUT_SECS, parseTimeoutSeconds(null));
+    try std.testing.expectEqual(DEFAULT_TIMEOUT_SECS, parseTimeoutSeconds(""));
+    try std.testing.expectEqual(DEFAULT_TIMEOUT_SECS, parseTimeoutSeconds("nope"));
+    try std.testing.expectEqual(DEFAULT_TIMEOUT_SECS, parseTimeoutSeconds("0"));
+    try std.testing.expectEqual(@as(u64, 90), parseTimeoutSeconds("90"));
 }
 
 fn writeFile(io: Io, path: []const u8, content: []const u8) !void {

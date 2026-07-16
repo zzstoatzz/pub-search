@@ -17,7 +17,7 @@
             .hash = "zat-0.3.8-5PuC7glgCgCVn18R0k6AuXiNok-jjqDRGgaBFj5JsI_N",
         },
         .zqlite = .{
-            .url = "https://github.com/karlseguin/zqlite.zig/archive/refs/heads/master.tar.gz",
+            .url = "https://github.com/karlseguin/zqlite.zig/archive/5ac4cabe95a6d7faa7baf0da8057a8e6e8a227a1.tar.gz",
             .hash = "zqlite-0.0.1-RWLaY64xnAAxsD2YNT8QqPMJUuaFv2GOzFRR4aGypJv3",
         },
         .logfire = .{
