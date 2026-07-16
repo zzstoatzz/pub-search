@@ -172,7 +172,7 @@ inspection was required to establish drift.
   and was adopted atomically.
 - Recovery changed only the builder Machine. The serving Machine was not exposed
   to the experimental Turso connection setting.
-- All 100 backend tests passed, and post-adoption `/snapshot`, `/stats`, and a
+- All 101 backend tests passed, and post-adoption `/snapshot`, `/stats`, and a
   real keyword query returned valid bodies.
 
 ## what went wrong in the response
@@ -214,29 +214,27 @@ inspection was required to establish drift.
 
 ### immediate: make the recovery durable
 
-- [ ] Commit and deploy the watchdog, builder-only connection policy, and
-      immutable dependency pin. They are live in the recovery image but are not
-      yet committed at the time of writing.
-- [ ] Make backend deployment update the scheduled builder to the same immutable
+- [x] Commit and deploy the watchdog, builder-only connection policy, and
+      immutable dependency pin.
+- [x] Make backend deployment update the scheduled builder to the same immutable
       image digest. Remove the manual builder-recreation step as normal policy.
-- [ ] Set `BUILDER_VERSION` to the source commit and expose the builder image or
+- [x] Set `BUILDER_VERSION` to the source commit and expose the builder image or
       revision in the manifest and operational telemetry.
-- [ ] Add `.dockerignore` for `.zig-cache`, `zig-out`, and `zig-pkg`; the
+- [x] Add `.dockerignore` for `.zig-cache`, `zig-out`, and `zig-pkg`; the
       emergency build warned about a 6.4 GB context.
 
 ### immediate: bound and page freshness failures
 
-- [ ] Lower snapshot-age paging to a threshold derived from actual runtime and
+- [x] Lower snapshot-age paging to a threshold derived from actual runtime and
       cadence (initial target: 120 minutes, not 180).
 - [ ] Route freshness failure to an interruptive channel with ownership and
       acknowledgement. Keep Bluesky as a public/status signal, not the only page.
-- [ ] Emit builder run telemetry with build ID, image revision, phase, elapsed
+- [x] Emit builder run telemetry with build ID, image revision, phase, elapsed
       time, last progress time, and terminal status.
-- [ ] Add an external reconciler: if a builder exceeds its deadline, stop or
-      replace it and launch one clean retry; if the serving snapshot remains old
-      after a successful publish, escalate the promote watcher separately.
-- [ ] Alert on a missing expected run, not only artifact age. One missed hourly
-      completion should be visible before the second cycle is lost.
+- [x] Add an external guardian: stop a builder that exceeds 50 minutes and start
+      a clean run when snapshot age exceeds 90 minutes.
+- [ ] Escalate the promote watcher separately when a successful publication is
+      not adopted within its expected polling and download window.
 
 ### follow-up engineering
 
@@ -246,14 +244,39 @@ inspection was required to establish drift.
 - [ ] Exercise the timeout path in an integration test using a server that
       accepts a request and never responds. The existing stale-connection test
       covers send failure, not this incident's read hang.
-- [ ] Investigate and remove routine R2 `501 Not Implemented` retries from the
-      upload path; alert separately when any artifact or pointer upload exhausts
-      retries.
+- [x] Replace Debian's `rclone v1.60.1-DEV` with pinned `v1.74.4`; one complete
+      production upload then succeeded without the prior routine R2 `501`
+      retries. Continue alerting when any upload exhausts retries.
 - [ ] Add an end-to-end freshness canary: insert or identify a recent document,
       require it in the next eligible snapshot, and verify that serving adopted
       that exact build within the freshness objective.
 - [ ] Test scheduled-builder failover by deliberately hanging a canary run and
       proving automatic termination, retry, publication, and adoption.
+
+## follow-up verification (2026-07-16 UTC)
+
+- Commit `deeb276` was deployed from an immutable image. Serving and builder
+  were verified on digest `sha256:69a03e...`, with the builder stopped, hourly,
+  and configured for a 2,700-second process deadline and fresh Turso connections.
+- A disposable Fly canary ran the production builder image with a five-second
+  deadline. It logged the armed watchdog, terminated nonzero at the deadline,
+  and was removed without publishing.
+- The external guardian was forced through its recovery path. It started the
+  stopped production builder and verified the Machine reached `started`.
+- Production build `b1784178587-70d8` processed 47,985 documents. The formerly
+  hanging `verify_remote` phase completed in 29 seconds, compaction and upload
+  completed, and the builder exited 0 after 1,168 seconds with no OOM.
+- All three R2 writes succeeded without a visible `501` retry under pinned
+  `rclone v1.74.4`. The promote watcher detected the build, staged it, restarted
+  serving, and `/snapshot` reported the exact build and source revision.
+- The full smoke suite passed after adoption and again after the automated
+  deployment: keyword, semantic, hybrid, dashboard, timeline, latency,
+  activity, stats, tags, and popular endpoints.
+- The first GitHub deployment exposed a Linux-only test teardown hang: closing
+  a listener did not wake a thread blocked in `accept`. The original code timed
+  out in a Linux container; an explicit loopback wake completed 101/101 tests.
+  Commit `9134072` then passed Linux CI, deployed, and reconciled the builder to
+  the serving digest `sha256:e6384f...` in one successful 5m12s workflow.
 
 ## operating rules going forward
 
