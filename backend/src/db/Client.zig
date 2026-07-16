@@ -575,6 +575,7 @@ const StaleConnServer = struct {
     server: Io.net.Server,
     port: u16,
     thread: std.Thread,
+    stopping: std.atomic.Value(bool),
 
     fn start(io: Io) !*StaleConnServer {
         const s = try std.testing.allocator.create(StaleConnServer);
@@ -585,6 +586,7 @@ const StaleConnServer = struct {
         var len: std.posix.socklen_t = @sizeOf(@TypeOf(bound));
         _ = std.c.getsockname(s.server.socket.handle, @ptrCast(&bound), &len);
         s.port = std.mem.bigToNative(u16, bound.port);
+        s.stopping = .init(false);
         s.thread = try std.Thread.spawn(.{}, run, .{ s, io });
         return s;
     }
@@ -592,6 +594,10 @@ const StaleConnServer = struct {
     fn run(s: *StaleConnServer, io: Io) void {
         while (true) {
             const stream = s.server.accept(io) catch return;
+            if (s.stopping.load(.acquire)) {
+                stream.close(io);
+                return;
+            }
             const fd = stream.socket.handle;
             var buf: [4096]u8 = undefined;
             _ = std.c.recv(fd, &buf, buf.len, 0);
@@ -604,8 +610,14 @@ const StaleConnServer = struct {
     }
 
     fn stop(s: *StaleConnServer, io: Io) void {
-        s.server.deinit(io); // unblocks accept -> thread returns
+        // Closing a listener from another thread does not reliably wake a
+        // blocking accept on Linux. Connect once to wake it explicitly.
+        s.stopping.store(true, .release);
+        var address = Io.net.IpAddress{ .ip4 = .loopback(s.port) };
+        const wake = address.connect(io, .{ .mode = .stream }) catch unreachable;
+        wake.close(io);
         s.thread.join();
+        s.server.deinit(io);
         std.testing.allocator.destroy(s);
     }
 };
