@@ -5,6 +5,16 @@ const zql = @import("zql");
 const logfire = @import("logfire");
 const db = @import("../db.zig");
 const tpuf = @import("../tpuf.zig");
+const classifier = @import("../ingest/classifier.zig");
+const policy = @import("../policy.zig");
+
+pub const Options = struct {
+    /// Number of policy-visible, deduplicated results the caller needs from
+    /// the start of the stable ranking. HTTP asks for offset + limit + 1 so it
+    /// can slice the page and determine hasMore without guessing.
+    max_results: usize = 21,
+    show_labeled: bool = false,
+};
 
 pub const SearchMode = enum {
     keyword,
@@ -157,7 +167,7 @@ const DocsByTag = zql.Query(
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE dt.tag = :tag
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY d.created_at DESC, d.uri LIMIT :limit
 );
 
 const DocsByFtsAndTag = zql.Query(
@@ -172,7 +182,7 @@ const DocsByFtsAndTag = zql.Query(
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE documents_fts MATCH :query AND dt.tag = :tag
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByFts = zql.Query(
@@ -186,7 +196,7 @@ const DocsByFts = zql.Query(
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByFtsAndSince = zql.Query(
@@ -200,7 +210,7 @@ const DocsByFtsAndSince = zql.Query(
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.created_at >= :since
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByFtsAndPlatform = zql.Query(
@@ -214,7 +224,7 @@ const DocsByFtsAndPlatform = zql.Query(
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.platform = :platform
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByFtsAndPlatformAndSince = zql.Query(
@@ -228,7 +238,7 @@ const DocsByFtsAndPlatformAndSince = zql.Query(
     \\JOIN documents d ON f.uri = d.uri
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE documents_fts MATCH :query AND d.platform = :platform AND d.created_at >= :since
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByTagAndPlatform = zql.Query(
@@ -241,7 +251,7 @@ const DocsByTagAndPlatform = zql.Query(
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE dt.tag = :tag AND d.platform = :platform
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY d.created_at DESC, d.uri LIMIT :limit
 );
 
 const DocsByFtsAndTagAndPlatform = zql.Query(
@@ -256,7 +266,7 @@ const DocsByFtsAndTagAndPlatform = zql.Query(
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\JOIN document_tags dt ON d.uri = dt.document_uri
     \\WHERE documents_fts MATCH :query AND dt.tag = :tag AND d.platform = :platform
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByPlatform = zql.Query(
@@ -268,7 +278,7 @@ const DocsByPlatform = zql.Query(
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.platform = :platform
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY d.created_at DESC, d.uri LIMIT :limit
 );
 
 const DocsByAuthor = zql.Query(
@@ -280,7 +290,7 @@ const DocsByAuthor = zql.Query(
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.did = :author AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) AND (d.url_dead IS NULL OR d.url_dead = 0)
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY d.created_at DESC, d.uri LIMIT :limit
 );
 
 const DocsByAuthorAndPlatform = zql.Query(
@@ -292,7 +302,7 @@ const DocsByAuthorAndPlatform = zql.Query(
     \\FROM documents d
     \\LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.did = :author AND d.platform = :platform AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) AND (d.url_dead IS NULL OR d.url_dead = 0)
-    \\ORDER BY d.created_at DESC LIMIT 40
+    \\ORDER BY d.created_at DESC, d.uri LIMIT :limit
 );
 
 // Find documents by their publication's base_path (subdomain search)
@@ -310,7 +320,7 @@ const DocsByPubBasePath = zql.Query(
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
     \\WHERE publications_fts MATCH :query
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByPubBasePathAndPlatform = zql.Query(
@@ -325,7 +335,7 @@ const DocsByPubBasePathAndPlatform = zql.Query(
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
     \\WHERE publications_fts MATCH :query AND d.platform = :platform
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByPubBasePathAndSince = zql.Query(
@@ -340,7 +350,7 @@ const DocsByPubBasePathAndSince = zql.Query(
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
     \\WHERE publications_fts MATCH :query AND d.created_at >= :since
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 const DocsByPubBasePathAndPlatformAndSince = zql.Query(
@@ -355,7 +365,7 @@ const DocsByPubBasePathAndPlatformAndSince = zql.Query(
     \\JOIN publications p ON d.publication_uri = p.uri
     \\JOIN publications_fts pf ON p.uri = pf.uri
     \\WHERE publications_fts MATCH :query AND d.platform = :platform AND d.created_at >= :since
-    \\ORDER BY rank + (julianday('now') - julianday(d.created_at)) / 30.0 LIMIT 40
+    \\ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT :limit
 );
 
 // Every doc query above shares the same column projection. Picking one as
@@ -450,13 +460,23 @@ const PubSearch = zql.Query(
     \\FROM publications_fts f
     \\JOIN publications p ON f.uri = p.uri
     \\WHERE publications_fts MATCH :query
-    \\ORDER BY rank + (julianday('now') - julianday(p.created_at)) / 30.0 LIMIT 10
+    \\ORDER BY rank + (julianday('now') - julianday(p.created_at)) / 30.0, p.uri LIMIT :limit
 );
 
-pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, mode: SearchMode) ![]const u8 {
-    if (mode == .hybrid) return searchHybrid(alloc, query, tag_filter, platform_filter, since_filter, author_filter);
-    if (mode == .semantic) return searchSemantic(alloc, query, platform_filter, since_filter, author_filter);
-    return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter);
+pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, mode: SearchMode, options: Options) ![]const u8 {
+    if (mode == .hybrid) return searchHybrid(alloc, query, tag_filter, platform_filter, since_filter, author_filter, options);
+    if (mode == .semantic) return searchSemantic(alloc, query, platform_filter, since_filter, author_filter, options);
+    return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter, options);
+}
+
+fn includeDid(did: []const u8, show_labeled: bool) bool {
+    return show_labeled or !classifier.isLabeledDid(did) or policy.isKept(did);
+}
+
+fn queryCandidateLimit(max_results: usize) usize {
+    // Deduplication and policy filtering happen after SQL/ANN retrieval. Fetch
+    // a bounded surplus so the requested visible prefix can still be filled.
+    return @min(2000, max_results *| 3 +| 20);
 }
 
 /// Whether a doc's `created_at` satisfies an active `since` lower bound.
@@ -502,9 +522,14 @@ fn addAuthorCondition(alloc: Allocator, stmt: db.Client.Statement, col: []const 
     const order_idx = std.mem.indexOf(u8, stmt.sql, "ORDER BY") orelse return stmt;
     const new_sql = try std.fmt.allocPrint(alloc, "{s}AND (? = '' OR {s} = ?) {s}", .{ stmt.sql[0..order_idx], col, stmt.sql[order_idx..] });
     const new_args = try alloc.alloc([]const u8, stmt.args.len + 2);
-    @memcpy(new_args[0..stmt.args.len], stmt.args);
-    new_args[stmt.args.len] = author_val;
-    new_args[stmt.args.len + 1] = author_val;
+    // Every paginated search statement has LIMIT ? as its final bind. The
+    // injected author placeholders occur before ORDER BY/LIMIT, so insert the
+    // author values immediately before that final limit value as well.
+    const before_limit = stmt.args.len - 1;
+    @memcpy(new_args[0..before_limit], stmt.args[0..before_limit]);
+    new_args[before_limit] = author_val;
+    new_args[before_limit + 1] = author_val;
+    new_args[before_limit + 2] = stmt.args[before_limit];
     return .{ .sql = new_sql, .args = new_args };
 }
 
@@ -606,12 +631,12 @@ test "turso fallback cap admits up to N, sheds beyond, and frees on release" {
 }
 
 /// Keyword search: FTS5 via local SQLite, with a bounded Turso fallback.
-fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
+fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, options: Options) ![]const u8 {
     // try local SQLite first (faster for FTS queries). If the replica is
     // briefly not ready (boot / snapshot adoption), wait a short beat for it
     // rather than immediately stampeding turso.
     if (waitForLocalReady()) |local| {
-        if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter, author_filter)) |result| {
+        if (searchLocal(alloc, local, query, tag_filter, platform_filter, since_filter, author_filter, options)) |result| {
             logfire.info("search.local hit", .{});
             return result;
         } else |err| {
@@ -645,6 +670,9 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     const has_tag = tag_filter != null;
     const has_platform = platform_filter != null;
     const has_since = since_filter != null;
+    const candidate_limit = queryCandidateLimit(options.max_results);
+    const candidate_limit_str = try std.fmt.allocPrint(alloc, "{d}", .{candidate_limit});
+    var result_count: usize = 0;
 
     // track seen URIs for deduplication (content match + base_path match)
     var seen_uris = std.StringHashMap(void).init(alloc);
@@ -657,7 +685,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     // author-only browse: no FTS query needed, just fetch by DID
     if (author_filter != null and !has_query and !has_tag) {
         if (has_platform) {
-            var res = c.query(DocsByAuthorAndPlatform.positional, &.{ author_filter.?, platform_filter.? }) catch {
+            var res = c.query(DocsByAuthorAndPlatform.positional, &.{ author_filter.?, platform_filter.?, candidate_limit_str }) catch {
                 try jw.endArray();
                 return try output.toOwnedSlice();
             };
@@ -665,11 +693,14 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             for (res.rows) |row| {
                 const doc = Doc.fromRow(row);
                 if (!passesSince(doc.createdAt, since_filter)) continue;
+                if (!includeDid(doc.did, options.show_labeled)) continue;
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 try jw.write(doc.toJson(alloc));
+                result_count += 1;
+                if (result_count >= options.max_results) break;
             }
         } else {
-            var res = c.query(DocsByAuthor.positional, &.{author_filter.?}) catch {
+            var res = c.query(DocsByAuthor.positional, &.{ author_filter.?, candidate_limit_str }) catch {
                 try jw.endArray();
                 return try output.toOwnedSlice();
             };
@@ -677,8 +708,11 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
             for (res.rows) |row| {
                 const doc = Doc.fromRow(row);
                 if (!passesSince(doc.createdAt, since_filter)) continue;
+                if (!includeDid(doc.did, options.show_labeled)) continue;
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 try jw.write(doc.toJson(alloc));
+                result_count += 1;
+                if (result_count >= options.max_results) break;
             }
         }
         try jw.endArray();
@@ -694,7 +728,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
 
     // query 0: documents by content (always present if we have any filter)
     const doc_sql = getDocQuerySql(has_query, has_tag, has_platform, has_since);
-    const doc_args = try getDocQueryArgs(alloc, fts_query, tag_filter, platform_filter, since_filter, has_query, has_tag, has_platform, has_since);
+    const doc_args = try getDocQueryArgs(alloc, fts_query, tag_filter, platform_filter, since_filter, has_query, has_tag, has_platform, has_since, candidate_limit_str);
     if (doc_sql) |sql| {
         statements[stmt_count] = try addBridgyFedExclusion(alloc, try addAuthorCondition(alloc, .{ .sql = sql, .args = doc_args }, "d.did", author_val));
         stmt_count += 1;
@@ -705,13 +739,13 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     if (run_basepath) {
         var base_stmt: db.Client.Statement = undefined;
         if (has_platform and has_since) {
-            base_stmt = .{ .sql = DocsByPubBasePathAndPlatformAndSince.positional, .args = &.{ fts_query, platform_filter.?, since_filter.? } };
+            base_stmt = .{ .sql = DocsByPubBasePathAndPlatformAndSince.positional, .args = &.{ fts_query, platform_filter.?, since_filter.?, candidate_limit_str } };
         } else if (has_platform) {
-            base_stmt = .{ .sql = DocsByPubBasePathAndPlatform.positional, .args = &.{ fts_query, platform_filter.? } };
+            base_stmt = .{ .sql = DocsByPubBasePathAndPlatform.positional, .args = &.{ fts_query, platform_filter.?, candidate_limit_str } };
         } else if (has_since) {
-            base_stmt = .{ .sql = DocsByPubBasePathAndSince.positional, .args = &.{ fts_query, since_filter.? } };
+            base_stmt = .{ .sql = DocsByPubBasePathAndSince.positional, .args = &.{ fts_query, since_filter.?, candidate_limit_str } };
         } else {
-            base_stmt = .{ .sql = DocsByPubBasePath.positional, .args = &.{fts_query} };
+            base_stmt = .{ .sql = DocsByPubBasePath.positional, .args = &.{ fts_query, candidate_limit_str } };
         }
         statements[stmt_count] = try addBridgyFedExclusion(alloc, try addAuthorCondition(alloc, base_stmt, "d.did", author_val));
         stmt_count += 1;
@@ -723,7 +757,7 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     // rather than leaking undated publication shells into a recency-bounded view.
     const run_pubs = tag_filter == null and platform_filter == null and has_query and !has_since;
     if (run_pubs) {
-        statements[stmt_count] = try addAuthorCondition(alloc, .{ .sql = PubSearch.positional, .args = &.{fts_query} }, "p.did", author_val);
+        statements[stmt_count] = try addAuthorCondition(alloc, .{ .sql = PubSearch.positional, .args = &.{ fts_query, candidate_limit_str } }, "p.did", author_val);
         stmt_count += 1;
     }
 
@@ -743,14 +777,17 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     var query_idx: usize = 0;
     if (doc_sql != null) {
         for (batch.get(query_idx)) |row| {
+            if (result_count >= options.max_results) break;
             const doc = Doc.fromRow(row);
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
+            if (!includeDid(doc.did, options.show_labeled)) continue;
             if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
             try jw.write(doc.toJson(alloc));
+            result_count += 1;
         }
         query_idx += 1;
     }
@@ -758,12 +795,15 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     // process query 1: base_path results (deduplicated)
     if (run_basepath) {
         for (batch.get(query_idx)) |row| {
+            if (result_count >= options.max_results) break;
             const doc = Doc.fromRow(row);
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
+            if (!includeDid(doc.did, options.show_labeled)) continue;
             if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                 try jw.write(doc.toJson(alloc));
+                result_count += 1;
             }
         }
         query_idx += 1;
@@ -772,11 +812,14 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
     // process query 2: publication results
     if (run_pubs) {
         for (batch.get(query_idx)) |row| {
+            if (result_count >= options.max_results) break;
             const pub_result = Pub.fromRow(row);
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, pub_result.did, af)) continue;
             }
+            if (!includeDid(pub_result.did, options.show_labeled)) continue;
             try jw.write(pub_result.toJson(alloc));
+            result_count += 1;
         }
     }
 
@@ -786,7 +829,13 @@ fn searchKeyword(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, p
 
 /// Local SQLite search (FTS queries only, no vector similarity)
 /// Simplified version - just handles basic FTS query case to get started
-fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
+const LOCAL_DOC_RECENCY_ORDER = "ORDER BY rank + COALESCE((julianday('now') - julianday(NULLIF(d.created_at, ''))) / 30.0, 120.0), d.uri LIMIT ?";
+
+fn withLocalDocRecencyOrder(comptime sql: []const u8) []const u8 {
+    return sql ++ "\n" ++ LOCAL_DOC_RECENCY_ORDER;
+}
+
+fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, options: Options) ![]const u8 {
     // only handle basic FTS queries for now (most common case)
     // fall back to Turso for complex filter combinations and author-only browse
     if (query.len == 0 or tag_filter != null) {
@@ -795,6 +844,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
     // author condition: pass DID or "" (empty = no-op via SQL "? = '' OR d.did = ?")
     const author_val: []const u8 = if (author_filter) |af| af else "";
+    const since_val: []const u8 = if (since_filter) |since| since else "";
 
     var output: std.Io.Writer.Allocating = .init(alloc);
     errdefer output.deinit();
@@ -803,6 +853,8 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
     try jw.beginArray();
 
     const fts_query = try buildFtsQuery(alloc, query);
+    const candidate_limit = queryCandidateLimit(options.max_results);
+    var result_count: usize = 0;
 
     // track seen URIs for deduplication
     var seen_uris = std.StringHashMap(void).init(alloc);
@@ -814,7 +866,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
     // document content search
     if (platform_filter) |platform| {
-        var rows = try local.query(
+        var rows = try local.query(withLocalDocRecencyOrder(
             \\SELECT f.uri, d.did, d.title,
             \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
             \\  d.created_at, d.rkey, d.base_path, d.has_publication,
@@ -825,25 +877,28 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN documents d ON f.uri = d.uri
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
+            \\AND (? = '' OR d.created_at >= ?)
             \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) AND (d.url_dead IS NULL OR d.url_dead = 0)
-            \\ORDER BY rank LIMIT 40
-        , .{ fts_query, platform, author_val, author_val });
+        ), .{ fts_query, platform, author_val, author_val, since_val, since_val, candidate_limit });
         defer rows.deinit();
 
         while (rows.next()) |row| {
+            if (result_count >= options.max_results) break;
             const doc = Doc.fromLocalRow(row);
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
             if (!passesSince(doc.createdAt, since_filter)) continue;
+            if (!includeDid(doc.did, options.show_labeled)) continue;
             if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
             const uri_dupe = try alloc.dupe(u8, doc.uri);
             try seen_uris.put(uri_dupe, {});
             try jw.write(doc.toJson(alloc));
+            result_count += 1;
         }
 
         // base_path search with platform
-        var bp_rows = try local.query(
+        var bp_rows = try local.query(withLocalDocRecencyOrder(
             \\SELECT d.uri, d.did, d.title, '' as snippet,
             \\  d.created_at, d.rkey, p.base_path,
             \\  1 as has_publication, d.platform, COALESCE(d.path, '') as path,
@@ -853,24 +908,27 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
             \\WHERE publications_fts MATCH ? AND d.platform = ? AND (? = '' OR d.did = ?)
+            \\AND (? = '' OR d.created_at >= ?)
             \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) AND (d.url_dead IS NULL OR d.url_dead = 0)
-            \\ORDER BY rank LIMIT 40
-        , .{ fts_query, platform, author_val, author_val });
+        ), .{ fts_query, platform, author_val, author_val, since_val, since_val, candidate_limit });
         defer bp_rows.deinit();
 
         while (bp_rows.next()) |row| {
+            if (result_count >= options.max_results) break;
             const doc = Doc.fromLocalRow(row);
             if (author_filter) |af| {
                 if (!std.mem.eql(u8, doc.did, af)) continue;
             }
             if (!passesSince(doc.createdAt, since_filter)) continue;
+            if (!includeDid(doc.did, options.show_labeled)) continue;
             if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                 try jw.write(doc.toJson(alloc));
+                result_count += 1;
             }
         }
     } else {
         // no platform filter
-        var rows = try local.query(
+        var rows = try local.query(withLocalDocRecencyOrder(
             \\SELECT f.uri, d.did, d.title,
             \\  snippet(documents_fts, 2, '', '', '...', 32) as snippet,
             \\  d.created_at, d.rkey, d.base_path, d.has_publication,
@@ -881,9 +939,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN documents d ON f.uri = d.uri
             \\LEFT JOIN publications p ON d.publication_uri = p.uri
             \\WHERE documents_fts MATCH ? AND (? = '' OR d.did = ?)
+            \\AND (? = '' OR d.created_at >= ?)
             \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) AND (d.url_dead IS NULL OR d.url_dead = 0)
-            \\ORDER BY rank LIMIT 40
-        , .{ fts_query, author_val, author_val });
+        ), .{ fts_query, author_val, author_val, since_val, since_val, candidate_limit });
         defer rows.deinit();
 
         {
@@ -891,22 +949,25 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             defer iter_span.end();
             var doc_count: u32 = 0;
             while (rows.next()) |row| {
+                if (result_count >= options.max_results) break;
                 const doc = Doc.fromLocalRow(row);
                 if (author_filter) |af| {
                     if (!std.mem.eql(u8, doc.did, af)) continue;
                 }
                 if (!passesSince(doc.createdAt, since_filter)) continue;
+                if (!includeDid(doc.did, options.show_labeled)) continue;
                 if (try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) continue;
                 const uri_dupe = try alloc.dupe(u8, doc.uri);
                 try seen_uris.put(uri_dupe, {});
                 try jw.write(doc.toJson(alloc));
                 doc_count += 1;
+                result_count += 1;
             }
             logfire.info("search.iterate.docs_fts rows={d}", .{doc_count});
         }
 
         // base_path search
-        var bp_rows = try local.query(
+        var bp_rows = try local.query(withLocalDocRecencyOrder(
             \\SELECT d.uri, d.did, d.title, '' as snippet,
             \\  d.created_at, d.rkey, p.base_path,
             \\  1 as has_publication, d.platform, COALESCE(d.path, '') as path,
@@ -916,9 +977,9 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             \\JOIN publications p ON d.publication_uri = p.uri
             \\JOIN publications_fts pf ON p.uri = pf.uri
             \\WHERE publications_fts MATCH ? AND (? = '' OR d.did = ?)
+            \\AND (? = '' OR d.created_at >= ?)
             \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0) AND (d.url_dead IS NULL OR d.url_dead = 0)
-            \\ORDER BY rank LIMIT 40
-        , .{ fts_query, author_val, author_val });
+        ), .{ fts_query, author_val, author_val, since_val, since_val, candidate_limit });
         defer bp_rows.deinit();
 
         {
@@ -926,6 +987,7 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
             defer iter_span.end();
             var bp_count: u32 = 0;
             while (bp_rows.next()) |row| {
+                if (result_count >= options.max_results) break;
                 const doc = Doc.fromLocalRow(row);
                 if (author_filter) |af| {
                     if (!std.mem.eql(u8, doc.did, af)) {
@@ -937,8 +999,10 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                     bp_count += 1;
                     continue;
                 }
+                if (!includeDid(doc.did, options.show_labeled)) continue;
                 if (!seen_uris.contains(doc.uri) and !try isDuplicateAuthorTitle(&seen_authors, alloc, doc.did, doc.title)) {
                     try jw.write(doc.toJson(alloc));
+                    result_count += 1;
                 }
                 bp_count += 1;
             }
@@ -956,14 +1020,15 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                 \\FROM publications_fts f
                 \\JOIN publications p ON f.uri = p.uri
                 \\WHERE publications_fts MATCH ? AND (? = '' OR p.did = ?)
-                \\ORDER BY rank LIMIT 10
-            , .{ fts_query, author_val, author_val });
+                \\ORDER BY rank, p.uri LIMIT ?
+            , .{ fts_query, author_val, author_val, candidate_limit });
             defer pub_rows.deinit();
 
             const iter_span = logfire.span("search.iterate.pubs_fts", .{});
             defer iter_span.end();
             var pub_count: u32 = 0;
             while (pub_rows.next()) |row| {
+                if (result_count >= options.max_results) break;
                 const pub_result = Pub.fromLocalRow(row);
                 if (author_filter) |af| {
                     if (!std.mem.eql(u8, pub_result.did, af)) {
@@ -971,8 +1036,10 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
                         continue;
                     }
                 }
+                if (!includeDid(pub_result.did, options.show_labeled)) continue;
                 try jw.write(pub_result.toJson(alloc));
                 pub_count += 1;
+                result_count += 1;
             }
             logfire.info("search.iterate.pubs_fts rows={d}", .{pub_count});
         }
@@ -980,6 +1047,13 @@ fn searchLocal(alloc: Allocator, local: *db.LocalDb, query: []const u8, tag_filt
 
     try jw.endArray();
     return try output.toOwnedSlice();
+}
+
+test "local document queries share the Turso recency ranking" {
+    const sql = withLocalDocRecencyOrder("SELECT * FROM documents d");
+    try std.testing.expect(std.mem.endsWith(u8, sql, LOCAL_DOC_RECENCY_ORDER));
+    try std.testing.expect(std.mem.indexOf(u8, sql, "julianday(NULLIF(d.created_at") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sql, "COALESCE") != null);
 }
 
 fn getDocQuerySql(has_query: bool, has_tag: bool, has_platform: bool, has_since: bool) ?[]const u8 {
@@ -995,61 +1069,45 @@ fn getDocQuerySql(has_query: bool, has_tag: bool, has_platform: bool, has_since:
     return null;
 }
 
-fn getDocQueryArgs(alloc: Allocator, fts_query: []const u8, tag: ?[]const u8, platform: ?[]const u8, since: ?[]const u8, has_query: bool, has_tag: bool, has_platform: bool, has_since: bool) ![]const []const u8 {
+fn getDocQueryArgs(alloc: Allocator, fts_query: []const u8, tag: ?[]const u8, platform: ?[]const u8, since: ?[]const u8, has_query: bool, has_tag: bool, has_platform: bool, has_since: bool, limit: []const u8) ![]const []const u8 {
+    var args: std.ArrayList([]const u8) = .empty;
     if (has_query and has_tag and has_platform) {
-        const args = try alloc.alloc([]const u8, 3);
-        args[0] = fts_query;
-        args[1] = tag.?;
-        args[2] = platform.?;
-        return args;
+        try args.appendSlice(alloc, &.{ fts_query, tag.?, platform.? });
+    } else if (has_query and has_tag) {
+        try args.appendSlice(alloc, &.{ fts_query, tag.? });
+    } else if (has_query and has_platform and has_since) {
+        try args.appendSlice(alloc, &.{ fts_query, platform.?, since.? });
+    } else if (has_query and has_platform) {
+        try args.appendSlice(alloc, &.{ fts_query, platform.? });
+    } else if (has_query and has_since) {
+        try args.appendSlice(alloc, &.{ fts_query, since.? });
+    } else if (has_query) {
+        try args.append(alloc, fts_query);
+    } else if (has_tag and has_platform) {
+        try args.appendSlice(alloc, &.{ tag.?, platform.? });
+    } else if (has_tag) {
+        try args.append(alloc, tag.?);
+    } else if (has_platform) {
+        try args.append(alloc, platform.?);
     }
-    if (has_query and has_tag) {
-        const args = try alloc.alloc([]const u8, 2);
-        args[0] = fts_query;
-        args[1] = tag.?;
-        return args;
-    }
-    if (has_query and has_platform and has_since) {
-        const args = try alloc.alloc([]const u8, 3);
-        args[0] = fts_query;
-        args[1] = platform.?;
-        args[2] = since.?;
-        return args;
-    }
-    if (has_query and has_platform) {
-        const args = try alloc.alloc([]const u8, 2);
-        args[0] = fts_query;
-        args[1] = platform.?;
-        return args;
-    }
-    if (has_query and has_since) {
-        const args = try alloc.alloc([]const u8, 2);
-        args[0] = fts_query;
-        args[1] = since.?;
-        return args;
-    }
-    if (has_query) {
-        const args = try alloc.alloc([]const u8, 1);
-        args[0] = fts_query;
-        return args;
-    }
-    if (has_tag and has_platform) {
-        const args = try alloc.alloc([]const u8, 2);
-        args[0] = tag.?;
-        args[1] = platform.?;
-        return args;
-    }
-    if (has_tag) {
-        const args = try alloc.alloc([]const u8, 1);
-        args[0] = tag.?;
-        return args;
-    }
-    if (has_platform) {
-        const args = try alloc.alloc([]const u8, 1);
-        args[0] = platform.?;
-        return args;
-    }
-    return &.{};
+    try args.append(alloc, limit);
+    return try args.toOwnedSlice(alloc);
+}
+
+test "document query limit is the final bind across query variants" {
+    const args = try getDocQueryArgs(std.testing.allocator, "fts", "tag", "leaflet", "2026-01-01", true, true, true, true, "81");
+    defer std.testing.allocator.free(args);
+    try std.testing.expectEqual(@as(usize, 4), args.len);
+    try std.testing.expectEqualStrings("fts", args[0]);
+    try std.testing.expectEqualStrings("tag", args[1]);
+    try std.testing.expectEqualStrings("leaflet", args[2]);
+    try std.testing.expectEqualStrings("81", args[3]);
+
+    const browse = try getDocQueryArgs(std.testing.allocator, "", null, "pckt", null, false, false, true, false, "42");
+    defer std.testing.allocator.free(browse);
+    try std.testing.expectEqual(@as(usize, 2), browse.len);
+    try std.testing.expectEqualStrings("pckt", browse[0]);
+    try std.testing.expectEqualStrings("42", browse[1]);
 }
 
 /// Find documents similar to a given document via turbopuffer ANN search.
@@ -1143,20 +1201,28 @@ pub fn findSimilar(alloc: Allocator, uri: []const u8, limit: usize) ![]const u8 
 
 /// Hybrid search: run keyword + semantic, merge with Reciprocal Rank Fusion.
 /// score(doc) = 1/(k + rank_keyword) + 1/(k + rank_semantic), k=60
-fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
+fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, options: Options) ![]const u8 {
     if (query.len == 0) return try alloc.dupe(u8, "[]");
 
     const span = logfire.span("search.hybrid", .{});
     defer span.end();
 
+    // Fusion must use the same source depth on every page. If source depth
+    // grew with offset, a result found by both sources at rank 30 could enter
+    // ahead of a first-page single-source result and shift page boundaries.
+    const fusion_options: Options = .{
+        .max_results = 200,
+        .show_labeled = options.show_labeled,
+    };
+
     // 1. keyword search (~10ms via local SQLite)
-    const kw_json = searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter) catch |err| blk: {
+    const kw_json = searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter, fusion_options) catch |err| blk: {
         logfire.warn("search.hybrid: keyword failed: {}", .{err});
         break :blk try alloc.dupe(u8, "[]");
     };
 
     // 2. semantic search (~550ms via voyage + tpuf)
-    const sem_json = searchSemantic(alloc, query, platform_filter, since_filter, author_filter) catch |err| blk: {
+    const sem_json = searchSemantic(alloc, query, platform_filter, since_filter, author_filter, fusion_options) catch |err| blk: {
         logfire.warn("search.hybrid: semantic failed: {}", .{err});
         break :blk try alloc.dupe(u8, "[]");
     };
@@ -1271,26 +1337,28 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
 
     std.mem.sort(ScoredUri, scored.items, {}, struct {
         fn lessThan(_: void, a: ScoredUri, b: ScoredUri) bool {
-            return a.score > b.score; // descending
+            if (a.score != b.score) return a.score > b.score; // descending
+            // Hash-map iteration order is not stable. A URI tie-break prevents
+            // equal-score results from jumping between offset pages.
+            return std.mem.lessThan(u8, a.uri, b.uri);
         }
     }.lessThan);
 
     // 6. fetch content previews for semantic-only results (they have no FTS snippet)
-    const limit = @min(scored.items.len, 20);
-    var sem_uri_buf: [20][]const u8 = undefined;
-    var sem_uri_count: usize = 0;
-    for (scored.items[0..limit]) |entry| {
+    const candidate_count = @min(scored.items.len, options.max_results *| 2);
+    var sem_uris: std.ArrayList([]const u8) = .empty;
+    defer sem_uris.deinit(alloc);
+    for (scored.items[0..candidate_count]) |entry| {
         const bits = source_bits.get(entry.uri) orelse 0;
         if (bits == 0b10) { // semantic-only
             const obj = sem_objects.get(entry.uri) orelse continue;
             const existing_snippet = jsonStr(obj, "snippet");
-            if (existing_snippet.len == 0 and sem_uri_count < 20) {
-                sem_uri_buf[sem_uri_count] = entry.uri;
-                sem_uri_count += 1;
+            if (existing_snippet.len == 0) {
+                try sem_uris.append(alloc, entry.uri);
             }
         }
     }
-    const hybrid_extras = fetchLocalExtras(alloc, sem_uri_buf[0..sem_uri_count]);
+    const hybrid_extras = fetchLocalExtras(alloc, sem_uris.items);
 
     // 7. serialize top 20 with source annotation
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -1303,12 +1371,15 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
     var seen_authors = std.StringHashMap(void).init(alloc);
     defer seen_authors.deinit();
 
-    for (scored.items[0..limit]) |entry| {
+    var emitted: usize = 0;
+    for (scored.items) |entry| {
+        if (emitted >= options.max_results) break;
         const bits = source_bits.get(entry.uri) orelse 0;
         // prefer keyword version (has FTS snippet)
         const obj = kw_objects.get(entry.uri) orelse sem_objects.get(entry.uri) orelse continue;
 
         // cross-platform dedup: skip if same author+title already emitted
+        if (!includeDid(jsonStr(obj, "did"), options.show_labeled)) continue;
         if (try isDuplicateAuthorTitle(&seen_authors, alloc, jsonStr(obj, "did"), jsonStr(obj, "title"))) continue;
 
         const source_label: []const u8 = switch (bits) {
@@ -1367,6 +1438,7 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
         try jw.objectField("score");
         try jw.write(entry.score);
         try jw.endObject();
+        emitted += 1;
     }
 
     try jw.endArray();
@@ -1374,7 +1446,7 @@ fn searchHybrid(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, pl
 }
 
 /// Semantic search: embed query via Voyage, ANN search via turbopuffer.
-fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8) ![]const u8 {
+fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const u8, since_filter: ?[]const u8, author_filter: ?[]const u8, options: Options) ![]const u8 {
     if (query.len == 0) return try alloc.dupe(u8, "[]");
 
     if (!tpuf.isSemanticEnabled()) {
@@ -1392,7 +1464,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     defer alloc.free(vector);
 
     // ANN query — over-fetch to allow filtering
-    const results = tpuf.query(alloc, vector, 40) catch |err| {
+    const results = tpuf.query(alloc, vector, queryCandidateLimit(options.max_results)) catch |err| {
         logfire.warn("search.semantic: tpuf query failed: {}", .{err});
         return try alloc.dupe(u8, "{\"error\":\"vector search failed\"}");
     };
@@ -1412,19 +1484,20 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
     }
 
     // first pass: filter and collect URIs for snippet lookup
-    var filtered_indices: [20]usize = undefined;
-    var filtered_count: usize = 0;
-    var seen: [20][]const u8 = undefined;
-    var seen_count: usize = 0;
+    var filtered_indices: std.ArrayList(usize) = .empty;
+    defer filtered_indices.deinit(alloc);
+    var seen: std.ArrayList([]const u8) = .empty;
+    defer seen.deinit(alloc);
 
     // track seen (did, title) pairs for cross-platform dedup
     var seen_authors = std.StringHashMap(void).init(alloc);
     defer seen_authors.deinit();
 
     for (results, 0..) |r, idx| {
-        if (filtered_count >= 20) break;
+        if (filtered_indices.items.len >= options.max_results) break;
         if (r.title.len == 0) continue;
         if (isBridgyFed(r.uri)) continue;
+        if (!includeDid(r.did, options.show_labeled)) continue;
         if (platform_filter) |pf| {
             if (!std.mem.eql(u8, r.platform, pf)) continue;
         }
@@ -1435,7 +1508,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         // keyword path filters in SQL / via passesSince — semantic must match).
         if (!passesSince(r.created_at, since_filter)) continue;
         var is_dup = false;
-        for (seen[0..seen_count]) |s| {
+        for (seen.items) |s| {
             if (std.mem.eql(u8, s, r.uri)) {
                 is_dup = true;
                 break;
@@ -1443,16 +1516,12 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
         }
         if (is_dup) continue;
         if (try isDuplicateAuthorTitle(&seen_authors, alloc, r.did, r.title)) continue;
-        if (seen_count < 20) {
-            seen[seen_count] = r.uri;
-            seen_count += 1;
-        }
-        filtered_indices[filtered_count] = idx;
-        filtered_count += 1;
+        try seen.append(alloc, r.uri);
+        try filtered_indices.append(alloc, idx);
     }
 
     // fetch content previews + cover images from local SQLite
-    const extras = fetchLocalExtras(alloc, seen[0..seen_count]);
+    const extras = fetchLocalExtras(alloc, seen.items);
 
     // serialize results
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -1460,7 +1529,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
-    for (filtered_indices[0..filtered_count]) |idx| {
+    for (filtered_indices.items) |idx| {
         const r = results[idx];
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         // prefer the local replica's URL fields over tpuf's stored attributes,

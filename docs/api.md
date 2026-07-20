@@ -21,16 +21,16 @@ full-text search across documents and publications.
 | `since` | string | no | ISO date, filter to documents created after |
 | `author` | string | no | filter by author: DID (`did:plc:xyz`) or handle (`nate.bsky.social`). handles are resolved server-side via AT Protocol. |
 | `mode` | string | no | `keyword` (default), `semantic`, or `hybrid`. semantic uses voyage-4-lite embeddings + turbopuffer ANN. hybrid merges keyword + semantic via reciprocal rank fusion. |
-| `format` | string | no | `v2` wraps response in `{"results": [...], "total": N, "hasMore": bool}` |
-| `limit` | int | no | max results to return (default 20) |
-| `offset` | int | no | pagination offset |
+| `format` | string | no | `v2` wraps the page with pagination metadata |
+| `limit` | int | no | page size (default 20, max 40) |
+| `offset` | int | no | ranked-result offset (default 0, max 1000) |
 
 *at least one of `q`, `tag`, or `author` required
 
 **filter behavior by mode:**
 - **keyword**: respects all filters (`tag`, `platform`, `since`, `author`)
-- **semantic**: respects `platform` and `author`. ignores `tag` and `since`.
-- **hybrid**: keyword half respects all filters, semantic half respects `platform` and `author`. results merged via RRF.
+- **semantic**: respects `platform`, `since`, and `author`. ignores `tag`.
+- **hybrid**: keyword half respects all filters; semantic half respects `platform`, `since`, and `author`. results merged via RRF.
 
 **response:**
 ```json
@@ -56,10 +56,21 @@ with `format=v2`:
 ```json
 {
   "results": [ /* same as above */ ],
-  "total": 89,
-  "hasMore": false
+  "total": null,
+  "hasMore": true,
+  "nextOffset": 20
 }
 ```
+
+`hasMore` is determined by retrieving one result beyond the requested page.
+`total` is `null` because search does not run an expensive full-corpus count.
+`nextOffset` is `null` when the retrieved ranking is exhausted. Other v2 list
+endpoints may return an exact integer `total` when they already hold a complete
+bounded result array.
+
+Hybrid fusion uses a fixed 200-result source depth so its ranking cannot shift
+between page requests; hybrid pages are therefore limited to that top-200
+window. Keyword and semantic search accept offsets through 1000.
 
 hybrid mode adds `source` and `score` fields:
 ```json

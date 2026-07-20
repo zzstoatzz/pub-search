@@ -65,6 +65,9 @@ const PopularCache = server_cache.WindowedJsonCache(PopularSlot, .{
 
 const HTTP_BUF_SIZE = 65536;
 const QUERY_PARAM_BUF_SIZE = 64;
+const SEARCH_MAX_LIMIT: usize = 40;
+const SEARCH_MAX_OFFSET: usize = 1000;
+const HYBRID_MAX_WINDOW: usize = 200;
 
 fn microTimestamp(io: Io) i64 {
     return Io.Timestamp.now(io, .real).toMicroseconds();
@@ -191,8 +194,14 @@ fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void
     const format = parseQueryParam(alloc, target, "format") catch "v1";
     const limit_str = parseQueryParam(alloc, target, "limit") catch null;
     const offset_str = parseQueryParam(alloc, target, "offset") catch null;
-    const limit = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
+    const requested_limit = if (limit_str) |s| std.fmt.parseInt(usize, s, 10) catch 20 else 20;
+    const limit = @min(@max(requested_limit, 1), SEARCH_MAX_LIMIT);
     const offset = if (offset_str) |s| std.fmt.parseInt(usize, s, 10) catch 0 else 0;
+
+    if (offset > SEARCH_MAX_OFFSET) {
+        try sendJson(request, "{\"error\":\"offset exceeds maximum of 1000\"}");
+        return;
+    }
 
     // resolve author param: if it's a handle (not a DID), resolve via AT Protocol
     const author_filter: ?[]const u8 = if (author_param) |ap| blk: {
@@ -223,8 +232,24 @@ fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void
         return;
     }
 
-    // perform search - arena handles cleanup
-    const raw_results = search.search(alloc, query, tag_filter, platform_filter, since_filter, author_filter, mode) catch |err| {
+    const labeled_pref = parseQueryParam(alloc, target, "labeled") catch null;
+    const show_labeled = labeled_pref != null and mem.eql(u8, labeled_pref.?, "show");
+
+    // Retrieve the full requested prefix plus one policy-visible row. Paging
+    // is then a pure slice of a stable ranking, and that extra row is the
+    // evidence for hasMore.
+    const result_window = std.math.add(usize, offset, limit + 1) catch {
+        try sendJson(request, "{\"error\":\"pagination window is too large\"}");
+        return;
+    };
+    if (mode == .hybrid and offset + limit > HYBRID_MAX_WINDOW) {
+        try sendJson(request, "{\"error\":\"hybrid search supports the top 200 results\"}");
+        return;
+    }
+    const raw_results = search.search(alloc, query, tag_filter, platform_filter, since_filter, author_filter, mode, .{
+        .max_results = result_window,
+        .show_labeled = show_labeled,
+    }) catch |err| {
         logfire.err("search failed: {}", .{err});
         metrics.stats.recordError();
         return err;
@@ -236,21 +261,17 @@ fn handleSearch(request: *http.Server.Request, target: []const u8, io: Io) !void
     // default; `labeled=show` opts in (they come back annotated so the UI can
     // badge them). Kept accounts are always shown, annotated. Mirrors the
     // opt-in model of bsky labeler subscriptions, for our own surface.
-    const labeled_pref = parseQueryParam(alloc, target, "labeled") catch null;
-    const show_labeled = labeled_pref != null and mem.eql(u8, labeled_pref.?, "show");
     const results = applyLabelPolicy(alloc, raw_results, show_labeled) catch raw_results;
 
     if (mem.eql(u8, format, "v2")) {
-        const wrapped = try wrapResponse(alloc, results, query, @tagName(mode), limit, offset);
+        const wrapped = try wrapResponse(alloc, results, query, @tagName(mode), limit, offset, false);
         try sendJson(request, wrapped);
     } else {
-        // v1: apply pagination by slicing the JSON array
-        if (offset > 0 or limit < 40) {
-            const paginated = try paginateJsonArray(alloc, results, limit, offset);
-            try sendJson(request, paginated);
-        } else {
-            try sendJson(request, results);
-        }
+        // Always slice the bounded candidate array. The old `limit < 40`
+        // shortcut leaked every candidate when limit was exactly 40 (or larger),
+        // so `limit=40` could return 80+ document/base-path/publication rows.
+        const paginated = try paginateJsonArray(alloc, results, limit, offset);
+        try sendJson(request, paginated);
     }
 }
 
@@ -297,7 +318,7 @@ fn handleTags(request: *http.Server.Request, target: []const u8, io: Io) !void {
         try getTags(alloc);
 
     if (mem.eql(u8, format, "v2")) {
-        const wrapped = try wrapResponse(alloc, tags, "", "tags", 100, 0);
+        const wrapped = try wrapResponse(alloc, tags, "", "tags", 100, 0, true);
         try sendJson(request, wrapped);
     } else {
         try sendJson(request, tags);
@@ -324,7 +345,7 @@ fn handlePopular(request: *http.Server.Request, target: []const u8, io: Io) !voi
         getPopular(alloc, 5) catch "[]";
 
     if (mem.eql(u8, format, "v2")) {
-        const wrapped = try wrapResponse(alloc, popular, "", "popular", 100, 0);
+        const wrapped = try wrapResponse(alloc, popular, "", "popular", 100, 0, true);
         try sendJson(request, wrapped);
     } else {
         try sendJson(request, popular);
@@ -1132,15 +1153,17 @@ fn handleSimilar(request: *http.Server.Request, target: []const u8, io: Io) !voi
     };
 
     if (mem.eql(u8, format, "v2")) {
-        const wrapped = try wrapResponse(alloc, results, "", "similar", 20, 0);
+        const wrapped = try wrapResponse(alloc, results, "", "similar", 20, 0, false);
         try sendJson(request, wrapped);
     } else {
         try sendJson(request, results);
     }
 }
 
-/// Wrap a JSON array response in v2 envelope: {"results": [...], "total": N, "hasMore": bool}
-fn wrapResponse(alloc: Allocator, array_json: []const u8, query: []const u8, mode: []const u8, limit: usize, offset: usize) ![]const u8 {
+/// Wrap a result prefix in the v2 page envelope. Search prefixes pass
+/// total_known=false rather than presenting the prefix length as a corpus
+/// count; bounded endpoints such as tags can opt into their exact total.
+fn wrapResponse(alloc: Allocator, array_json: []const u8, query: []const u8, mode: []const u8, limit: usize, offset: usize, total_known: bool) ![]const u8 {
     // parse the array to count items and apply pagination
     const parsed = json.parseFromSlice(json.Value, alloc, array_json, .{}) catch {
         return array_json; // fallback to raw if parse fails
@@ -1171,10 +1194,21 @@ fn wrapResponse(alloc: Allocator, array_json: []const u8, query: []const u8, mod
     try jw.endArray();
 
     try jw.objectField("total");
-    try jw.write(total);
+    if (total_known) {
+        try jw.write(total);
+    } else {
+        try jw.write(null);
+    }
 
     try jw.objectField("hasMore");
     try jw.write(has_more);
+
+    try jw.objectField("nextOffset");
+    if (has_more) {
+        try jw.write(end);
+    } else {
+        try jw.write(null);
+    }
 
     if (query.len > 0) {
         try jw.objectField("query");
@@ -1216,6 +1250,57 @@ fn paginateJsonArray(alloc: Allocator, array_json: []const u8, limit: usize, off
     }
     try jw.endArray();
     return try output.toOwnedSlice();
+}
+
+test "wrapResponse uses an extra result for truthful page metadata" {
+    const page = try wrapResponse(std.testing.allocator, "[0,1,2,3,4,5]", "q", "keyword", 2, 2, false);
+    defer std.testing.allocator.free(page);
+
+    const parsed = try json.parseFromSlice(json.Value, std.testing.allocator, page, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    try std.testing.expectEqual(@as(usize, 2), obj.get("results").?.array.items.len);
+    try std.testing.expect(obj.get("total").? == .null);
+    try std.testing.expect(obj.get("hasMore").?.bool);
+    try std.testing.expectEqual(@as(i64, 4), obj.get("nextOffset").?.integer);
+}
+
+test "wrapResponse reports total for known complete arrays" {
+    const page = try wrapResponse(std.testing.allocator, "[0,1,2,3]", "", "tags", 2, 2, true);
+    defer std.testing.allocator.free(page);
+
+    const parsed = try json.parseFromSlice(json.Value, std.testing.allocator, page, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    try std.testing.expectEqual(@as(i64, 4), obj.get("total").?.integer);
+    try std.testing.expect(!obj.get("hasMore").?.bool);
+    try std.testing.expect(obj.get("nextOffset").? == .null);
+}
+
+test "paginateJsonArray honors limit equal to the search candidate cap" {
+    const input =
+        \\[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40]
+    ;
+    const page = try paginateJsonArray(std.testing.allocator, input, 40, 0);
+    defer std.testing.allocator.free(page);
+
+    const parsed = try json.parseFromSlice(json.Value, std.testing.allocator, page, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 40), parsed.value.array.items.len);
+    try std.testing.expectEqual(@as(i64, 39), parsed.value.array.items[39].integer);
+}
+
+test "paginateJsonArray applies offset with an oversized limit" {
+    const input =
+        \\[{"id":1},{"id":2},{"id":3},{"id":4},{"id":5}]
+    ;
+    const page = try paginateJsonArray(std.testing.allocator, input, 40, 3);
+    defer std.testing.allocator.free(page);
+
+    const parsed = try json.parseFromSlice(json.Value, std.testing.allocator, page, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.array.items.len);
+    try std.testing.expectEqual(@as(i64, 4), parsed.value.array.items[0].object.get("id").?.integer);
 }
 
 /// Resolve an AT Protocol handle to a DID via zat's HandleResolver.

@@ -1536,6 +1536,8 @@
             const authorCache = new Map();
             let currentOffset = 0;
             let currentHasMore = false;
+            let currentNextOffset = null;
+            let searchGeneration = 0;
             const PAGE_SIZE = 20;
 
             // extract results array from API response (handles both v1 and v2 formats)
@@ -1543,8 +1545,13 @@
                 if (parsed.results && Array.isArray(parsed.results)) {
                     return {
                         results: parsed.results,
-                        total: parsed.total || parsed.results.length,
-                        hasMore: parsed.hasMore || false,
+                        total: Number.isInteger(parsed.total)
+                            ? parsed.total
+                            : null,
+                        hasMore: parsed.hasMore === true,
+                        nextOffset: Number.isInteger(parsed.nextOffset)
+                            ? parsed.nextOffset
+                            : null,
                     };
                 }
                 if (Array.isArray(parsed)) {
@@ -1552,6 +1559,7 @@
                         results: parsed,
                         total: parsed.length,
                         hasMore: false,
+                        nextOffset: null,
                     };
                 }
                 return null;
@@ -1588,6 +1596,10 @@
                 if (!query.trim() && !tag && !platform && !currentAuthor)
                     return;
 
+                const requestGeneration = append
+                    ? searchGeneration
+                    : ++searchGeneration;
+
                 if (!append) {
                     searchBtn.disabled = true;
                     resultsDiv.innerHTML = `<div class="status">searching...</div>`;
@@ -1609,6 +1621,7 @@
                 try {
                     const res = await fetch(searchUrl);
                     const rawText = await res.text();
+                    if (requestGeneration !== searchGeneration) return;
                     let parsed;
 
                     try {
@@ -1631,6 +1644,7 @@
 
                     const results = extracted.results;
                     currentHasMore = extracted.hasMore;
+                    currentNextOffset = extracted.nextOffset;
 
                     if (results.length === 0 && !append) {
                         resultsDiv.innerHTML = `
@@ -1739,13 +1753,15 @@
 
                     const totalShown =
                         resultsDiv.querySelectorAll(".result").length;
-                    statsDiv.textContent = `${totalShown} result${totalShown === 1 ? "" : "s"}${extracted.total > totalShown ? ` of ${extracted.total}` : ""}`;
+                    statsDiv.textContent = `${totalShown} result${totalShown === 1 ? "" : "s"}${Number.isInteger(extracted.total) && extracted.total > totalShown ? ` of ${extracted.total}` : ""}`;
                     resolveAuthors(results);
                     wireResultActions();
 
                     // add "load more" button if there are more results
                     if (currentHasMore) {
-                        const remaining = extracted.total - totalShown;
+                        const remaining = Number.isInteger(extracted.total)
+                            ? extracted.total - totalShown
+                            : 0;
                         const remainingText =
                             remaining > 0 ? ` (${remaining} remaining)` : "";
                         const loadMoreHtml = `<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadMore()" style="font-size:12px">load more${remainingText}</button></div>`;
@@ -1759,14 +1775,22 @@
                         loadRelated(results[0]);
                     }
                 } catch (err) {
+                    if (requestGeneration !== searchGeneration) return;
                     resultsDiv.innerHTML = `<div class="status error">error: ${err.message}</div>`;
                 } finally {
-                    searchBtn.disabled = false;
+                    if (requestGeneration === searchGeneration)
+                        searchBtn.disabled = false;
                 }
             }
 
             function loadMore() {
-                currentOffset += PAGE_SIZE;
+                if (!currentHasMore || !Number.isInteger(currentNextOffset))
+                    return;
+                currentOffset = currentNextOffset;
+                currentHasMore = false;
+                currentNextOffset = null;
+                const button = resultsDiv.querySelector(".load-more");
+                if (button) button.remove();
                 search(queryInput.value, currentTag, currentPlatform, true);
             }
 

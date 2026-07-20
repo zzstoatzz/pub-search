@@ -159,6 +159,8 @@ class TestMcpServerRegistration:
             "get_popular",
         }
         assert expected == tool_names
+        search_tool = next(t for t in tools if t.name == "search")
+        assert "offset" in search_tool.inputSchema["properties"]
 
     async def test_list_prompts(self, client):
         """verify prompts are registered."""

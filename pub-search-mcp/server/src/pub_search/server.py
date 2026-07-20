@@ -122,6 +122,7 @@ async def search(
     author: str | None = None,
     mode: Mode = "keyword",
     limit: int = 5,
+    offset: int = 0,
 ) -> list[SearchResult]:
     """search long-form writing across ATProto publishing platforms.
 
@@ -138,6 +139,7 @@ async def search(
         author: filter by author (DID like "did:plc:xyz" or handle like "nate.bsky.social")
         mode: search mode — keyword, semantic, or hybrid (default: keyword)
         limit: max results (default 5, max 40)
+        offset: skip this many ranked results (default 0, max 1000)
 
     returns:
         list of results with uri, title, snippet, platform, and web url
@@ -145,7 +147,11 @@ async def search(
     if not query and not tag and not author:
         return []
 
-    params: dict[str, Any] = {"format": "v2", "limit": str(limit)}
+    params: dict[str, Any] = {
+        "format": "v2",
+        "limit": str(limit),
+        "offset": str(offset),
+    }
     if query:
         params["q"] = query
     if tag:

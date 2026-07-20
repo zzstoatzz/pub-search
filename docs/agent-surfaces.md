@@ -77,8 +77,9 @@ raw HTTP when:
 - your agent **writes code** anyway (a coding agent doing research, a
   pipeline, a cron job) — one `httpx.get`/`curl` is less machinery than an
   MCP client.
-- you need parameters the MCP tools deliberately don't expose
-  (`offset` pagination, `limit` beyond the tool caps, raw v1 response shape).
+- you need behavior the MCP tools deliberately don't expose (`limit` beyond
+  the tool caps, pagination metadata, or the raw v1 response shape). The MCP
+  `search` tool does expose `offset` for straightforward page traversal.
 - you're building your own composition and want the primitives, not the
   curated layer.
 
