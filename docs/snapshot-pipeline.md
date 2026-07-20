@@ -86,8 +86,9 @@ key properties, mostly stolen from typeahead:
 observability: `GET /snapshot` on the backend returns the live replica's
 manifest (what build is prod actually serving). the builder has a 45-minute
 process deadline; an independent 15-minute guardian stops runs over 50 minutes
-and starts a missed run when snapshot age exceeds 90 minutes. the watchdog alerts
-when age exceeds 120 minutes. see
+and starts a missed run when snapshot age exceeds 75 minutes. after a builder
+exits, the guardian allows 15 minutes for download and atomic adoption before
+starting another run. the watchdog alerts when age exceeds 120 minutes. see
 [the July 15 stale-snapshot retro](retro-2026-07-15-stale-snapshot-builder-hang.md).
 
 ## what happens at arbitrary scale
@@ -147,8 +148,8 @@ surgery footgun.
    indexer refuses new inserts, the builder excludes existing rows, and
    the promote watcher will reject any snapshot containing them.
 2. deploy the backend. CI reconciles the scheduled builder to the serving
-   image's immutable digest and stamps the source revision into
-   `BUILDER_VERSION`. Verify digest parity with
+   image's immutable digest, stamps the source revision into
+   `BUILDER_VERSION`, and starts a matching build immediately. Verify with
    `scripts/reconcile-snapshot-builder --version <git-sha> --dry-run`.
 3. purge vectors (`scripts/purge-bridgyfed-vectors` handles the banned
    list) and, eventually, turso history (`scripts/purge-banned-turso` —

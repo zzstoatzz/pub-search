@@ -22,8 +22,6 @@ def main() -> int:
     builder = select_builder(machines)
     serving = select_serving(machines)
     target_image = image_uri(serving)
-    was_running = builder.get("state") != "stopped"
-
     command = [
         fly,
         "machine",
@@ -50,8 +48,10 @@ def main() -> int:
         return 0
 
     subprocess.run(command, check=True)
-    if was_running:
-        subprocess.run([fly, "machine", "start", builder["id"], "-a", args.app], check=True)
+    # Updating a stopped scheduled Machine resets its effective cadence. Start
+    # it now so every serving deploy produces a matching snapshot immediately,
+    # instead of waiting for the recovery guard to notice stale serving data.
+    subprocess.run([fly, "machine", "start", builder["id"], "-a", args.app], check=True)
     updated = select_builder(machine_list(fly, args.app))
     if updated.get("image_ref", {}).get("digest") != serving.get("image_ref", {}).get("digest"):
         raise RuntimeError("builder image digest does not match serving after update")
@@ -70,9 +70,9 @@ def main() -> int:
         raise RuntimeError(f"builder environment invariant failed: {missing}")
     if updated.get("config", {}).get("schedule") != "hourly":
         raise RuntimeError("builder lost its hourly schedule during update")
-    if was_running and updated.get("state") != "started":
-        raise RuntimeError("builder was running before reconciliation but was not restarted")
-    print(f"verified builder {updated['id']} at serving digest with BUILDER_VERSION={actual_version}")
+    if updated.get("state") != "started":
+        raise RuntimeError("builder was not started after reconciliation")
+    print(f"verified and started builder {updated['id']} at serving digest with BUILDER_VERSION={actual_version}")
     return 0
 
 

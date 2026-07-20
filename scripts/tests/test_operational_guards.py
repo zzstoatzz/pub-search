@@ -36,6 +36,7 @@ class SnapshotAgeTests(unittest.TestCase):
         problem = snapshot_age_problem({"build_id": "b-stale", "created_at": now - 121 * 60}, now)
         self.assertIn("121m old", problem)
         self.assertIn("b-stale", problem)
+        self.assertIn("freshness bound exceeded", problem)
 
     def test_invalid_manifest_fails_closed(self):
         self.assertIn("invalid created_at", snapshot_age_problem({"build_id": "b1"}, 10_000.0))
@@ -91,12 +92,29 @@ class ReconcilerTests(unittest.TestCase):
 
 class GuardianTests(unittest.TestCase):
     def test_starts_stopped_builder_before_page_threshold(self):
-        action, _ = guardian.decide_action({"state": "stopped"}, 91, 10_000)
+        action, _ = guardian.decide_action({"state": "stopped"}, 76, 10_000)
         self.assertEqual("start", action)
 
     def test_leaves_fresh_stopped_builder_alone(self):
-        action, _ = guardian.decide_action({"state": "stopped"}, 89, 10_000)
+        action, _ = guardian.decide_action({"state": "stopped"}, 74, 10_000)
         self.assertEqual("none", action)
+
+    def test_allows_recent_successful_build_time_to_be_adopted(self):
+        machine = {
+            "state": "stopped",
+            "events": [{"type": "exit", "status": "stopped", "timestamp": 9_700_000}],
+        }
+        action, reason = guardian.decide_action(machine, 128, 10_000)
+        self.assertEqual("none", action)
+        self.assertIn("allowing 15m", reason)
+
+    def test_restarts_when_adoption_grace_expires(self):
+        machine = {
+            "state": "stopped",
+            "events": [{"type": "exit", "status": "stopped", "timestamp": 9_040_000}],
+        }
+        action, _ = guardian.decide_action(machine, 128, 10_000)
+        self.assertEqual("start", action)
 
     def test_stops_overlong_run(self):
         machine = {

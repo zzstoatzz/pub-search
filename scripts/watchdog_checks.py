@@ -25,6 +25,6 @@ def snapshot_age_problem(manifest: object, now_timestamp: float) -> str | None:
     if age_minutes > SNAPSHOT_AGE_ALERT_MINUTES:
         return (
             f"serving snapshot is {age_minutes:.0f}m old "
-            f"(build {build_id}) - builder or promote watcher stalled"
+            f"(build {build_id}) - freshness bound exceeded; builder or adoption delayed"
         )
     return None

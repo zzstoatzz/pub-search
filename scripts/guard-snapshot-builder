@@ -14,7 +14,8 @@ from fly_machines import fly_binary, machine_list, select_builder
 from watchdog_checks import snapshot_age_minutes
 
 MAX_RUN_MINUTES = 50
-RECOVERY_AGE_MINUTES = 90
+RECOVERY_AGE_MINUTES = 75
+ADOPTION_GRACE_MINUTES = 15
 BACKEND = "https://leaflet-search-backend.fly.dev"
 
 
@@ -27,12 +28,22 @@ def latest_started_at(machine: dict[str, Any]) -> float | None:
     return max(timestamps, default=0) or None
 
 
+def latest_exited_at(machine: dict[str, Any]) -> float | None:
+    timestamps = [
+        event.get("timestamp", 0) / 1000
+        for event in machine.get("events", [])
+        if event.get("type") == "exit" and event.get("status") == "stopped"
+    ]
+    return max(timestamps, default=0) or None
+
+
 def decide_action(
     builder: dict[str, Any],
     snapshot_age: float,
     now: float,
     max_run_minutes: int = MAX_RUN_MINUTES,
     recovery_age_minutes: int = RECOVERY_AGE_MINUTES,
+    adoption_grace_minutes: int = ADOPTION_GRACE_MINUTES,
 ) -> tuple[str, str]:
     state = builder.get("state")
     if state == "started":
@@ -45,6 +56,15 @@ def decide_action(
         return "none", f"builder running for {run_age:.0f}m"
     if state == "stopped":
         if snapshot_age > recovery_age_minutes:
+            exited_at = latest_exited_at(builder)
+            if exited_at is not None:
+                exit_age = (now - exited_at) / 60
+                if exit_age < adoption_grace_minutes:
+                    return (
+                        "none",
+                        f"builder exited {exit_age:.0f}m ago; allowing "
+                        f"{adoption_grace_minutes}m for snapshot adoption",
+                    )
             return "start", f"snapshot age is {snapshot_age:.0f}m (recovery threshold {recovery_age_minutes}m)"
         return "none", f"snapshot age is {snapshot_age:.0f}m"
     return "error", f"builder is in unexpected state {state!r}"
@@ -63,6 +83,7 @@ def main() -> int:
     parser.add_argument("--app", default="leaflet-search-backend")
     parser.add_argument("--max-run-minutes", type=int, default=MAX_RUN_MINUTES)
     parser.add_argument("--recovery-age-minutes", type=int, default=RECOVERY_AGE_MINUTES)
+    parser.add_argument("--adoption-grace-minutes", type=int, default=ADOPTION_GRACE_MINUTES)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -76,6 +97,7 @@ def main() -> int:
         now,
         max_run_minutes=args.max_run_minutes,
         recovery_age_minutes=args.recovery_age_minutes,
+        adoption_grace_minutes=args.adoption_grace_minutes,
     )
     print(f"action={action}: {reason}")
 
