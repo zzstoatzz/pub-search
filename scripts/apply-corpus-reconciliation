@@ -1,0 +1,369 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""Safely apply a corpus-reconciliation ledger in bounded, resumable chunks.
+
+The backend re-fetches every record immediately before mutation. Upserts must
+match the audit CID; deletes require a definitive current source 400/404.
+This runner supplies pacing, durable outcomes, health checks, and circuit
+breakers. It never applies review/exclude/quarantine decisions.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import deque
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import sqlite3
+import sys
+import time
+from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+
+
+DEFAULT_LEDGER = Path("/tmp/pub-search-corpus-reconcile.sqlite")
+DEFAULT_BASE_URL = "https://leaflet-search-backend.fly.dev"
+COLLECTION = "site.standard.document"
+SAFE_ACTIONS = ("verify", "update", "create", "delete")
+SUCCESS_OUTCOMES = {"upserted", "deleted"}
+PRECONDITION_OUTCOMES = {"source_changed", "source_absent", "source_exists"}
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def env_file_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value:
+        return value
+    path = Path(".env")
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip("'\"")
+    return None
+
+
+def open_ledger(path: Path) -> sqlite3.Connection:
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=FULL")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS apply_sessions (
+          session_id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          status TEXT NOT NULL,
+          actions TEXT NOT NULL,
+          rate REAL NOT NULL,
+          max_items INTEGER,
+          attempted INTEGER NOT NULL DEFAULT 0,
+          applied INTEGER NOT NULL DEFAULT 0,
+          precondition_skips INTEGER NOT NULL DEFAULT 0,
+          errors INTEGER NOT NULL DEFAULT 0,
+          stop_reason TEXT
+        );
+        """
+    )
+    return db
+
+
+def validate_run(db: sqlite3.Connection, run_id: str, max_audit_age_hours: float) -> sqlite3.Row:
+    run = db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    if not run or run["status"] != "complete":
+        raise RuntimeError(f"run {run_id!r} is not a completed plan")
+    audit_path = Path(run["audit_db"])
+    if not audit_path.exists():
+        raise RuntimeError(f"audit checkpoint is missing: {audit_path}")
+    if file_sha256(audit_path) != run["audit_sha256"]:
+        raise RuntimeError("audit checkpoint hash no longer matches the ledger")
+    inventory = dt.datetime.fromisoformat(run["audit_inventory_at"])
+    age_hours = (dt.datetime.now(dt.timezone.utc) - inventory).total_seconds() / 3600
+    if age_hours > max_audit_age_hours:
+        raise RuntimeError(f"audit is {age_hours:.1f}h old (limit {max_audit_age_hours:.1f}h); re-audit and re-plan")
+    return run
+
+
+def selected_rows(
+    db: sqlite3.Connection,
+    run_id: str,
+    actions: list[str],
+    max_items: int | None,
+    retry_failed: bool,
+) -> list[sqlite3.Row]:
+    statuses = ["proposed", "approved"] + (["failed"] if retry_failed else [])
+    query = f"""
+        SELECT i.*,p.pds,p.source_status,p.source_policy,p.classifier_state
+        FROM items i JOIN repo_plans p ON p.run_id=i.run_id AND p.did=i.did
+        WHERE i.run_id=? AND i.policy_decision='allow'
+          AND i.action IN ({','.join('?' for _ in actions)})
+          AND i.status IN ({','.join('?' for _ in statuses)})
+        ORDER BY CASE i.action WHEN 'verify' THEN 0 WHEN 'update' THEN 1
+                               WHEN 'create' THEN 2 WHEN 'delete' THEN 3 ELSE 4 END,
+                 i.did,i.uri
+    """
+    params: list[Any] = [run_id, *actions, *statuses]
+    if max_items is not None:
+        query += " LIMIT ?"
+        params.append(max_items)
+    return list(db.execute(query, params))
+
+
+def pds_from_document(body: dict[str, Any]) -> str | None:
+    for service in body.get("service", []):
+        if service.get("type") == "AtprotoPersonalDataServer" or str(service.get("id", "")).endswith("#atproto_pds"):
+            endpoint = service.get("serviceEndpoint")
+            if isinstance(endpoint, str) and endpoint.startswith("https://"):
+                return endpoint.rstrip("/")
+    return None
+
+
+def resolve_pds(client: httpx.Client, did: str) -> str | None:
+    response = client.get(f"https://plc.directory/{did}", timeout=15)
+    if response.status_code in {400, 404}:
+        return None
+    response.raise_for_status()
+    return pds_from_document(response.json())
+
+
+def healthy(client: httpx.Client, base_url: str, max_snapshot_age_minutes: float) -> tuple[bool, str]:
+    started = time.monotonic()
+    response = client.get(f"{base_url}/health", timeout=10)
+    if response.status_code != 200 or response.json().get("status") != "ok":
+        return False, f"health HTTP {response.status_code}"
+    if time.monotonic() - started > 5:
+        return False, "health probe exceeded 5s"
+    snapshot = client.get(f"{base_url}/snapshot", timeout=15)
+    if snapshot.status_code != 200:
+        return False, f"snapshot HTTP {snapshot.status_code}"
+    manifest = snapshot.json()
+    if int(manifest.get("schema_version", 0)) != 4:
+        return False, f"serving snapshot schema is {manifest.get('schema_version')}"
+    created = int(manifest.get("created_at", 0))
+    age_minutes = (time.time() - created) / 60
+    if age_minutes > max_snapshot_age_minutes:
+        return False, f"serving snapshot is {age_minutes:.0f}m old"
+    return True, "ok"
+
+
+def backend_action(action: str) -> str:
+    return "delete" if action == "delete" else "upsert"
+
+
+def mark(
+    db: sqlite3.Connection,
+    run_id: str,
+    uri: str,
+    status: str,
+    outcome: str,
+    increment_attempt: bool = True,
+) -> None:
+    db.execute(
+        """UPDATE items SET status=?,outcome=?,attempts=attempts+?
+           WHERE run_id=? AND uri=?""",
+        (status, outcome, int(increment_attempt), run_id, uri),
+    )
+    db.commit()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--action", action="append", choices=SAFE_ACTIONS, dest="actions")
+    parser.add_argument("--max-items", type=int)
+    parser.add_argument("--rate", type=float, default=1.0, help="maximum item requests per second")
+    parser.add_argument("--max-runtime-minutes", type=float, default=30)
+    parser.add_argument("--health-every", type=int, default=25)
+    parser.add_argument("--max-snapshot-age-minutes", type=float, default=120)
+    parser.add_argument("--max-audit-age-hours", type=float, default=24)
+    parser.add_argument("--max-consecutive-errors", type=int, default=3)
+    parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--stop-file", type=Path, default=Path("/tmp/pub-search-reconcile.stop"))
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if args.rate <= 0 or args.rate > 2:
+        raise SystemExit("--rate must be > 0 and <= 2 requests/second")
+    actions = args.actions or list(SAFE_ACTIONS)
+    db = open_ledger(args.ledger)
+    validate_run(db, args.run_id, args.max_audit_age_hours)
+    rows = selected_rows(db, args.run_id, actions, args.max_items, args.retry_failed)
+    estimate_seconds = len(rows) / args.rate
+    print(json.dumps({
+        "run_id": args.run_id,
+        "selected": len(rows),
+        "actions": actions,
+        "rate": args.rate,
+        "minimum_runtime_minutes": round(estimate_seconds / 60, 1),
+        "execute": args.execute,
+    }))
+    if not args.execute or not rows:
+        return
+
+    token = env_file_value("BACKFILL_TOKEN")
+    if not token:
+        raise SystemExit("BACKFILL_TOKEN is required")
+    session_id = f"apply-{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}"
+    db.execute(
+        """INSERT INTO apply_sessions
+           (session_id,run_id,started_at,status,actions,rate,max_items)
+           VALUES (?,?,?,'running',?,?,?)""",
+        (session_id, args.run_id, utc_now(), json.dumps(actions), args.rate, args.max_items),
+    )
+    db.commit()
+
+    attempted = applied = precondition_skips = errors = consecutive_errors = 0
+    stop_reason = "complete"
+    started_at = time.monotonic()
+    next_request_at = started_at
+    resolved: dict[str, str | None] = {}
+    recent_errors: deque[bool] = deque(maxlen=50)
+
+    with httpx.Client(headers={"User-Agent": "pub-search-corpus-apply/1.0"}) as client:
+        ok, reason = healthy(client, args.base_url, args.max_snapshot_age_minutes)
+        if not ok:
+            stop_reason = f"initial health gate: {reason}"
+        else:
+            for row in rows:
+                if args.stop_file.exists():
+                    stop_reason = f"stop file present: {args.stop_file}"
+                    break
+                if time.monotonic() - started_at >= args.max_runtime_minutes * 60:
+                    stop_reason = "max runtime reached"
+                    break
+                if attempted and attempted % args.health_every == 0:
+                    ok, reason = healthy(client, args.base_url, args.max_snapshot_age_minutes)
+                    if not ok:
+                        stop_reason = f"health circuit: {reason}"
+                        break
+                if len(recent_errors) == recent_errors.maxlen and sum(recent_errors) / len(recent_errors) > 0.10:
+                    stop_reason = "rolling error rate exceeded 10%"
+                    break
+                if consecutive_errors >= args.max_consecutive_errors:
+                    stop_reason = f"{consecutive_errors} consecutive errors"
+                    break
+
+                did = row["did"]
+                if did not in resolved:
+                    try:
+                        resolved[did] = resolve_pds(client, did)
+                    except Exception as exc:
+                        resolved[did] = None
+                        mark(db, args.run_id, row["uri"], "failed", f"pds_resolution:{type(exc).__name__}")
+                        attempted += 1
+                        errors += 1
+                        consecutive_errors += 1
+                        recent_errors.append(True)
+                        continue
+                pds = resolved[did]
+                if not pds:
+                    mark(db, args.run_id, row["uri"], "skipped", "pds_unresolved")
+                    attempted += 1
+                    precondition_skips += 1
+                    consecutive_errors = 0
+                    recent_errors.append(False)
+                    continue
+                host = urlparse(pds).hostname or ""
+                if host == "brid.gy" or host.endswith(".brid.gy"):
+                    mark(db, args.run_id, row["uri"], "skipped", "bridgy_policy")
+                    attempted += 1
+                    precondition_skips += 1
+                    consecutive_errors = 0
+                    recent_errors.append(False)
+                    continue
+
+                delay = next_request_at - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                next_request_at = time.monotonic() + 1 / args.rate
+                params = {
+                    "token": token,
+                    "action": backend_action(row["action"]),
+                    "did": did,
+                    "collection": COLLECTION,
+                    "rkey": row["uri"].rsplit("/", 1)[-1],
+                    "pds": pds,
+                }
+                if row["source_cid"]:
+                    params["expected_cid"] = row["source_cid"]
+                if row["action"] == "create":
+                    params["observe_classifier"] = "1"
+                try:
+                    response = client.post(f"{args.base_url}/admin/reconcile-document", params=params, timeout=30)
+                    response.raise_for_status()
+                    outcome = response.json().get("outcome", "bad_response")
+                    if outcome in SUCCESS_OUTCOMES:
+                        mark(db, args.run_id, row["uri"], "applied", outcome)
+                        applied += 1
+                        consecutive_errors = 0
+                        recent_errors.append(False)
+                    elif outcome in PRECONDITION_OUTCOMES:
+                        mark(db, args.run_id, row["uri"], "skipped", outcome)
+                        precondition_skips += 1
+                        consecutive_errors = 0
+                        recent_errors.append(False)
+                    else:
+                        raise RuntimeError(f"unexpected outcome {outcome!r}")
+                except Exception as exc:
+                    mark(db, args.run_id, row["uri"], "failed", f"request:{type(exc).__name__}")
+                    errors += 1
+                    consecutive_errors += 1
+                    recent_errors.append(True)
+                attempted += 1
+                print(json.dumps({
+                    "session": session_id,
+                    "attempted": attempted,
+                    "applied": applied,
+                    "precondition_skips": precondition_skips,
+                    "errors": errors,
+                    "uri": row["uri"],
+                }), flush=True)
+
+    status = "complete" if stop_reason == "complete" else "stopped"
+    db.execute(
+        """UPDATE apply_sessions SET completed_at=?,status=?,attempted=?,applied=?,
+           precondition_skips=?,errors=?,stop_reason=? WHERE session_id=?""",
+        (utc_now(), status, attempted, applied, precondition_skips, errors, stop_reason, session_id),
+    )
+    db.commit()
+    print(json.dumps({
+        "session": session_id,
+        "status": status,
+        "attempted": attempted,
+        "applied": applied,
+        "precondition_skips": precondition_skips,
+        "errors": errors,
+        "stop_reason": stop_reason,
+    }))
+    if errors or status != "complete":
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

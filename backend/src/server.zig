@@ -166,6 +166,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleActivity(request, io);
     } else if (mem.eql(u8, path, "/admin/backfill")) {
         try handleBackfill(request, target, io);
+    } else if (mem.eql(u8, path, "/admin/reconcile-document")) {
+        try handleReconcileDocument(request, target, io);
     } else if (mem.eql(u8, path, "/admin/label")) {
         try handleLabel(request, target);
     } else if (mem.eql(u8, path, "/api/labeler")) {
@@ -974,6 +976,77 @@ fn handleBackfill(request: *http.Server.Request, target: []const u8, io: Io) !vo
         .{ did, counts.documents, counts.publications, counts.recommends, counts.subscriptions, counts.skipped },
     );
     try sendJson(request, body);
+}
+
+/// Apply one pre-audited site.standard.document ledger item. This endpoint is
+/// intentionally synchronous and item-scoped: the operator controls pacing,
+/// while the backend re-fetches the source and enforces the expected CID at
+/// the last possible moment before an upsert. Deletes require a fresh,
+/// definitive source 400/404.
+fn handleReconcileDocument(request: *http.Server.Request, target: []const u8, io: Io) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const json_hdr: []const http.Header = &.{.{ .name = "content-type", .value = "application/json" }};
+
+    const tok_c = std.c.getenv("BACKFILL_TOKEN") orelse {
+        try request.respond("{\"error\":\"reconciliation endpoint disabled\"}", .{
+            .status = .service_unavailable,
+            .extra_headers = json_hdr,
+        });
+        return;
+    };
+    const provided = parseQueryParam(alloc, target, "token") catch "";
+    if (!mem.eql(u8, provided, std.mem.span(tok_c))) {
+        try request.respond("{\"error\":\"unauthorized\"}", .{ .status = .unauthorized, .extra_headers = json_hdr });
+        return;
+    }
+
+    const did = parseQueryParam(alloc, target, "did") catch {
+        try request.respond("{\"error\":\"missing did\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    const collection = parseQueryParam(alloc, target, "collection") catch {
+        try request.respond("{\"error\":\"missing collection\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    const rkey = parseQueryParam(alloc, target, "rkey") catch {
+        try request.respond("{\"error\":\"missing rkey\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    const pds = parseQueryParam(alloc, target, "pds") catch {
+        try request.respond("{\"error\":\"missing pds\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    const expected_cid: ?[]const u8 = parseQueryParam(alloc, target, "expected_cid") catch null;
+    const observe_classifier = blk: {
+        const value = parseQueryParam(alloc, target, "observe_classifier") catch break :blk false;
+        break :blk mem.eql(u8, value, "1") or mem.eql(u8, value, "true");
+    };
+    const action_text = parseQueryParam(alloc, target, "action") catch "";
+    const action: ingest.ingester.TargetedAction = if (mem.eql(u8, action_text, "upsert"))
+        .upsert
+    else if (mem.eql(u8, action_text, "delete"))
+        .delete
+    else {
+        try request.respond("{\"error\":\"action must be upsert or delete\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+
+    const result = ingest.ingester.applyDocumentReconciliation(
+        alloc, io, did, collection, rkey, pds, expected_cid, action, observe_classifier,
+    ) catch |err| {
+        const body = try std.fmt.allocPrint(alloc, "{{\"error\":\"{s}\"}}", .{@errorName(err)});
+        try request.respond(body, .{ .status = .service_unavailable, .extra_headers = json_hdr });
+        return;
+    };
+    const cid = result.source_cid orelse "";
+    const body = try std.fmt.allocPrint(
+        alloc,
+        "{{\"outcome\":\"{s}\",\"source_cid\":\"{s}\"}}",
+        .{ @tagName(result.outcome), cid },
+    );
+    try request.respond(body, .{ .extra_headers = json_hdr });
 }
 
 /// Serve the live replica's manifest sidecar (build id, sha256, watermark,

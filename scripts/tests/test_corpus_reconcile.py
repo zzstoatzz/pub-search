@@ -111,7 +111,7 @@ class CorpusReconcileTests(unittest.TestCase):
             row["uri"]: (row["action"], row["reason"], row["policy_decision"])
             for row in self.ledger.execute("SELECT * FROM items WHERE run_id=?", (self.run_id,))
         }
-        self.assertEqual(("verify", "target_has_no_source_cid", "review"), actions["at://complete/doc/same"])
+        self.assertEqual(("verify", "target_has_no_source_cid", "allow"), actions["at://complete/doc/same"])
         self.assertEqual(("verify", "source_cid_match", "allow"), actions["at://complete/doc/cid-current"])
         self.assertEqual(("update", "fields_changed:source_cid", "allow"), actions["at://complete/doc/cid-changed"])
         self.assertEqual(("update", "fields_changed:title", "allow"), actions["at://complete/doc/changed"])

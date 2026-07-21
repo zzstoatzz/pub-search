@@ -282,6 +282,12 @@ gated) emits or negates a label manually — the negation path is the appeal /
 correction lever; it also updates the classifier's state so the account is
 never re-flagged.
 
+`POST /admin/reconcile-document?token=…&action=upsert|delete&did=…&collection=site.standard.document&rkey=…&pds=…&expected_cid=…`
+is the item-scoped corpus-repair endpoint. It is disabled unless
+`BACKFILL_TOKEN` is configured. Upserts re-fetch the PDS record and require an
+exact CID match; deletes only proceed on a fresh authoritative 400/404. The
+bounded ledger runner is the intended caller—this is not a bulk API.
+
 ### health
 
 ```

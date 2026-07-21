@@ -54,6 +54,41 @@ the currently indexed text would attest to our projection rather than the source
 Once populated, equal source/target CIDs are cheap no-change proofs and unequal CIDs
 become explicit updates even when title, path, and publication metadata are stable.
 
+### bounded apply (phase 3)
+
+`scripts/apply-corpus-reconciliation` consumes a completed ledger in resumable
+chunks. It will only select `allow` decisions and requires `--execute`; review,
+exclude, and quarantine rows are structurally ineligible. Before every mutation,
+the backend's token-gated `/admin/reconcile-document` endpoint re-fetches the
+single record from its freshly resolved PDS. Upserts require the live CID to equal
+the audit CID. Deletes require a definitive live 400/404. A changed, restored, or
+unresolved source becomes a recorded skip, never a guessed write.
+
+The runner defaults to one item per second, caps operators at two per second,
+checks `/health` and the serving snapshot every 25 items, stops after three
+consecutive errors or a 10% rolling error rate, honors a stop file, and commits
+every outcome to SQLite. At one request per second a 63k-item baseline is bounded
+to roughly 18 hours plus source latency; two per second is roughly nine hours.
+Thirty-minute chunks are the default, so a process restart loses no completed work.
+
+Typical sequence:
+
+```sh
+# Dry-run count and lower-bound runtime.
+./scripts/apply-corpus-reconciliation --ledger /tmp/reconcile.sqlite --run-id RUN
+
+# Five-item canary. Wait and inspect health/search before expanding.
+./scripts/apply-corpus-reconciliation --ledger /tmp/reconcile.sqlite --run-id RUN \
+  --execute --max-items 5 --rate 1 --max-runtime-minutes 10
+
+# Continue the same durable run in bounded chunks.
+./scripts/apply-corpus-reconciliation --ledger /tmp/reconcile.sqlite --run-id RUN \
+  --execute --rate 1 --max-runtime-minutes 30
+```
+
+Create actions alone opt into classifier observation. Re-verifying existing rows
+does not inflate author document counts or accidentally trigger bulk-author labels.
+
 the firehose is our only way to learn about ATProto record deletions. it's ephemeral — if the tap is down when a delete event comes through, the record becomes a ghost in turso (and turbopuffer) forever. the reconciler fixes this by periodically verifying documents still exist at their source PDS.
 
 ## the problem

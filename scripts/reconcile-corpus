@@ -278,7 +278,11 @@ def plan_repo(
                 elif target_cid and source_cid == target_cid:
                     rows.append(item(run_id, source["uri"], did, "verify", "source_cid_match", "allow", source, target))
                 else:
-                    rows.append(item(run_id, source["uri"], did, "verify", "target_has_no_source_cid", "review", source, target))
+                    # The audit just fetched this exact source record and the
+                    # target's visible metadata still matches. Re-upserting it
+                    # through the CID-guarded endpoint establishes identity;
+                    # it does not make a corpus inclusion decision.
+                    rows.append(item(run_id, source["uri"], did, "verify", "target_has_no_source_cid", "allow", source, target))
                 continue
             if normalized(source["rkey"]) in target_rkeys:
                 rows.append(item(run_id, source["uri"], did, "skip", "cross_collection_same_rkey", "allow", source))

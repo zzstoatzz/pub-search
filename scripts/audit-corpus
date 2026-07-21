@@ -24,6 +24,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -80,6 +81,7 @@ def connect(path: Path) -> sqlite3.Connection:
           ON source_documents(did, content_fingerprint);
         CREATE TABLE IF NOT EXISTS turso_documents (
           uri TEXT PRIMARY KEY,
+          source_rowid INTEGER,
           did TEXT NOT NULL,
           rkey TEXT,
           title TEXT,
@@ -115,6 +117,9 @@ def connect(path: Path) -> sqlite3.Connection:
     columns = {row[1] for row in db.execute("PRAGMA table_info(turso_documents)")}
     if "source_cid" not in columns:
         db.execute("ALTER TABLE turso_documents ADD COLUMN source_cid TEXT")
+        db.commit()
+    if "source_rowid" not in columns:
+        db.execute("ALTER TABLE turso_documents ADD COLUMN source_rowid INTEGER")
         db.commit()
     return db
 
@@ -175,9 +180,15 @@ async def request_json(
 
 
 async def inventory_relay(db: sqlite3.Connection, client: httpx.AsyncClient) -> None:
-    if db.execute("SELECT COUNT(*) FROM repos").fetchone()[0]:
+    if db.execute("SELECT 1 FROM meta WHERE key='relay_inventory_at'").fetchone():
         log("relay inventory already checkpointed")
         return
+    # Relay pagination cursors are not durable in older checkpoints. If a
+    # prior run stopped mid-inventory, restart this inexpensive phase rather
+    # than accepting a partial repo universe.
+    if db.execute("SELECT COUNT(*) FROM repos WHERE in_relay=1").fetchone()[0]:
+        db.execute("DELETE FROM repos WHERE in_relay=1")
+        db.commit()
     cursor = None
     total = 0
     while True:
@@ -433,6 +444,7 @@ async def audit_source_repos(
 
 
 def remote_turso_query(sql: str, timeout: int = 180) -> list[dict[str, Any]]:
+    global _BACKEND_MACHINE
     body = json.dumps(
         {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]},
         separators=(",", ":"),
@@ -445,13 +457,24 @@ printf 'POST /v2/pipeline HTTP/1.1\\r\\nHost: %s\\r\\nAuthorization: Bearer %s\\
 """
     encoded = base64.b64encode(script.encode()).decode()
     command = f"sh -lc 'printf %s {encoded} | base64 -d | sh'"
-    proc = subprocess.run(
-        ["fly", "ssh", "console", "-a", "leaflet-search-backend", "--machine", backend_machine(), "-C", command],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=True,
-    )
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            proc = subprocess.run(
+                ["fly", "ssh", "console", "-a", "leaflet-search-backend", "--machine", backend_machine(), "-C", command],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=True,
+            )
+            break
+        except (subprocess.SubprocessError, OSError) as exc:
+            last_error = exc
+            _BACKEND_MACHINE = None
+            if attempt < 2:
+                time.sleep(2**attempt)
+    else:
+        raise RuntimeError("Turso admin query failed after 3 attempts") from last_error
     payload = json.loads(proc.stdout[proc.stdout.index('{"baton"') :])
     result = payload["results"][0]
     if result["type"] != "ok":
@@ -465,12 +488,22 @@ printf 'POST /v2/pipeline HTTP/1.1\\r\\nHost: %s\\r\\nAuthorization: Bearer %s\\
 
 
 def import_turso(db: sqlite3.Connection) -> None:
-    if db.execute("SELECT COUNT(*) FROM turso_documents").fetchone()[0]:
+    completed = db.execute("SELECT 1 FROM meta WHERE key='turso_inventory_at'").fetchone()
+    if completed:
         log("Turso inventory already checkpointed")
         return
+    page_size = 2000
+    existing = db.execute("SELECT COUNT(*),MAX(source_rowid) FROM turso_documents").fetchone()
+    # Checkpoints made before source_rowid was stored cannot prove where a
+    # partial export stopped. Restart that one table rather than silently
+    # treating a truncated inventory as complete.
+    if existing[0] and existing[1] is None:
+        db.execute("DELETE FROM turso_documents")
+        db.commit()
+        existing = (0, None)
     log("exporting Turso document inventory")
-    last_rowid = 0
-    total = 0
+    last_rowid = int(existing[1] or 0)
+    total = int(existing[0])
     while True:
         rows = remote_turso_query(
             f"""SELECT rowid AS source_rowid,uri,did,rkey,title,LENGTH(content) AS content_length,created_at,
@@ -481,16 +514,16 @@ def import_turso(db: sqlite3.Connection) -> None:
                FROM documents
                WHERE rowid > {last_rowid}
                ORDER BY rowid
-               LIMIT 5000""",
-            timeout=90,
+               LIMIT {page_size}""",
+            timeout=180,
         )
         if not rows:
             break
         db.executemany(
             """INSERT INTO turso_documents
-               (uri,did,rkey,title,content_length,created_at,publication_uri,path,platform,source_collection,
+               (source_rowid,uri,did,rkey,title,content_length,created_at,publication_uri,path,platform,source_collection,
                 indexed_at,embedded_at,verified_at,source_cid,is_bridgyfed,url_dead)
-               VALUES (:uri,:did,:rkey,:title,:content_length,:created_at,:publication_uri,:path,:platform,
+               VALUES (:source_rowid,:uri,:did,:rkey,:title,:content_length,:created_at,:publication_uri,:path,:platform,
                        :source_collection,:indexed_at,:embedded_at,:verified_at,:source_cid,:is_bridgyfed,:url_dead)""",
             rows,
         )
@@ -498,8 +531,13 @@ def import_turso(db: sqlite3.Connection) -> None:
         total += len(rows)
         last_rowid = int(rows[-1]["source_rowid"])
         log(f"Turso inventory: {total}")
-        if len(rows) < 5000:
+        if len(rows) < page_size:
             break
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('turso_inventory_at',?)",
+        (dt.datetime.now(dt.timezone.utc).isoformat(),),
+    )
+    db.commit()
 
 
 def import_snapshot(db: sqlite3.Connection) -> None:

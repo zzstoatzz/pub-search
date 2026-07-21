@@ -568,6 +568,150 @@ pub const BackfillCounts = struct {
     skipped: usize = 0,
 };
 
+pub const TargetedAction = enum { upsert, delete };
+pub const TargetedOutcome = enum {
+    upserted,
+    deleted,
+    source_changed,
+    source_exists,
+    source_absent,
+};
+
+pub const TargetedResult = struct {
+    outcome: TargetedOutcome,
+    source_cid: ?[]u8 = null,
+};
+
+const RecordFetch = union(enum) {
+    found: []u8,
+    missing,
+};
+
+fn fetchRecord(
+    allocator: Allocator,
+    io: Io,
+    pds: []const u8,
+    did: []const u8,
+    collection: []const u8,
+    rkey: []const u8,
+) !RecordFetch {
+    if (!mem.startsWith(u8, pds, "https://")) return error.InsecurePds;
+
+    var url_buf: [768]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "{s}/xrpc/com.atproto.repo.getRecord?repo={s}&collection={s}&rkey={s}",
+        .{ pds, did, collection, rkey },
+    ) catch return error.UrlTooLong;
+
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
+    defer http_client.deinit();
+    var sink: std.Io.Writer.Allocating = .init(allocator);
+    defer sink.deinit();
+
+    const response = try http_client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .response_writer = &sink.writer,
+    });
+    const status: u10 = @intFromEnum(response.status);
+    if (status == 400 or status == 404) return .missing;
+    if (status < 200 or status >= 300) return error.PdsUnavailable;
+    return .{ .found = try sink.toOwnedSlice() };
+}
+
+/// Apply one ledger item through the normal extraction/index path. The caller
+/// supplies a freshly DID-resolved PDS and the audit CID. The PDS response is
+/// fetched again here, immediately before the write, so a changed source is a
+/// no-op rather than a stale overwrite.
+pub fn applyDocumentReconciliation(
+    allocator: Allocator,
+    io: Io,
+    did_str: []const u8,
+    collection: []const u8,
+    rkey: []const u8,
+    pds: []const u8,
+    expected_cid: ?[]const u8,
+    action: TargetedAction,
+    observe_classifier: bool,
+) !TargetedResult {
+    if (!mem.eql(u8, collection, STANDARD_DOCUMENT)) return error.UnsupportedCollection;
+    const did = zat.Did.parse(did_str) orelse return error.InvalidDid;
+    if (isBridgyPds(pds) and action == .upsert) return error.BridgedRepo;
+
+    var uri_buf: [256]u8 = undefined;
+    const uri = zat.AtUri.format(&uri_buf, did.raw, collection, rkey) orelse return error.InvalidAtUri;
+    const fetched = try fetchRecord(allocator, io, pds, did.raw, collection, rkey);
+
+    switch (fetched) {
+        .missing => {
+            if (action == .upsert) return .{ .outcome = .source_absent };
+            indexer.deleteDocument(uri);
+            const hashed = tpuf.hashId(uri);
+            // A vector failure makes the item retryable. The Turso delete is
+            // idempotent, so the next attempt safely finishes vector cleanup.
+            if (tpuf.isEnabled()) try tpuf.delete(allocator, &.{&hashed});
+            return .{ .outcome = .deleted };
+        },
+        .found => |body| {
+            defer allocator.free(body);
+            const parsed = json.parseFromSlice(json.Value, allocator, body, .{}) catch return error.BadRecordResponse;
+            defer parsed.deinit();
+            const actual_cid = zat.json.getString(parsed.value, "cid") orelse return error.BadRecordResponse;
+            const cid_owned = try allocator.dupe(u8, actual_cid);
+            errdefer allocator.free(cid_owned);
+
+            if (action == .delete) {
+                return .{ .outcome = .source_exists, .source_cid = cid_owned };
+            }
+            const expected = expected_cid orelse return error.MissingExpectedCid;
+            if (!mem.eql(u8, expected, actual_cid)) {
+                return .{ .outcome = .source_changed, .source_cid = cid_owned };
+            }
+            const response_uri = zat.json.getString(parsed.value, "uri") orelse return error.BadRecordResponse;
+            if (!mem.eql(u8, response_uri, uri)) return error.RecordUriMismatch;
+            const value = parsed.value.object.get("value") orelse return error.BadRecordResponse;
+            if (value != .object) return error.BadRecordResponse;
+            if (observe_classifier) {
+                try processDocument(allocator, uri, did.raw, rkey, value.object, collection, actual_cid);
+            } else {
+                var doc = try extractor.extractDocument(allocator, value.object, collection);
+                defer doc.deinit();
+                try indexer.insertDocument(
+                    uri, did.raw, rkey, doc.title, doc.content, doc.created_at,
+                    doc.publication_uri, doc.tags, doc.platformName(), doc.source_collection,
+                    doc.path, doc.content_type, doc.cover_image, actual_cid,
+                );
+                logfire.counter("ingest.documents_indexed", 1);
+            }
+            return .{ .outcome = .upserted, .source_cid = cid_owned };
+        },
+    }
+}
+
+test "targeted reconciliation rejects unsafe inputs before network access" {
+    const allocator = std.testing.allocator;
+    const io: Io = undefined;
+    const did = "did:plc:ztjsajckkmfscs3tshez4ath";
+
+    try std.testing.expectError(
+        error.UnsupportedCollection,
+        applyDocumentReconciliation(allocator, io, did, LEAFLET_DOCUMENT, "rkey", "https://pds.example", "bafy", .upsert, false),
+    );
+    try std.testing.expectError(
+        error.InvalidDid,
+        applyDocumentReconciliation(allocator, io, "not-a-did", STANDARD_DOCUMENT, "rkey", "https://pds.example", "bafy", .upsert, false),
+    );
+    try std.testing.expectError(
+        error.BridgedRepo,
+        applyDocumentReconciliation(allocator, io, did, STANDARD_DOCUMENT, "rkey", "https://atproto.brid.gy", "bafy", .upsert, false),
+    );
+    try std.testing.expectError(
+        error.InsecurePds,
+        applyDocumentReconciliation(allocator, io, did, STANDARD_DOCUMENT, "rkey", "http://pds.example", "bafy", .upsert, false),
+    );
+}
+
 /// Backfill one repo by DID. If `collection_filter` is non-null, only that
 /// collection is walked; otherwise all of BACKFILL_COLLECTIONS. Idempotent —
 /// indexer upserts, so re-running is safe.
