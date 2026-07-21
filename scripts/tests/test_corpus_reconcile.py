@@ -39,7 +39,7 @@ def audit_fixture(path: Path) -> sqlite3.Connection:
           uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, content_length INTEGER,
           created_at TEXT, publication_uri TEXT, path TEXT, platform TEXT,
           source_collection TEXT, indexed_at TEXT, embedded_at TEXT, verified_at TEXT,
-          is_bridgyfed INTEGER, url_dead INTEGER
+          source_cid TEXT, is_bridgyfed INTEGER, url_dead INTEGER
         );
         """
     )
@@ -50,8 +50,8 @@ def source(uri, did, rkey, title="title", eligibility="eligible", fingerprint=No
     return (uri, did, rkey, "cid-" + rkey, title, "at://pub", path, None, eligibility, fingerprint)
 
 
-def target(uri, did, rkey, title="title", path="/p", collection="site.standard.document"):
-    return (uri, did, rkey, title, 100, None, "at://pub", path, "other", collection, None, None, None, 0, 0)
+def target(uri, did, rkey, title="title", path="/p", collection="site.standard.document", source_cid=None):
+    return (uri, did, rkey, title, 100, None, "at://pub", path, "other", collection, None, None, None, source_cid, 0, 0)
 
 
 class CorpusReconcileTests(unittest.TestCase):
@@ -88,6 +88,8 @@ class CorpusReconcileTests(unittest.TestCase):
         self.add_repo(did)
         sources = [
             source("at://complete/doc/same", did, "same", fingerprint="fp-same"),
+            source("at://complete/doc/cid-current", did, "cid-current", path="/cid-current"),
+            source("at://complete/doc/cid-changed", did, "cid-changed", path="/cid-changed"),
             source("at://complete/doc/changed", did, "changed", title="new"),
             source("at://complete/doc/new1", did, "new1", fingerprint="fp-new1", path="/new1"),
             source("at://complete/doc/new2", did, "new2", fingerprint="fp-new2", path="/new2"),
@@ -96,11 +98,13 @@ class CorpusReconcileTests(unittest.TestCase):
         ]
         targets = [
             target("at://complete/doc/same", did, "same"),
+            target("at://complete/doc/cid-current", did, "cid-current", path="/cid-current", source_cid="cid-cid-current"),
+            target("at://complete/doc/cid-changed", did, "cid-changed", path="/cid-changed", source_cid="old-cid"),
             target("at://complete/doc/changed", did, "changed", title="old"),
             target("at://complete/doc/stale", did, "stale"),
         ]
         self.audit.executemany("INSERT INTO source_documents VALUES (?,?,?,?,?,?,?,?,?,?)", sources)
-        self.audit.executemany("INSERT INTO turso_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", targets)
+        self.audit.executemany("INSERT INTO turso_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", targets)
         self.plan(did, cap=1)
 
         actions = {
@@ -108,6 +112,8 @@ class CorpusReconcileTests(unittest.TestCase):
             for row in self.ledger.execute("SELECT * FROM items WHERE run_id=?", (self.run_id,))
         }
         self.assertEqual(("verify", "target_has_no_source_cid", "review"), actions["at://complete/doc/same"])
+        self.assertEqual(("verify", "source_cid_match", "allow"), actions["at://complete/doc/cid-current"])
+        self.assertEqual(("update", "fields_changed:source_cid", "allow"), actions["at://complete/doc/cid-changed"])
         self.assertEqual(("update", "fields_changed:title", "allow"), actions["at://complete/doc/changed"])
         self.assertEqual(("skip", "content_duplicate_present", "allow"), actions["at://complete/doc/dupe"])
         self.assertEqual(("skip", "metadata_only_pending", "review"), actions["at://complete/doc/meta"])
@@ -155,8 +161,8 @@ class CorpusReconcileTests(unittest.TestCase):
         unresolved = "did:plc:unresolved"
         self.add_repo(bridgy, policy="bridgy", status="policy_excluded")
         self.add_repo(unresolved, status="error")
-        self.audit.execute("INSERT INTO turso_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", target("at://bridgy/doc/1", bridgy, "1"))
-        self.audit.execute("INSERT INTO turso_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", target("at://unresolved/doc/1", unresolved, "1"))
+        self.audit.execute("INSERT INTO turso_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", target("at://bridgy/doc/1", bridgy, "1"))
+        self.audit.execute("INSERT INTO turso_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", target("at://unresolved/doc/1", unresolved, "1"))
         self.plan(bridgy)
         self.plan(unresolved)
         rows = {

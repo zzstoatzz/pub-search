@@ -40,6 +40,20 @@ Safety properties:
 The audit and first full ledger are recorded in
 [`corpus-audit-2026-07-20.md`](corpus-audit-2026-07-20.md).
 
+### source CID baseline (phase 2)
+
+Migration `020_add_documents_source_cid` adds the authoritative ATProto record CID to
+Turso documents. Verified firehose operations carry `RepoOp.cid` through the
+ingester's channel frame; targeted `listRecords` backfills use each response entry's
+`cid`. The indexer persists it on the same upsert as extracted content, and snapshot
+schema v4 copies it into the immutable serving database.
+
+Pre-existing rows intentionally retain an empty CID. A later reconciliation pass
+must fetch and extract them before establishing the baseline; inventing a CID from
+the currently indexed text would attest to our projection rather than the source.
+Once populated, equal source/target CIDs are cheap no-change proofs and unequal CIDs
+become explicit updates even when title, path, and publication metadata are stable.
+
 the firehose is our only way to learn about ATProto record deletions. it's ephemeral — if the tap is down when a delete event comes through, the record becomes a ghost in turso (and turbopuffer) forever. the reconciler fixes this by periodically verifying documents still exist at their source PDS.
 
 ## the problem

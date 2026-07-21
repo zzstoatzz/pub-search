@@ -16,7 +16,7 @@ const LocalDb = @This();
 /// built by an out-of-date builder image must stall freshness, not break
 /// serving. (Scheduled builder machines pin their creation image: recreate
 /// them after bumping this.)
-pub const SCHEMA_VERSION: u32 = 3; // v3: subscriptions table (/subscribed + /subscribers served locally)
+pub const SCHEMA_VERSION: u32 = 4; // v4: documents.source_cid for source-attested reconciliation
 
 const READ_POOL_SIZE = 12;
 
@@ -276,7 +276,8 @@ fn createSchema(self: *LocalDb) !void {
         \\  base_path TEXT DEFAULT '',
         \\  has_publication INTEGER DEFAULT 0,
         \\  indexed_at TEXT,
-        \\  cover_image TEXT DEFAULT ''
+        \\  cover_image TEXT DEFAULT '',
+        \\  source_cid TEXT DEFAULT ''
         \\)
     , .{}) catch |err| {
         std.debug.print("local db: failed to create documents table: {}\n", .{err});

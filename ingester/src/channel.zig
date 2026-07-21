@@ -1,7 +1,7 @@
 //! Firehose `/channel` websocket server.
 //!
 //! Emits the exact frame shape the backend's ingester consumer expects:
-//!   {"id":<seq>,"type":"record","record":{"action":..,"did":..,"collection":..,"rkey":..[,"record":<value>]}}
+//!   {"id":<seq>,"type":"record","record":{"action":..,"did":..,"collection":..,"rkey":..[,"cid":..,"record":<value>]}}
 //! and accepts (ignores) the backend's {"type":"ack","id":..} replies — frames
 //! replayed from the ring are delivered at-least-once and the backend's
 //! upserts are idempotent, so acks are advisory.
@@ -223,12 +223,20 @@ pub fn buildRecordFrame(
     did: []const u8,
     collection: []const u8,
     rkey: []const u8,
+    cid: ?zat.cbor.Cid,
     record: ?zat.cbor.Value,
 ) !void {
     const w = &out.writer;
     try w.print("{{\"id\":{d},\"type\":\"record\",\"record\":{{\"action\":\"{s}\",\"did\":\"{s}\",\"collection\":\"{s}\",\"rkey\":\"{s}\"", .{
         id, action, did, collection, rkey,
     });
+    if (cid) |value| {
+        const b32 = try zat.multibase.encode(alloc, .base32lower, value.raw);
+        defer alloc.free(b32);
+        try w.writeAll(",\"cid\":\"b");
+        try w.writeAll(b32);
+        try w.writeByte('"');
+    }
     if (record) |value| {
         try w.writeAll(",\"record\":");
         try cbor_json.writeValue(w, alloc, value);
@@ -250,4 +258,29 @@ pub fn serve(allocator: std.mem.Allocator, io: Io, channel: *Channel, port: u16)
     });
     defer server.deinit();
     try server.listen(channel);
+}
+
+test "record frame carries a parseable source CID" {
+    const allocator = std.testing.allocator;
+    const raw = [_]u8{ 1, 0x71, 0x12, 0x20, 1, 2, 3, 4 };
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+
+    try buildRecordFrame(
+        &out,
+        allocator,
+        42,
+        "create",
+        "did:plc:test",
+        "site.standard.document",
+        "abc",
+        .{ .raw = &raw },
+        null,
+    );
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, out.written(), .{});
+    defer parsed.deinit();
+    const cid = zat.json.getString(parsed.value, "record.cid") orelse return error.MissingCid;
+    try std.testing.expect(cid.len > 1);
+    try std.testing.expectEqual(@as(u8, 'b'), cid[0]);
 }

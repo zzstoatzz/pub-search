@@ -170,7 +170,7 @@ const Handler = struct {
         defer arena.deinit();
         const a = arena.allocator();
         var out: std.Io.Writer.Allocating = .init(a);
-        ch.buildRecordFrame(&out, a, seq, @tagName(op.action), did, op.collection, op.rkey, op.record) catch |err| {
+        ch.buildRecordFrame(&out, a, seq, @tagName(op.action), did, op.collection, op.rkey, op.cid, op.record) catch |err| {
             logfire.warn("channel: frame build failed: {s}", .{@errorName(err)});
             return;
         };

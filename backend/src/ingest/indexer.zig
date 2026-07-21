@@ -58,6 +58,7 @@ pub fn insertDocument(
     path: ?[]const u8,
     content_type: ?[]const u8,
     cover_image: ?[]const u8,
+    source_cid: ?[]const u8,
 ) !void {
     const c = db.getClient() orelse return error.NotInitialized;
 
@@ -254,8 +255,8 @@ pub fn insertDocument(
     // indexed_at uses strftime to record when this row was inserted/updated in Turso
     // (created_at is the document's publication date, which can be old for resynced docs)
     try c.exec(
-        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, cover_image, indexed_at, is_bridgyfed, content_type)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?, ?)
+        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, cover_image, indexed_at, is_bridgyfed, content_type, source_cid)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?, ?, ?)
         \\ON CONFLICT(uri) DO UPDATE SET
         \\  did = excluded.did,
         \\  rkey = excluded.rkey,
@@ -273,9 +274,10 @@ pub fn insertDocument(
         \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
         \\  is_bridgyfed = excluded.is_bridgyfed,
         \\  content_type = excluded.content_type,
+        \\  source_cid = excluded.source_cid,
         \\  embedded_at = documents.embedded_at
     ,
-        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "", is_bridgyfed, content_type orelse "" },
+        &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "", is_bridgyfed, content_type orelse "", source_cid orelse "" },
     );
 
     // update FTS index. `uri` is UNINDEXED in documents_fts, so deleting by it

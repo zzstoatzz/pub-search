@@ -266,11 +266,17 @@ def plan_repo(
                 continue
             if target:
                 changed = []
+                target_cid = normalized(target["source_cid"]) if "source_cid" in target.keys() else ""
+                source_cid = normalized(source["cid"])
+                if target_cid and source_cid and target_cid != source_cid:
+                    changed.append("source_cid")
                 if normalized(source["title"]) != normalized(target["title"]): changed.append("title")
                 if normalized(source["path"]) != normalized(target["path"]): changed.append("path")
                 if normalized(source["publication_uri"]) != normalized(target["publication_uri"]): changed.append("publication")
                 if changed:
                     rows.append(item(run_id, source["uri"], did, "update", "fields_changed:" + ",".join(changed), "allow", source, target))
+                elif target_cid and source_cid == target_cid:
+                    rows.append(item(run_id, source["uri"], did, "verify", "source_cid_match", "allow", source, target))
                 else:
                     rows.append(item(run_id, source["uri"], did, "verify", "target_has_no_source_cid", "review", source, target))
                 continue

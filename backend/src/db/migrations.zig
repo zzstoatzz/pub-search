@@ -373,6 +373,14 @@ pub const migrations = [_]zug.Migration{
         \\CREATE INDEX IF NOT EXISTS idx_subscriptions_pub_did_rkey ON subscriptions(publication_did, publication_rkey);
         ,
     },
+    .{
+        .id = "020_add_documents_source_cid",
+        .name = "persist authoritative ATProto record CID for reconciliation",
+        // NULL/empty means the row predates CID-aware ingestion and must be
+        // baselined by a source-verified reconciliation pass. New firehose and
+        // PDS-backfill writes populate it directly.
+        .sql = "ALTER TABLE documents ADD COLUMN source_cid TEXT",
+    },
 };
 
 // --- tests ---

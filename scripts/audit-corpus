@@ -92,6 +92,7 @@ def connect(path: Path) -> sqlite3.Connection:
           indexed_at TEXT,
           embedded_at TEXT,
           verified_at TEXT,
+          source_cid TEXT,
           is_bridgyfed INTEGER,
           url_dead INTEGER
         );
@@ -109,6 +110,12 @@ def connect(path: Path) -> sqlite3.Connection:
         );
         """
     )
+    # Checkpoints created before CID-aware reconciliation need the additive
+    # column too; CREATE TABLE IF NOT EXISTS does not evolve an existing DB.
+    columns = {row[1] for row in db.execute("PRAGMA table_info(turso_documents)")}
+    if "source_cid" not in columns:
+        db.execute("ALTER TABLE turso_documents ADD COLUMN source_cid TEXT")
+        db.commit()
     return db
 
 
@@ -468,6 +475,7 @@ def import_turso(db: sqlite3.Connection) -> None:
         rows = remote_turso_query(
             f"""SELECT rowid AS source_rowid,uri,did,rkey,title,LENGTH(content) AS content_length,created_at,
                       publication_uri,path,platform,source_collection,indexed_at,embedded_at,verified_at,
+                      COALESCE(source_cid,'') AS source_cid,
                       COALESCE(is_bridgyfed,0) AS is_bridgyfed,
                       COALESCE(url_dead,0) AS url_dead
                FROM documents
@@ -481,9 +489,9 @@ def import_turso(db: sqlite3.Connection) -> None:
         db.executemany(
             """INSERT INTO turso_documents
                (uri,did,rkey,title,content_length,created_at,publication_uri,path,platform,source_collection,
-                indexed_at,embedded_at,verified_at,is_bridgyfed,url_dead)
+                indexed_at,embedded_at,verified_at,source_cid,is_bridgyfed,url_dead)
                VALUES (:uri,:did,:rkey,:title,:content_length,:created_at,:publication_uri,:path,:platform,
-                       :source_collection,:indexed_at,:embedded_at,:verified_at,:is_bridgyfed,:url_dead)""",
+                       :source_collection,:indexed_at,:embedded_at,:verified_at,:source_cid,:is_bridgyfed,:url_dead)""",
             rows,
         )
         db.commit()

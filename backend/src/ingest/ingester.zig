@@ -306,6 +306,7 @@ const IngesterRecord = struct {
     action: []const u8, // "create", "update", "delete"
     did: []const u8,
     rkey: []const u8,
+    cid: ?[]const u8 = null,
 
     pub fn isCreate(self: IngesterRecord) bool {
         return mem.eql(u8, self.action, "create");
@@ -384,7 +385,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
                 }
             }
 
-            processDocument(allocator, uri, did.raw, rec.rkey, inner_record, rec.collection) catch |err| {
+            processDocument(allocator, uri, did.raw, rec.rkey, inner_record, rec.collection, rec.cid) catch |err| {
                 logfire.err("document processing error: {}", .{err});
             };
         } else if (isPublicationCollection(rec.collection)) {
@@ -420,7 +421,7 @@ fn processMessage(allocator: Allocator, payload: []const u8) !void {
     }
 }
 
-fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8) !void {
+fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8, source_cid: ?[]const u8) !void {
     var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
         if (err == error.MissingTitle) {
             logfire.span("ingest.dropped", .{ .reason = "missing_title", .collection = collection, .uri = uri }).end();
@@ -447,6 +448,7 @@ fn processDocument(allocator: Allocator, uri: []const u8, did: []const u8, rkey:
         doc.path,
         doc.content_type,
         doc.cover_image,
+        source_cid,
     );
     logfire.counter("ingest.documents_indexed", 1);
 
@@ -650,7 +652,8 @@ fn backfillCollection(
                         continue;
                     }
                 }
-                processDocument(allocator, uri, did, rkey, inner, collection) catch {
+                const source_cid = zat.json.getString(entry, "cid");
+                processDocument(allocator, uri, did, rkey, inner, collection, source_cid) catch {
                     counts.skipped += 1;
                     continue;
                 };

@@ -35,7 +35,7 @@ const BUILD_DOC_PAGE_SQL =
     "SELECT uri, did, rkey, title, content, created_at, publication_uri, " ++
     "platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at, " ++
     "COALESCE(cover_image, '') as cover_image, COALESCE(is_bridgyfed, 0) as is_bridgyfed, " ++
-    "COALESCE(url_dead, 0) as url_dead " ++
+    "COALESCE(url_dead, 0) as url_dead, COALESCE(source_cid, '') as source_cid " ++
     "FROM documents WHERE uri > ? " ++
     "AND indexed_at <= ? " ++
     "AND COALESCE(is_bridgyfed, 0) NOT IN (1, '1') " ++
@@ -243,8 +243,8 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
     conn.exec(
         \\INSERT OR REPLACE INTO documents
         \\(uri, did, rkey, title, content, created_at, publication_uri,
-        \\ platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at, cover_image, is_bridgyfed, url_dead)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\ platform, source_collection, path, base_path, has_publication, indexed_at, embedded_at, cover_image, is_bridgyfed, url_dead, source_cid)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     , .{
         row.text(0), // uri
         row.text(1), // did
@@ -263,6 +263,7 @@ fn insertDocumentLocal(conn: zqlite.Conn, row: anytype) !void {
         row.text(14), // cover_image
         row.int(15), // is_bridgyfed
         row.int(16), // url_dead
+        row.text(17), // source_cid
     }) catch |err| {
         return err;
     };
@@ -314,7 +315,8 @@ test "insertDocumentLocal keys FTS by rowid: no orphans on update, MATCH works" 
         \\  uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, content TEXT,
         \\  created_at TEXT, publication_uri TEXT, platform TEXT, source_collection TEXT,
         \\  path TEXT, base_path TEXT, has_publication INTEGER, indexed_at TEXT,
-        \\  embedded_at TEXT, cover_image TEXT, is_bridgyfed INTEGER, url_dead INTEGER
+        \\  embedded_at TEXT, cover_image TEXT, is_bridgyfed INTEGER, url_dead INTEGER,
+        \\  source_cid TEXT
         \\)
     , .{});
     try conn.exec("CREATE VIRTUAL TABLE documents_fts USING fts5(uri UNINDEXED, title, content)", .{});
@@ -324,11 +326,13 @@ test "insertDocumentLocal keys FTS by rowid: no orphans on update, MATCH works" 
         uri: []const u8,
         title: []const u8,
         content: []const u8,
+        source_cid: []const u8,
         fn text(self: @This(), i: usize) []const u8 {
             return switch (i) {
                 0 => self.uri,
                 3 => self.title,
                 4 => self.content,
+                17 => self.source_cid,
                 else => "",
             };
         }
@@ -337,9 +341,16 @@ test "insertDocumentLocal keys FTS by rowid: no orphans on update, MATCH works" 
         }
     };
 
-    try insertDocumentLocal(conn, FakeRow{ .uri = "at://a", .title = "first", .content = "hello world" });
+    try insertDocumentLocal(conn, FakeRow{ .uri = "at://a", .title = "first", .content = "hello world", .source_cid = "bafy-first" });
     // same uri, replacement (INSERT OR REPLACE reassigns documents.rowid)
-    try insertDocumentLocal(conn, FakeRow{ .uri = "at://a", .title = "second", .content = "hello world" });
+    try insertDocumentLocal(conn, FakeRow{ .uri = "at://a", .title = "second", .content = "hello world", .source_cid = "bafy-second" });
+
+    // source identity follows the replacement into the immutable snapshot.
+    {
+        const r = (try conn.row("SELECT source_cid FROM documents WHERE uri = 'at://a'", .{})).?;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("bafy-second", r.text(0));
+    }
 
     // exactly one FTS row — the stale one was dropped, not orphaned
     {
