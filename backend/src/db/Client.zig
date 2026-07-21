@@ -407,6 +407,9 @@ fn freeTypedValues(allocator: Allocator, values: []const WireValue) void {
 }
 
 fn validateArgs(comptime sql: []const u8, comptime ArgsType: type) void {
+    // Long upserts still need the compile-time placeholder/argument check;
+    // allow the linear SQL scan to exceed Zig's small default branch quota.
+    @setEvalBranchQuota(10_000);
     const expected = countPlaceholders(sql);
     const provided = countArgsType(ArgsType);
     if (expected != provided) {
