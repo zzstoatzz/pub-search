@@ -90,6 +90,7 @@ pub fn insertDocument(
     // cross-platform content dedup: if same author already has a document with
     // identical title+content (different rkey from a different platform), skip it.
     const content_hash: [16]u8 = computeContentHash(title, content);
+    var content_unchanged = false;
     if (c.query("SELECT uri FROM documents WHERE did = ? AND content_hash = ?", &.{ did, &content_hash })) |res| {
         var result = res;
         defer result.deinit();
@@ -100,6 +101,7 @@ pub fn insertDocument(
                 logfire.span("ingest.dropped", .{ .reason = "content_hash_dupe", .uri = uri, .existing_uri = existing_uri }).end();
                 return;
             }
+            content_unchanged = true;
         }
     } else |_| {}
 
@@ -252,46 +254,21 @@ pub fn insertDocument(
     const is_bridgyfed: []const u8 = "0";
 
     // use ON CONFLICT to preserve embedded_at (INSERT OR REPLACE would nuke it)
-    // indexed_at uses strftime to record when this row was inserted/updated in Turso
-    // (created_at is the document's publication date, which can be old for resynced docs)
-    try c.exec(
-        \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, cover_image, indexed_at, is_bridgyfed, content_type, source_cid)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?, ?, ?)
-        \\ON CONFLICT(uri) DO UPDATE SET
-        \\  did = excluded.did,
-        \\  rkey = excluded.rkey,
-        \\  title = excluded.title,
-        \\  content = excluded.content,
-        \\  created_at = excluded.created_at,
-        \\  publication_uri = excluded.publication_uri,
-        \\  platform = excluded.platform,
-        \\  source_collection = excluded.source_collection,
-        \\  path = excluded.path,
-        \\  base_path = excluded.base_path,
-        \\  has_publication = excluded.has_publication,
-        \\  content_hash = excluded.content_hash,
-        \\  cover_image = excluded.cover_image,
-        \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now'),
-        \\  is_bridgyfed = excluded.is_bridgyfed,
-        \\  content_type = excluded.content_type,
-        \\  source_cid = excluded.source_cid,
-        \\  embedded_at = documents.embedded_at
-    ,
+    // indexed_at means "content last changed", not "record last seen": platforms
+    // mass re-put whole archives over the firehose, and re-stamping unchanged
+    // docs churns the below-watermark set the snapshot builder's count gate
+    // assumes immutable (2026-07-21 crash-loop). Metadata-only updates still
+    // apply; the snapshot copies full rows, so they propagate regardless.
+    try c.exec(DOC_UPSERT_SQL,
         &.{ uri, did, rkey, title, content, created_at orelse "", pub_uri, actual_platform, source_collection, path orelse "", base_path, has_pub, &content_hash, cover_image orelse "", is_bridgyfed, content_type orelse "", source_cid orelse "" },
     );
 
-    // update FTS index. `uri` is UNINDEXED in documents_fts, so deleting by it
-    // would full-scan the FTS table on remote turso. Instead we key the FTS
-    // rowid to documents.rowid (a PK seek on `uri`), so deletes are O(1). Only
-    // pay the delete when this uri already has a row to replace; creates skip
-    // it. (One-time alignment of pre-existing rows: scripts/rebuild-fts.)
-    if (doc_exists) {
-        c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{uri}) catch {};
+    // FTS holds exactly title+content — what content_hash covers — so an
+    // unchanged re-put has nothing to rewrite there. Skipping it saves the
+    // delete+insert pair on turso for every doc of a re-put archive.
+    if (!content_unchanged) {
+        updateDocumentFts(c, uri, title, content, doc_exists);
     }
-    c.exec(
-        "INSERT INTO documents_fts (rowid, uri, title, content) VALUES ((SELECT rowid FROM documents WHERE uri = ?), ?, ?, ?)",
-        &.{ uri, uri, title, content },
-    ) catch {};
 
     // update tags
     c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{uri}) catch {};
@@ -301,6 +278,47 @@ pub fn insertDocument(
             &.{ uri, tag },
         ) catch {};
     }
+}
+
+pub const DOC_UPSERT_SQL =
+    \\INSERT INTO documents (uri, did, rkey, title, content, created_at, publication_uri, platform, source_collection, path, base_path, has_publication, content_hash, cover_image, indexed_at, is_bridgyfed, content_type, source_cid)
+    \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?, ?, ?)
+    \\ON CONFLICT(uri) DO UPDATE SET
+    \\  did = excluded.did,
+    \\  rkey = excluded.rkey,
+    \\  title = excluded.title,
+    \\  content = excluded.content,
+    \\  created_at = excluded.created_at,
+    \\  publication_uri = excluded.publication_uri,
+    \\  platform = excluded.platform,
+    \\  source_collection = excluded.source_collection,
+    \\  path = excluded.path,
+    \\  base_path = excluded.base_path,
+    \\  has_publication = excluded.has_publication,
+    \\  content_hash = excluded.content_hash,
+    \\  cover_image = excluded.cover_image,
+    \\  indexed_at = CASE WHEN documents.content_hash = excluded.content_hash
+    \\    THEN documents.indexed_at
+    \\    ELSE strftime('%Y-%m-%dT%H:%M:%S', 'now') END,
+    \\  is_bridgyfed = excluded.is_bridgyfed,
+    \\  content_type = excluded.content_type,
+    \\  source_cid = excluded.source_cid,
+    \\  embedded_at = documents.embedded_at
+;
+
+// update FTS index. `uri` is UNINDEXED in documents_fts, so deleting by it
+// would full-scan the FTS table on remote turso. Instead we key the FTS
+// rowid to documents.rowid (a PK seek on `uri`), so deletes are O(1). Only
+// pay the delete when this uri already has a row to replace; creates skip
+// it. (One-time alignment of pre-existing rows: scripts/rebuild-fts.)
+fn updateDocumentFts(c: *db.Client, uri: []const u8, title: []const u8, content: []const u8, doc_exists: bool) void {
+    if (doc_exists) {
+        c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{uri}) catch {};
+    }
+    c.exec(
+        "INSERT INTO documents_fts (rowid, uri, title, content) VALUES ((SELECT rowid FROM documents WHERE uri = ?), ?, ?, ?)",
+        &.{ uri, uri, title, content },
+    ) catch {};
 }
 
 pub fn insertPublication(
@@ -518,4 +536,52 @@ test "httpSiteRootHost: root URL → host, deep link → null" {
     try t.expect(httpSiteRootHost("https://example.com/posts/x") == null);
     // not http
     try t.expect(httpSiteRootHost("at://did:plc:abc/foo") == null);
+}
+
+test "DOC_UPSERT_SQL: unchanged content keeps indexed_at, changed content bumps it" {
+    const t = std.testing;
+    const zqlite = @import("zqlite");
+    var conn = try zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+    defer conn.close();
+    try conn.exec(
+        \\CREATE TABLE documents (
+        \\  uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, content TEXT,
+        \\  created_at TEXT, publication_uri TEXT, platform TEXT, source_collection TEXT,
+        \\  path TEXT, base_path TEXT, has_publication INTEGER, content_hash TEXT,
+        \\  cover_image TEXT, indexed_at TEXT, is_bridgyfed INTEGER, content_type TEXT,
+        \\  source_cid TEXT, embedded_at TEXT
+        \\)
+    , .{});
+
+    const upsert = struct {
+        fn run(c: zqlite.Conn, hash: []const u8, cover: []const u8) !void {
+            try c.exec(DOC_UPSERT_SQL, .{
+                "at://did:plc:x/doc/1", "did:plc:x",  "1",   "title", "content",
+                "2020-01-01",           "",           "other", "site.standard.document",
+                "",                     "",           "0",   hash,    cover,
+                "0",                    "",           "",
+            });
+        }
+    }.run;
+
+    try upsert(conn, "hash-a", "");
+    try conn.exec("UPDATE documents SET indexed_at = '2020-06-06T00:00:00', embedded_at = '2020-06-07T00:00:00'", .{});
+
+    // re-put with identical content hash: indexed_at preserved, metadata still updates
+    try upsert(conn, "hash-a", "cover.png");
+    {
+        const row = (try conn.row("SELECT indexed_at, cover_image, embedded_at FROM documents", .{})).?;
+        defer row.deinit();
+        try t.expectEqualStrings("2020-06-06T00:00:00", row.text(0));
+        try t.expectEqualStrings("cover.png", row.text(1));
+        try t.expectEqualStrings("2020-06-07T00:00:00", row.text(2));
+    }
+
+    // real content change: indexed_at re-stamped
+    try upsert(conn, "hash-b", "cover.png");
+    {
+        const row = (try conn.row("SELECT indexed_at FROM documents", .{})).?;
+        defer row.deinit();
+        try t.expect(!std.mem.eql(u8, "2020-06-06T00:00:00", row.text(0)));
+    }
 }
