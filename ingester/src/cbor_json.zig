@@ -34,10 +34,10 @@ pub fn writeValue(writer: *std.Io.Writer, alloc: std.mem.Allocator, value: cbor.
             try writer.writeByte('}');
         },
         .cid => |c| {
-            // dag-json: {"$link": "<multibase base32 cidv1>"} — 'b' prefix + base32lower(raw)
+            // multibase.encode includes the base32lower `b` prefix.
             const b32 = try zat.multibase.encode(alloc, .base32lower, c.raw);
             defer alloc.free(b32);
-            try writer.writeAll("{\"$link\":\"b");
+            try writer.writeAll("{\"$link\":\"");
             try writer.writeAll(b32);
             try writer.writeAll("\"}");
         },
@@ -86,4 +86,15 @@ test "serialize nested map with cid and string escaping" {
         "{\"title\":\"hi \\\"there\\\"\\n\",\"n\":42,\"ok\":true}",
         out.written(),
     );
+}
+
+test "serialize cid with exactly one multibase prefix" {
+    const alloc = std.testing.allocator;
+    const raw = [_]u8{ 1, 0x71, 0x12, 0x20, 1, 2, 3, 4 };
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+
+    try writeValue(&out.writer, alloc, .{ .cid = .{ .raw = &raw } });
+    try std.testing.expect(std.mem.startsWith(u8, out.written(), "{\"$link\":\"b"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "{\"$link\":\"bb") == null);
 }

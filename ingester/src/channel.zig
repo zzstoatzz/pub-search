@@ -233,7 +233,7 @@ pub fn buildRecordFrame(
     if (cid) |value| {
         const b32 = try zat.multibase.encode(alloc, .base32lower, value.raw);
         defer alloc.free(b32);
-        try w.writeAll(",\"cid\":\"b");
+        try w.writeAll(",\"cid\":\"");
         try w.writeAll(b32);
         try w.writeByte('"');
     }
@@ -283,4 +283,5 @@ test "record frame carries a parseable source CID" {
     const cid = zat.json.getString(parsed.value, "record.cid") orelse return error.MissingCid;
     try std.testing.expect(cid.len > 1);
     try std.testing.expectEqual(@as(u8, 'b'), cid[0]);
+    try std.testing.expect(!std.mem.startsWith(u8, cid, "bb"));
 }
