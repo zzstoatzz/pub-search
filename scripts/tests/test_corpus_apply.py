@@ -3,9 +3,19 @@ import hashlib
 from pathlib import Path
 import runpy
 import sqlite3
+import sys
 import tempfile
+import types
 import unittest
 
+
+if "httpx" not in sys.modules:
+    try:
+        __import__("httpx")
+    except ModuleNotFoundError:
+        # CI's stdlib-only operational-guard job tests the ledger logic; HTTP
+        # integration runs through the script's uv-managed environment.
+        sys.modules["httpx"] = types.ModuleType("httpx")
 
 APPLY = runpy.run_path(str(Path(__file__).parents[1] / "apply-corpus-reconciliation"))
 
