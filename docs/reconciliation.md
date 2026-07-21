@@ -1,5 +1,45 @@
 # reconciliation (stale document cleanup)
 
+> This document describes the legacy row verifier. The corpus audit demonstrated
+> that existence-only verification is insufficient: it cannot discover missing
+> records or refresh changed ones. The replacement begins with the read-only,
+> ledger-backed planner below; legacy verification remains active until apply mode
+> has been canaried and promoted.
+
+## repo-level corpus plan (dry-run phase)
+
+`scripts/audit-corpus` enumerates authoritative current repo records and inventories
+Turso, the adopted snapshot, and vectors into a resumable local checkpoint.
+`scripts/reconcile-corpus` converts that checkpoint into a versioned SQLite run and
+item ledger:
+
+```sh
+./scripts/audit-corpus
+./scripts/reconcile-corpus \
+  --audit-db /tmp/pub-search-corpus-audit.sqlite \
+  --ledger /tmp/pub-search-corpus-reconcile.sqlite
+```
+
+Every item has a source CID, an explicit `create`, `update`, `verify`, `delete`,
+`skip`, or `quarantine` action, a reason, and an `allow`, `review`, `exclude`, or
+`quarantine` policy decision. Each repo plan records current classifier state and a
+per-repo create cap. The ledger is content-addressed to the audit checkpoint and a
+completed run is immutable unless the operator explicitly uses `--replace`.
+
+Safety properties:
+
+- no production write path or apply flag exists in this phase;
+- banned and Bridgy policy is preserved;
+- bulk-generated labels exclude historical creates, while unknown/observing/pending
+  authors remain review-gated;
+- definitive source absence proposes deletion, but unreachable sources quarantine;
+- content, canonical, and cross-collection duplicates remain intentional skips;
+- metadata-only documents remain pending until their ranking/document type ships;
+- more than 250 creates in one repo forces review even after a classifier allow.
+
+The audit and first full ledger are recorded in
+[`corpus-audit-2026-07-20.md`](corpus-audit-2026-07-20.md).
+
 the firehose is our only way to learn about ATProto record deletions. it's ephemeral — if the tap is down when a delete event comes through, the record becomes a ghost in turso (and turbopuffer) forever. the reconciler fixes this by periodically verifying documents still exist at their source PDS.
 
 ## the problem

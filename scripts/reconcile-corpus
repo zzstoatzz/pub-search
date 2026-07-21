@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""Build a durable, read-only corpus reconciliation action ledger.
+
+Consumes the checkpoint produced by ``scripts/audit-corpus``. It never writes
+to Turso, a PDS, the serving snapshot, or turbopuffer. Apply mode deliberately
+does not exist yet: historical creates stay review-gated until complete-source
+bulk-author policy has been evaluated.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+import datetime as dt
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+import subprocess
+from typing import Any, Iterable
+
+
+LEDGER_SCHEMA_VERSION = 1
+DEFAULT_AUDIT_DB = Path("/tmp/pub-search-corpus-audit.sqlite")
+DEFAULT_LEDGER_DB = Path("/tmp/pub-search-corpus-reconcile.sqlite")
+DEFAULT_CREATE_CAP = 250
+
+CLASSIFIER_STATES = {
+    0: "observing",
+    1: "pending",
+    2: "labeled",
+    3: "rejected",
+    4: "vetoed",
+}
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def connect_ledger(path: Path) -> sqlite3.Connection:
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=FULL")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runs (
+          run_id TEXT PRIMARY KEY,
+          schema_version INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('planning','complete','failed')),
+          created_at TEXT NOT NULL,
+          completed_at TEXT,
+          audit_db TEXT NOT NULL,
+          audit_sha256 TEXT NOT NULL,
+          audit_inventory_at TEXT,
+          create_cap INTEGER NOT NULL,
+          repo_filter TEXT,
+          error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS repo_plans (
+          run_id TEXT NOT NULL REFERENCES runs(run_id),
+          did TEXT NOT NULL,
+          pds TEXT,
+          source_status TEXT,
+          source_policy TEXT,
+          classifier_state TEXT NOT NULL,
+          classifier_doc_count INTEGER,
+          classifier_reason TEXT,
+          source_count INTEGER NOT NULL DEFAULT 0,
+          target_count INTEGER NOT NULL DEFAULT 0,
+          create_count INTEGER NOT NULL DEFAULT 0,
+          update_count INTEGER NOT NULL DEFAULT 0,
+          verify_count INTEGER NOT NULL DEFAULT 0,
+          delete_count INTEGER NOT NULL DEFAULT 0,
+          skip_count INTEGER NOT NULL DEFAULT 0,
+          quarantine_count INTEGER NOT NULL DEFAULT 0,
+          create_cap_exceeded INTEGER NOT NULL DEFAULT 0,
+          decision TEXT NOT NULL,
+          PRIMARY KEY (run_id,did)
+        );
+        CREATE TABLE IF NOT EXISTS items (
+          run_id TEXT NOT NULL REFERENCES runs(run_id),
+          uri TEXT NOT NULL,
+          did TEXT NOT NULL,
+          source_cid TEXT,
+          action TEXT NOT NULL CHECK(action IN ('create','update','verify','delete','skip','quarantine')),
+          reason TEXT NOT NULL,
+          policy_decision TEXT NOT NULL CHECK(policy_decision IN ('allow','review','exclude','quarantine')),
+          source_eligibility TEXT,
+          source_fingerprint TEXT,
+          source_title TEXT,
+          target_title TEXT,
+          source_path TEXT,
+          target_path TEXT,
+          source_publication_uri TEXT,
+          target_publication_uri TEXT,
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','approved','applied','failed','skipped')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          outcome TEXT,
+          PRIMARY KEY (run_id,uri)
+        );
+        CREATE INDEX IF NOT EXISTS items_run_action ON items(run_id,action,policy_decision);
+        CREATE INDEX IF NOT EXISTS items_run_did ON items(run_id,did);
+        """
+    )
+    return db
+
+
+def live_classifier_rows() -> list[dict[str, Any]]:
+    machines = json.loads(
+        subprocess.check_output(
+            ["fly", "machines", "list", "-a", "leaflet-search-backend", "--json"], text=True
+        )
+    )
+    candidates = [
+        machine["id"]
+        for machine in machines
+        if machine.get("state") == "started"
+        and machine.get("config", {}).get("env", {}).get("FLY_PROCESS_GROUP") == "app"
+    ]
+    if len(candidates) != 1:
+        raise RuntimeError(f"expected one serving machine, found {len(candidates)}")
+    sql = "SELECT did,state,doc_count,review_attempts,reason,site FROM author_stats ORDER BY did;"
+    output = subprocess.check_output(
+        [
+            "fly", "ssh", "console", "-a", "leaflet-search-backend", "--machine", candidates[0],
+            "-C", f"sqlite3 -readonly -json /data/author-stats.db '{sql}'",
+        ],
+        text=True,
+        timeout=60,
+    )
+    start = output.find("[")
+    return json.loads(output[start:]) if start >= 0 else []
+
+
+def load_classifier(path: Path | None, live: bool) -> dict[str, dict[str, Any]]:
+    if path:
+        rows = json.loads(path.read_text())
+    elif live:
+        rows = live_classifier_rows()
+    else:
+        rows = []
+    return {row["did"]: row for row in rows}
+
+
+def kept_dids(repo_root: Path) -> set[str]:
+    return {
+        line.split("#", 1)[0].strip()
+        for line in (repo_root / "kept-dids.txt").read_text().splitlines()
+        if line.split("#", 1)[0].strip()
+    }
+
+
+def classifier_policy(did: str, classifier: dict[str, dict[str, Any]], kept: set[str]) -> tuple[str, int | None, str]:
+    row = classifier.get(did)
+    if not row:
+        return "unknown", None, ""
+    state = CLASSIFIER_STATES.get(int(row.get("state", 0)), "unknown")
+    if state == "labeled" and did in kept:
+        state = "labeled_kept"
+    return state, int(row.get("doc_count", 0)), str(row.get("reason", ""))
+
+
+def create_decision(classifier_state: str) -> tuple[str, str]:
+    if classifier_state == "labeled":
+        return "exclude", "bulk_generated_labeled"
+    if classifier_state in {"rejected", "vetoed", "labeled_kept"}:
+        return "allow", "classifier_terminal_allow"
+    return "review", f"classifier_{classifier_state}"
+
+
+def normalized(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def item(
+    run_id: str,
+    uri: str,
+    did: str,
+    action: str,
+    reason: str,
+    decision: str,
+    source: sqlite3.Row | None = None,
+    target: sqlite3.Row | None = None,
+) -> tuple[Any, ...]:
+    return (
+        run_id, uri, did,
+        source["cid"] if source else None,
+        action, reason, decision,
+        source["eligibility"] if source else None,
+        source["content_fingerprint"] if source else None,
+        source["title"] if source else None,
+        target["title"] if target else None,
+        source["path"] if source else None,
+        target["path"] if target else None,
+        source["publication_uri"] if source else None,
+        target["publication_uri"] if target else None,
+    )
+
+
+def insert_items(db: sqlite3.Connection, rows: Iterable[tuple[Any, ...]]) -> None:
+    db.executemany(
+        """INSERT INTO items
+           (run_id,uri,did,source_cid,action,reason,policy_decision,source_eligibility,
+            source_fingerprint,source_title,target_title,source_path,target_path,
+            source_publication_uri,target_publication_uri)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        rows,
+    )
+
+
+def plan_repo(
+    ledger: sqlite3.Connection,
+    audit: sqlite3.Connection,
+    run_id: str,
+    repo: sqlite3.Row,
+    classifier: dict[str, dict[str, Any]],
+    kept: set[str],
+    create_cap: int,
+) -> None:
+    did = repo["did"]
+    state, classifier_count, classifier_reason = classifier_policy(did, classifier, kept)
+    sources = list(audit.execute("SELECT * FROM source_documents WHERE did=? ORDER BY uri", (did,)))
+    targets = list(audit.execute("SELECT * FROM turso_documents WHERE did=? ORDER BY uri", (did,)))
+    target_by_uri = {row["uri"]: row for row in targets}
+    source_by_uri = {row["uri"]: row for row in sources}
+    rows: list[tuple[Any, ...]] = []
+
+    if repo["policy"] in {"banned", "bridgy"}:
+        for target in targets:
+            rows.append(item(run_id, target["uri"], did, "delete", f"policy_{repo['policy']}", "allow", target=target))
+    elif repo["audit_status"] == "gone":
+        for target in targets:
+            if target["source_collection"] == "site.standard.document":
+                rows.append(item(run_id, target["uri"], did, "delete", "source_repo_gone", "allow", target=target))
+    elif repo["audit_status"] != "complete":
+        for target in targets:
+            if target["source_collection"] == "site.standard.document":
+                rows.append(item(run_id, target["uri"], did, "quarantine", "source_unresolved", "quarantine", target=target))
+    else:
+        represented_fingerprints = {
+            source["content_fingerprint"]
+            for source in sources
+            if source["uri"] in target_by_uri and source["content_fingerprint"]
+        }
+        target_rkeys = {normalized(target["rkey"]) for target in targets}
+        target_canonicals = {
+            (normalized(target["publication_uri"]), normalized(target["path"]))
+            for target in targets if normalized(target["path"])
+        }
+        create_rows: list[tuple[Any, ...]] = []
+        for source in sources:
+            target = target_by_uri.get(source["uri"])
+            if source["eligibility"] != "eligible":
+                reason = "metadata_only_pending" if source["eligibility"] == "no_content" else "missing_title"
+                rows.append(item(run_id, source["uri"], did, "skip", reason, "review", source, target))
+                continue
+            if target:
+                changed = []
+                if normalized(source["title"]) != normalized(target["title"]): changed.append("title")
+                if normalized(source["path"]) != normalized(target["path"]): changed.append("path")
+                if normalized(source["publication_uri"]) != normalized(target["publication_uri"]): changed.append("publication")
+                if changed:
+                    rows.append(item(run_id, source["uri"], did, "update", "fields_changed:" + ",".join(changed), "allow", source, target))
+                else:
+                    rows.append(item(run_id, source["uri"], did, "verify", "target_has_no_source_cid", "review", source, target))
+                continue
+            if normalized(source["rkey"]) in target_rkeys:
+                rows.append(item(run_id, source["uri"], did, "skip", "cross_collection_same_rkey", "allow", source))
+            elif source["content_fingerprint"] and source["content_fingerprint"] in represented_fingerprints:
+                rows.append(item(run_id, source["uri"], did, "skip", "content_duplicate_present", "allow", source))
+            elif normalized(source["path"]) and (normalized(source["publication_uri"]), normalized(source["path"])) in target_canonicals:
+                rows.append(item(run_id, source["uri"], did, "skip", "canonical_duplicate_present", "allow", source))
+            else:
+                decision, reason = create_decision(state)
+                create_rows.append(item(run_id, source["uri"], did, "create", reason, decision, source))
+
+        cap_exceeded = len(create_rows) > create_cap
+        if cap_exceeded:
+            # A volume cap can downgrade an allow to review, but must never
+            # weaken a classifier exclusion into mere review.
+            create_rows = [
+                row[:6] + (("review" if row[6] == "allow" else row[6]),) + row[7:]
+                for row in create_rows
+            ]
+        rows.extend(create_rows)
+
+        for target in targets:
+            if target["source_collection"] == "site.standard.document" and target["uri"] not in source_by_uri:
+                rows.append(item(run_id, target["uri"], did, "delete", "source_record_absent", "allow", target=target))
+
+    insert_items(ledger, rows)
+    # These values are already in memory. Querying them back once or twice per
+    # repo turns a 10k-repo plan into 20k avoidable SQLite round-trips.
+    counts = Counter(row[4] for row in rows)
+    cap_exceeded = counts.get("create", 0) > create_cap
+    decision = "quarantine" if counts.get("quarantine", 0) else (
+        "review" if cap_exceeded or any(row[6] == "review" for row in rows) else "ready"
+    )
+    ledger.execute(
+        """INSERT INTO repo_plans
+           (run_id,did,pds,source_status,source_policy,classifier_state,classifier_doc_count,
+            classifier_reason,source_count,target_count,create_count,update_count,verify_count,
+            delete_count,skip_count,quarantine_count,create_cap_exceeded,decision)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            run_id, did, repo["pds"], repo["audit_status"], repo["policy"], state,
+            classifier_count, classifier_reason, len(sources), len(targets), counts.get("create", 0),
+            counts.get("update", 0), counts.get("verify", 0), counts.get("delete", 0),
+            counts.get("skip", 0), counts.get("quarantine", 0), int(cap_exceeded), decision,
+        ),
+    )
+
+
+def summary(db: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "repos": {row["decision"]: row["n"] for row in db.execute(
+            "SELECT decision,COUNT(*) n FROM repo_plans WHERE run_id=? GROUP BY decision ORDER BY decision", (run_id,)
+        )},
+        "items": {f"{row['action']}:{row['policy_decision']}": row["n"] for row in db.execute(
+            "SELECT action,policy_decision,COUNT(*) n FROM items WHERE run_id=? GROUP BY action,policy_decision ORDER BY action,policy_decision", (run_id,)
+        )},
+        "large_create_repos": [dict(row) for row in db.execute(
+            """SELECT did,create_count,classifier_state,decision FROM repo_plans
+               WHERE run_id=? AND create_cap_exceeded=1 ORDER BY create_count DESC,did""", (run_id,)
+        )],
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--audit-db", type=Path, default=DEFAULT_AUDIT_DB)
+    parser.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER_DB)
+    parser.add_argument("--run-id")
+    parser.add_argument("--did", action="append", default=[], help="plan only this DID (repeatable)")
+    parser.add_argument("--max-repos", type=int)
+    parser.add_argument("--create-cap", type=int, default=DEFAULT_CREATE_CAP)
+    parser.add_argument("--classifier-json", type=Path)
+    parser.add_argument("--no-live-classifier", action="store_true")
+    parser.add_argument("--replace", action="store_true")
+    args = parser.parse_args()
+    if not args.audit_db.exists():
+        raise SystemExit(f"audit checkpoint not found: {args.audit_db}; run scripts/audit-corpus first")
+
+    audit_hash = file_sha256(args.audit_db)
+    run_id = args.run_id or f"r{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-{audit_hash[:8]}"
+    audit = sqlite3.connect(f"file:{args.audit_db}?mode=ro", uri=True)
+    audit.row_factory = sqlite3.Row
+    ledger = connect_ledger(args.ledger)
+    existing = ledger.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    if existing and not args.replace:
+        if existing["status"] == "complete":
+            print(json.dumps(summary(ledger, run_id), indent=2))
+            return
+        raise SystemExit(f"run {run_id} already exists with status={existing['status']}; use --replace")
+
+    classifier = load_classifier(args.classifier_json, not args.no_live_classifier)
+    kept = kept_dids(Path(__file__).resolve().parent.parent)
+    inventory = audit.execute("SELECT value FROM meta WHERE key='relay_inventory_at'").fetchone()
+    with ledger:
+        if existing:
+            ledger.execute("DELETE FROM items WHERE run_id=?", (run_id,))
+            ledger.execute("DELETE FROM repo_plans WHERE run_id=?", (run_id,))
+            ledger.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+        ledger.execute(
+            """INSERT INTO runs
+               (run_id,schema_version,status,created_at,audit_db,audit_sha256,audit_inventory_at,
+                create_cap,repo_filter) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (run_id, LEDGER_SCHEMA_VERSION, "planning", utc_now(), str(args.audit_db), audit_hash,
+             inventory[0] if inventory else None, args.create_cap, json.dumps(args.did)),
+        )
+
+    query = "SELECT * FROM repos"
+    params: list[Any] = []
+    if args.did:
+        query += " WHERE did IN (" + ",".join("?" for _ in args.did) + ")"
+        params.extend(args.did)
+    query += " ORDER BY did"
+    if args.max_repos is not None:
+        query += " LIMIT ?"
+        params.append(args.max_repos)
+
+    try:
+        for repo in audit.execute(query, params):
+            with ledger:
+                plan_repo(ledger, audit, run_id, repo, classifier, kept, args.create_cap)
+        with ledger:
+            ledger.execute("UPDATE runs SET status='complete',completed_at=? WHERE run_id=?", (utc_now(), run_id))
+    except Exception as exc:
+        with ledger:
+            ledger.execute("UPDATE runs SET status='failed',error=? WHERE run_id=?", (repr(exc), run_id))
+        raise
+
+    result = summary(ledger, run_id)
+    print(json.dumps(result, indent=2))
+    print(f"ledger: {args.ledger}")
+
+
+if __name__ == "__main__":
+    main()

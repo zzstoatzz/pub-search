@@ -1,0 +1,781 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""Read-only, resumable source-to-index corpus audit.
+
+Inventories every repo advertising ``site.standard.document`` at the relay,
+walks authoritative PDS records for policy-eligible repos, and compares them
+with Turso, the adopted serving snapshot, and turbopuffer.  The only writes are
+to a local SQLite checkpoint (default: /tmp/pub-search-corpus-audit.sqlite).
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import base64
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+
+
+COLLECTION = "site.standard.document"
+RELAY = "https://relay1.us-east.bsky.network"
+TPUF_NAMESPACE = "leaflet-search"
+_BACKEND_MACHINE: str | None = None
+PLAIN_BLOCKS = {
+    "pub.leaflet.blocks.text",
+    "pub.leaflet.blocks.header",
+    "pub.leaflet.blocks.blockquote",
+    "pub.leaflet.blocks.code",
+}
+
+
+def log(message: str) -> None:
+    print(f"[{dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}] {message}", flush=True)
+
+
+def connect(path: Path) -> sqlite3.Connection:
+    db = sqlite3.connect(path)
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=NORMAL")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS repos (
+          did TEXT PRIMARY KEY,
+          in_relay INTEGER NOT NULL DEFAULT 1,
+          pds TEXT,
+          resolution_status TEXT,
+          policy TEXT,
+          audit_status TEXT,
+          source_count INTEGER,
+          error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS source_documents (
+          uri TEXT PRIMARY KEY,
+          did TEXT NOT NULL,
+          rkey TEXT,
+          cid TEXT,
+          title TEXT,
+          publication_uri TEXT,
+          path TEXT,
+          published_at TEXT,
+          eligibility TEXT NOT NULL,
+          content_fingerprint TEXT
+        );
+        CREATE INDEX IF NOT EXISTS source_documents_did ON source_documents(did);
+        CREATE INDEX IF NOT EXISTS source_documents_fingerprint
+          ON source_documents(did, content_fingerprint);
+        CREATE TABLE IF NOT EXISTS turso_documents (
+          uri TEXT PRIMARY KEY,
+          did TEXT NOT NULL,
+          rkey TEXT,
+          title TEXT,
+          content_length INTEGER,
+          created_at TEXT,
+          publication_uri TEXT,
+          path TEXT,
+          platform TEXT,
+          source_collection TEXT,
+          indexed_at TEXT,
+          embedded_at TEXT,
+          verified_at TEXT,
+          is_bridgyfed INTEGER,
+          url_dead INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS turso_documents_did ON turso_documents(did);
+        CREATE TABLE IF NOT EXISTS snapshot_documents (
+          uri TEXT PRIMARY KEY,
+          did TEXT NOT NULL,
+          source_collection TEXT,
+          indexed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS vectors (
+          id TEXT PRIMARY KEY,
+          uri TEXT,
+          did TEXT
+        );
+        """
+    )
+    return db
+
+
+def env_file_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value:
+        return value
+    path = Path(".env")
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip("'\"")
+    return None
+
+
+def backend_machine() -> str:
+    global _BACKEND_MACHINE
+    if _BACKEND_MACHINE:
+        return _BACKEND_MACHINE
+    proc = subprocess.run(
+        ["fly", "machine", "list", "-a", "leaflet-search-backend", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    machines = json.loads(proc.stdout)
+    for machine in machines:
+        metadata = machine.get("config", {}).get("metadata", {})
+        if machine.get("state") == "started" and metadata.get("fly_process_group") == "app":
+            _BACKEND_MACHINE = machine["id"]
+            return _BACKEND_MACHINE
+    raise RuntimeError("no started backend app machine found")
+
+
+async def request_json(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    params: dict[str, str | int] | None = None,
+    attempts: int = 4,
+) -> tuple[int | None, Any | None, str | None]:
+    error = None
+    for attempt in range(attempts):
+        try:
+            response = await client.get(url, params=params, timeout=30)
+            if response.status_code == 200:
+                return 200, response.json(), None
+            if response.status_code in {400, 404}:
+                return response.status_code, None, response.text[:300]
+            error = f"HTTP {response.status_code}: {response.text[:200]}"
+        except Exception as exc:  # network inventory: retain error, retry
+            error = repr(exc)
+        await asyncio.sleep(0.5 * 2**attempt)
+    return None, None, error
+
+
+async def inventory_relay(db: sqlite3.Connection, client: httpx.AsyncClient) -> None:
+    if db.execute("SELECT COUNT(*) FROM repos").fetchone()[0]:
+        log("relay inventory already checkpointed")
+        return
+    cursor = None
+    total = 0
+    while True:
+        params: dict[str, str | int] = {"collection": COLLECTION, "limit": 2000}
+        if cursor:
+            params["cursor"] = cursor
+        status, body, error = await request_json(
+            client,
+            f"{RELAY}/xrpc/com.atproto.sync.listReposByCollection",
+            params=params,
+        )
+        if status != 200:
+            raise RuntimeError(f"relay inventory failed: {error}")
+        repos = body.get("repos") or body.get("dids") or []
+        dids = [item if isinstance(item, str) else item["did"] for item in repos]
+        db.executemany("INSERT OR IGNORE INTO repos(did,in_relay) VALUES (?,1)", ((did,) for did in dids))
+        db.commit()
+        total += len(dids)
+        cursor = body.get("cursor")
+        log(f"relay inventory: {total} repos")
+        if not cursor:
+            break
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('relay_inventory_at',?)",
+        (dt.datetime.now(dt.timezone.utc).isoformat(),),
+    )
+    db.commit()
+
+
+def did_document_url(did: str) -> str | None:
+    if did.startswith("did:plc:"):
+        return f"https://plc.directory/{did}"
+    if did.startswith("did:web:"):
+        parts = did[len("did:web:") :].split(":")
+        host = parts[0]
+        path = "/".join(parts[1:])
+        return f"https://{host}/{path + '/' if path else '.well-known/'}did.json"
+    return None
+
+
+def pds_from_doc(body: dict[str, Any]) -> str | None:
+    for service in body.get("service", []):
+        if service.get("type") == "AtprotoPersonalDataServer" or str(service.get("id", "")).endswith("#atproto_pds"):
+            endpoint = service.get("serviceEndpoint")
+            if isinstance(endpoint, str):
+                return endpoint.rstrip("/")
+    return None
+
+
+async def resolve_repos(
+    db: sqlite3.Connection,
+    client: httpx.AsyncClient,
+    banned: set[str],
+    workers: int,
+) -> None:
+    pending = [row[0] for row in db.execute("SELECT did FROM repos WHERE resolution_status IS NULL")]
+    log(f"resolving {len(pending)} repository identities")
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    for did in pending:
+        queue.put_nowait(did)
+    lock = asyncio.Lock()
+    completed = 0
+
+    async def worker() -> None:
+        nonlocal completed
+        while not queue.empty():
+            try:
+                did = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            url = did_document_url(did)
+            if not url:
+                result = (did, None, "unsupported_did", "unresolved", "unsupported DID method")
+            else:
+                status, body, error = await request_json(client, url)
+                pds = pds_from_doc(body) if status == 200 and isinstance(body, dict) else None
+                resolution = "resolved" if pds else ("gone" if status in {400, 404} else "unresolved")
+                host = (urlparse(pds).hostname or "") if pds else ""
+                policy = "banned" if did in banned else ("bridgy" if host.endswith("brid.gy") or "bridgy" in host else "eligible")
+                result = (did, pds, resolution, policy, error)
+            async with lock:
+                db.execute(
+                    "UPDATE repos SET pds=?, resolution_status=?, policy=?, error=? WHERE did=?",
+                    (result[1], result[2], result[3], result[4], result[0]),
+                )
+                completed += 1
+                if completed % 250 == 0:
+                    db.commit()
+                    log(f"identity resolution: {completed}/{len(pending)}")
+            queue.task_done()
+
+    await asyncio.gather(*(worker() for _ in range(workers)))
+    db.commit()
+
+
+def list_item_text(item: Any) -> list[str]:
+    if not isinstance(item, dict):
+        return []
+    parts: list[str] = []
+    content = item.get("content")
+    if isinstance(content, dict) and isinstance(content.get("plaintext"), str) and content["plaintext"]:
+        parts.append(content["plaintext"])
+    children = item.get("children")
+    if isinstance(children, list):
+        for child in children:
+            parts.extend(list_item_text(child))
+    return parts
+
+
+def page_text(pages: Any) -> list[str]:
+    if not isinstance(pages, list):
+        return []
+    parts: list[str] = []
+    for page in pages:
+        blocks = page.get("blocks") if isinstance(page, dict) else None
+        if not isinstance(blocks, list):
+            continue
+        for wrapper in blocks:
+            block = wrapper.get("block") if isinstance(wrapper, dict) else None
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("$type")
+            if block_type in PLAIN_BLOCKS and isinstance(block.get("plaintext"), str) and block["plaintext"]:
+                parts.append(block["plaintext"])
+            elif block_type == "pub.leaflet.blocks.button" and isinstance(block.get("text"), str) and block["text"]:
+                parts.append(block["text"])
+            elif block_type == "pub.leaflet.blocks.unorderedList":
+                for item in block.get("children", []) if isinstance(block.get("children"), list) else []:
+                    parts.extend(list_item_text(item))
+    return parts
+
+
+def extract_record(value: Any) -> tuple[str, str | None]:
+    if not isinstance(value, dict) or not isinstance(value.get("title"), str):
+        return "missing_title", None
+    if isinstance(value.get("textContent"), str):
+        content = value["textContent"]
+    elif isinstance(value.get("content"), str):
+        content = value["content"]
+    else:
+        parts: list[str] = []
+        if isinstance(value.get("description"), str) and value["description"]:
+            parts.append(value["description"])
+        pages = value.get("pages")
+        if pages is None and isinstance(value.get("content"), dict):
+            pages = value["content"].get("pages")
+        parts.extend(page_text(pages))
+        if not parts:
+            return "no_content", None
+        content = " ".join(parts)
+    digest = hashlib.sha256((value["title"] + "\0" + content).encode()).hexdigest()
+    return "eligible", digest
+
+
+def record_row(did: str, record: dict[str, Any]) -> tuple[Any, ...]:
+    value = record.get("value") or {}
+    site = value.get("publication") or value.get("site")
+    if isinstance(site, dict):
+        site = site.get("uri")
+    if not isinstance(site, str):
+        site = None
+    eligibility, fingerprint = extract_record(value)
+    return (
+        record.get("uri"),
+        did,
+        str(record.get("uri", "")).rsplit("/", 1)[-1],
+        record.get("cid"),
+        value.get("title") if isinstance(value.get("title"), str) else None,
+        site,
+        value.get("path") if isinstance(value.get("path"), str) else None,
+        value.get("publishedAt") or value.get("createdAt"),
+        eligibility,
+        fingerprint,
+    )
+
+
+async def audit_source_repos(
+    db: sqlite3.Connection,
+    client: httpx.AsyncClient,
+    workers: int,
+) -> None:
+    excluded = db.execute(
+        "UPDATE repos SET audit_status='policy_excluded' WHERE audit_status IS NULL AND policy IN ('banned','bridgy')"
+    ).rowcount
+    db.commit()
+    pending = list(
+        db.execute(
+            "SELECT did,pds FROM repos WHERE policy='eligible' AND resolution_status='resolved' AND audit_status IS NULL"
+        )
+    )
+    log(f"enumerating {len(pending)} eligible PDS repositories ({excluded} policy-excluded)")
+    queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+    for row in pending:
+        queue.put_nowait((row[0], row[1]))
+    lock = asyncio.Lock()
+    host_locks: dict[str, asyncio.Semaphore] = {}
+    completed = 0
+    source_total = 0
+
+    async def one_repo(did: str, pds: str) -> tuple[list[tuple[Any, ...]] | None, str | None]:
+        records: list[tuple[Any, ...]] = []
+        cursor = None
+        host = urlparse(pds).hostname or pds
+        semaphore = host_locks.setdefault(host, asyncio.Semaphore(8))
+        while True:
+            params: dict[str, str | int] = {"repo": did, "collection": COLLECTION, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            async with semaphore:
+                status, body, error = await request_json(
+                    client,
+                    f"{pds}/xrpc/com.atproto.repo.listRecords",
+                    params=params,
+                )
+            if status != 200:
+                return None, f"{status}: {error}"
+            records.extend(record_row(did, record) for record in body.get("records", []))
+            cursor = body.get("cursor")
+            if not cursor:
+                return records, None
+
+    async def worker() -> None:
+        nonlocal completed, source_total
+        while not queue.empty():
+            try:
+                did, pds = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            records, error = await one_repo(did, pds)
+            async with lock:
+                if records is None:
+                    db.execute("UPDATE repos SET audit_status='error', error=? WHERE did=?", (error, did))
+                else:
+                    db.executemany(
+                        """INSERT OR REPLACE INTO source_documents
+                           (uri,did,rkey,cid,title,publication_uri,path,published_at,eligibility,content_fingerprint)
+                           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                        records,
+                    )
+                    db.execute(
+                        "UPDATE repos SET audit_status='complete', source_count=?, error=NULL WHERE did=?",
+                        (len(records), did),
+                    )
+                    source_total += len(records)
+                completed += 1
+                if completed % 100 == 0:
+                    db.commit()
+                    log(f"PDS enumeration: {completed}/{len(pending)} repos, {source_total} records this run")
+            queue.task_done()
+
+    await asyncio.gather(*(worker() for _ in range(workers)))
+    db.commit()
+
+
+def remote_turso_query(sql: str, timeout: int = 180) -> list[dict[str, Any]]:
+    body = json.dumps(
+        {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]},
+        separators=(",", ":"),
+    )
+    body64 = base64.b64encode(body.encode()).decode()
+    script = f"""body=$(printf %s {body64} | base64 -d)
+host=${{TURSO_URL#libsql://}}
+len=${{#body}}
+printf 'POST /v2/pipeline HTTP/1.1\\r\\nHost: %s\\r\\nAuthorization: Bearer %s\\r\\nContent-Type: application/json\\r\\nConnection: close\\r\\nContent-Length: %s\\r\\n\\r\\n%s' "$host" "$TURSO_TOKEN" "$len" "$body" | openssl s_client -quiet -connect "$host:443" -servername "$host" 2>/dev/null
+"""
+    encoded = base64.b64encode(script.encode()).decode()
+    command = f"sh -lc 'printf %s {encoded} | base64 -d | sh'"
+    proc = subprocess.run(
+        ["fly", "ssh", "console", "-a", "leaflet-search-backend", "--machine", backend_machine(), "-C", command],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=True,
+    )
+    payload = json.loads(proc.stdout[proc.stdout.index('{"baton"') :])
+    result = payload["results"][0]
+    if result["type"] != "ok":
+        raise RuntimeError(result)
+    result = result["response"]["result"]
+    columns = [col["name"] for col in result["cols"]]
+    return [
+        {key: (cell.get("value") if cell.get("type") != "null" else None) for key, cell in zip(columns, row)}
+        for row in result["rows"]
+    ]
+
+
+def import_turso(db: sqlite3.Connection) -> None:
+    if db.execute("SELECT COUNT(*) FROM turso_documents").fetchone()[0]:
+        log("Turso inventory already checkpointed")
+        return
+    log("exporting Turso document inventory")
+    last_rowid = 0
+    total = 0
+    while True:
+        rows = remote_turso_query(
+            f"""SELECT rowid AS source_rowid,uri,did,rkey,title,LENGTH(content) AS content_length,created_at,
+                      publication_uri,path,platform,source_collection,indexed_at,embedded_at,verified_at,
+                      COALESCE(is_bridgyfed,0) AS is_bridgyfed,
+                      COALESCE(url_dead,0) AS url_dead
+               FROM documents
+               WHERE rowid > {last_rowid}
+               ORDER BY rowid
+               LIMIT 5000""",
+            timeout=90,
+        )
+        if not rows:
+            break
+        db.executemany(
+            """INSERT INTO turso_documents
+               (uri,did,rkey,title,content_length,created_at,publication_uri,path,platform,source_collection,
+                indexed_at,embedded_at,verified_at,is_bridgyfed,url_dead)
+               VALUES (:uri,:did,:rkey,:title,:content_length,:created_at,:publication_uri,:path,:platform,
+                       :source_collection,:indexed_at,:embedded_at,:verified_at,:is_bridgyfed,:url_dead)""",
+            rows,
+        )
+        db.commit()
+        total += len(rows)
+        last_rowid = int(rows[-1]["source_rowid"])
+        log(f"Turso inventory: {total}")
+        if len(rows) < 5000:
+            break
+
+
+def import_snapshot(db: sqlite3.Connection) -> None:
+    if db.execute("SELECT COUNT(*) FROM snapshot_documents").fetchone()[0]:
+        log("snapshot inventory already checkpointed")
+        return
+    log("exporting adopted serving snapshot inventory")
+    sql = "SELECT uri,did,source_collection,indexed_at FROM documents;"
+    proc = subprocess.run(
+        [
+            "fly",
+            "ssh",
+            "console",
+            "-a",
+            "leaflet-search-backend",
+            "--machine",
+            backend_machine(),
+            "-C",
+            f'sqlite3 -readonly -json /data/local.db "{sql}"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=True,
+    )
+    start = proc.stdout.find("[")
+    rows = json.loads(proc.stdout[start:]) if start >= 0 else []
+    db.executemany(
+        "INSERT INTO snapshot_documents(uri,did,source_collection,indexed_at) VALUES (:uri,:did,:source_collection,:indexed_at)",
+        rows,
+    )
+    db.commit()
+    log(f"serving snapshot inventory: {len(rows)} documents")
+
+
+def import_vectors(db: sqlite3.Connection) -> None:
+    if db.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]:
+        log("vector inventory already checkpointed")
+        return
+    api_key = env_file_value("TURBOPUFFER_API_KEY")
+    if not api_key:
+        raise RuntimeError("TURBOPUFFER_API_KEY is unavailable")
+    log("exporting complete turbopuffer namespace")
+    url = f"https://api.turbopuffer.com/v2/namespaces/{TPUF_NAMESPACE}/query"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    last_id = None
+    total = 0
+    with httpx.Client(timeout=120) as client:
+        while True:
+            body: dict[str, Any] = {
+                "rank_by": ["id", "asc"],
+                "limit": 10000,
+                "include_attributes": ["uri", "did"],
+            }
+            if last_id is not None:
+                body["filters"] = ["id", "Gt", last_id]
+            response = client.post(url, headers=headers, json=body)
+            response.raise_for_status()
+            rows = response.json().get("rows", [])
+            if not rows:
+                break
+            db.executemany(
+                "INSERT OR REPLACE INTO vectors(id,uri,did) VALUES (:id,:uri,:did)", rows
+            )
+            db.commit()
+            total += len(rows)
+            last_id = rows[-1]["id"]
+            log(f"vector inventory: {total}")
+            if len(rows) < 10000:
+                break
+
+
+def scalar(db: sqlite3.Connection, sql: str) -> int:
+    return int(db.execute(sql).fetchone()[0])
+
+
+def build_report(db: sqlite3.Connection) -> dict[str, Any]:
+    # Permanent repo disappearance is an audited outcome, not a transient
+    # failure. Keep unreachable/5xx hosts separate so the report's blind spots
+    # remain explicit.
+    db.execute(
+        """UPDATE repos SET audit_status='gone'
+           WHERE audit_status='error' AND (
+             error LIKE '400:%Could not find repo%'
+             OR error LIKE '400:%target repository not found%'
+             OR error LIKE '400:%Repo not found%'
+             OR error LIKE '404:%Domain not found%'
+             OR error LIKE '404:%<html%'
+           )"""
+    )
+    # This classification is part of the resumable checkpoint, not merely a
+    # presentation detail. Without the commit, process exit rolls it back and
+    # a later reconciliation run cannot distinguish gone from unreachable.
+    db.commit()
+    report: dict[str, Any] = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "relay_inventory_at": db.execute("SELECT value FROM meta WHERE key='relay_inventory_at'").fetchone()[0],
+        "repos": {
+            "total_audit_universe": scalar(db, "SELECT COUNT(*) FROM repos"),
+            "relay_total": scalar(db, "SELECT COUNT(*) FROM repos WHERE in_relay=1"),
+            "turso_only_repos": scalar(db, "SELECT COUNT(*) FROM repos WHERE in_relay=0"),
+            "resolved": scalar(db, "SELECT COUNT(*) FROM repos WHERE resolution_status='resolved'"),
+            "unresolved": scalar(db, "SELECT COUNT(*) FROM repos WHERE resolution_status!='resolved' OR resolution_status IS NULL"),
+            "eligible": scalar(db, "SELECT COUNT(*) FROM repos WHERE policy='eligible'"),
+            "bridgy": scalar(db, "SELECT COUNT(*) FROM repos WHERE policy='bridgy'"),
+            "banned": scalar(db, "SELECT COUNT(*) FROM repos WHERE policy='banned'"),
+            "audited_complete": scalar(db, "SELECT COUNT(*) FROM repos WHERE audit_status='complete'"),
+            "source_repo_gone": scalar(db, "SELECT COUNT(*) FROM repos WHERE audit_status='gone'"),
+            "audit_errors": scalar(db, "SELECT COUNT(*) FROM repos WHERE audit_status='error'"),
+        },
+        "source": {
+            "active_records": scalar(db, "SELECT COUNT(*) FROM source_documents"),
+            "eligible_records": scalar(db, "SELECT COUNT(*) FROM source_documents WHERE eligibility='eligible'"),
+            "metadata_only": scalar(db, "SELECT COUNT(*) FROM source_documents WHERE eligibility='no_content'"),
+            "missing_title": scalar(db, "SELECT COUNT(*) FROM source_documents WHERE eligibility='missing_title'"),
+        },
+        "layers": {
+            "turso_documents": scalar(db, "SELECT COUNT(*) FROM turso_documents"),
+            "snapshot_documents": scalar(db, "SELECT COUNT(*) FROM snapshot_documents"),
+            "vectors": scalar(db, "SELECT COUNT(*) FROM vectors"),
+        },
+    }
+    # A source URI absent from Turso can still be intentionally content-deduped:
+    # another live source record from the same DID and identical title+content is present.
+    db.execute("DROP TABLE IF EXISTS source_missing_classified")
+    db.execute(
+        """CREATE TEMP TABLE source_missing_classified AS
+           SELECT s.*,
+             CASE
+               WHEN s.eligibility != 'eligible' THEN s.eligibility
+               WHEN EXISTS (
+                 SELECT 1 FROM turso_documents t
+                 WHERE t.did=s.did AND t.rkey=s.rkey
+               ) THEN 'cross_collection_same_rkey'
+               WHEN EXISTS (
+                 SELECT 1 FROM source_documents d
+                 JOIN turso_documents t ON t.uri=d.uri
+                 WHERE d.did=s.did AND d.content_fingerprint=s.content_fingerprint
+                   AND d.uri != s.uri
+               ) THEN 'content_duplicate_present'
+               WHEN COALESCE(s.path,'') != '' AND EXISTS (
+                 SELECT 1 FROM turso_documents t
+                 WHERE t.did=s.did
+                   AND COALESCE(t.publication_uri,'')=COALESCE(s.publication_uri,'')
+                   AND COALESCE(t.path,'')=COALESCE(s.path,'')
+               ) THEN 'canonical_duplicate_present'
+               ELSE 'genuine_missing'
+             END AS missing_class
+           FROM source_documents s
+           LEFT JOIN turso_documents t ON t.uri=s.uri
+           WHERE t.uri IS NULL"""
+    )
+    report["source_to_turso"] = {
+        row[0]: row[1]
+        for row in db.execute(
+            "SELECT missing_class,COUNT(*) FROM source_missing_classified GROUP BY missing_class ORDER BY missing_class"
+        )
+    }
+    report["turso_to_snapshot"] = {
+        "missing_from_snapshot": scalar(
+            db,
+            "SELECT COUNT(*) FROM turso_documents t LEFT JOIN snapshot_documents s ON s.uri=t.uri WHERE s.uri IS NULL AND COALESCE(t.is_bridgyfed,0)=0",
+        ),
+        "snapshot_only": scalar(
+            db,
+            "SELECT COUNT(*) FROM snapshot_documents s LEFT JOIN turso_documents t ON t.uri=s.uri WHERE t.uri IS NULL",
+        ),
+    }
+    report["read_model_drift"] = {
+        "stale_site_standard_rows": scalar(
+            db,
+            """SELECT COUNT(*) FROM turso_documents t
+               JOIN repos r ON r.did=t.did
+               LEFT JOIN source_documents s ON s.uri=t.uri
+               WHERE t.source_collection='site.standard.document'
+                 AND r.audit_status='complete' AND s.uri IS NULL""",
+        ),
+        "title_mismatches": scalar(
+            db,
+            "SELECT COUNT(*) FROM source_documents s JOIN turso_documents t ON t.uri=s.uri WHERE s.title<>t.title",
+        ),
+        "path_mismatches": scalar(
+            db,
+            "SELECT COUNT(*) FROM source_documents s JOIN turso_documents t ON t.uri=s.uri WHERE COALESCE(s.path,'')<>COALESCE(t.path,'')",
+        ),
+        "publication_mismatches": scalar(
+            db,
+            "SELECT COUNT(*) FROM source_documents s JOIN turso_documents t ON t.uri=s.uri WHERE COALESCE(s.publication_uri,'')<>COALESCE(t.publication_uri,'')",
+        ),
+        "indexed_rows_now_metadata_only": scalar(
+            db,
+            "SELECT COUNT(*) FROM source_documents s JOIN turso_documents t ON t.uri=s.uri WHERE s.eligibility='no_content'",
+        ),
+        "stale_rows_never_verified": scalar(
+            db,
+            """SELECT COUNT(*) FROM turso_documents t
+               JOIN repos r ON r.did=t.did LEFT JOIN source_documents s ON s.uri=t.uri
+               WHERE t.source_collection='site.standard.document'
+                 AND r.audit_status='complete' AND s.uri IS NULL AND t.verified_at IS NULL""",
+        ),
+    }
+    report["vectors"] = {
+        "turso_marked_embedded_without_vector": scalar(
+            db,
+            "SELECT COUNT(*) FROM turso_documents t LEFT JOIN vectors v ON v.uri=t.uri WHERE t.embedded_at IS NOT NULL AND v.uri IS NULL AND COALESCE(t.is_bridgyfed,0)=0",
+        ),
+        "eligible_turso_without_vector": scalar(
+            db,
+            """SELECT COUNT(*) FROM turso_documents t LEFT JOIN vectors v ON v.uri=t.uri
+               WHERE v.uri IS NULL AND COALESCE(t.is_bridgyfed,0)=0
+                 AND t.content_length > 50
+                 AND t.title NOT IN ('test','testing','Test','Testing','Untitled')""",
+        ),
+        "embedding_pending_without_vector": scalar(
+            db,
+            """SELECT COUNT(*) FROM turso_documents t LEFT JOIN vectors v ON v.uri=t.uri
+               WHERE t.embedded_at IS NULL AND v.uri IS NULL AND COALESCE(t.is_bridgyfed,0)=0
+                 AND t.content_length > 50
+                 AND t.title NOT IN ('test','testing','Test','Testing','Untitled')""",
+        ),
+        "vector_without_turso": scalar(
+            db,
+            "SELECT COUNT(*) FROM vectors v LEFT JOIN turso_documents t ON t.uri=v.uri WHERE t.uri IS NULL",
+        ),
+    }
+    report["top_genuine_missing_repos"] = [
+        {"did": row[0], "missing": row[1], "source": row[2], "pds": row[3]}
+        for row in db.execute(
+            """SELECT m.did,COUNT(*) AS missing,r.source_count,r.pds
+               FROM source_missing_classified m JOIN repos r ON r.did=m.did
+               WHERE m.missing_class='genuine_missing'
+               GROUP BY m.did ORDER BY missing DESC,m.did LIMIT 100"""
+        )
+    ]
+    report["audit_errors"] = [
+        {"did": row[0], "pds": row[1], "error": row[2]}
+        for row in db.execute("SELECT did,pds,error FROM repos WHERE audit_status='error' ORDER BY did")
+    ]
+    return report
+
+
+async def async_main(args: argparse.Namespace, db: sqlite3.Connection) -> None:
+    limits = httpx.Limits(max_connections=args.workers * 2, max_keepalive_connections=args.workers)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "pub-search-corpus-audit/1.0"},
+        follow_redirects=True,
+        limits=limits,
+    ) as client:
+        await inventory_relay(db, client)
+        db.execute(
+            """INSERT OR IGNORE INTO repos(did,in_relay)
+               SELECT DISTINCT did,0 FROM turso_documents
+               WHERE source_collection='site.standard.document'"""
+        )
+        db.commit()
+        banned = {
+            line.split("#", 1)[0].strip()
+            for line in Path("banned-dids.txt").read_text().splitlines()
+            if line.split("#", 1)[0].strip()
+        }
+        await resolve_repos(db, client, banned, args.workers)
+        await audit_source_repos(db, client, args.workers)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", type=Path, default=Path("/tmp/pub-search-corpus-audit.sqlite"))
+    parser.add_argument("--report", type=Path, default=Path("/tmp/pub-search-corpus-audit.json"))
+    parser.add_argument("--workers", type=int, default=40)
+    args = parser.parse_args()
+    db = connect(args.db)
+    import_turso(db)
+    asyncio.run(async_main(args, db))
+    import_snapshot(db)
+    import_vectors(db)
+    report = build_report(db)
+    args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    log(f"checkpoint: {args.db}")
+    log(f"report: {args.report}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
