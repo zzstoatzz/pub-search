@@ -2,9 +2,9 @@
 """Build a durable, read-only corpus reconciliation action ledger.
 
 Consumes the checkpoint produced by ``scripts/audit-corpus``. It never writes
-to Turso, a PDS, the serving snapshot, or turbopuffer. Apply mode deliberately
-does not exist yet: historical creates stay review-gated until complete-source
-bulk-author policy has been evaluated.
+to Turso, a PDS, the serving snapshot, or turbopuffer. Applying is a separate,
+explicitly enabled step; historical creates remain review-gated unless
+complete-source bulk-author policy has produced a terminal allow decision.
 """
 
 from __future__ import annotations
