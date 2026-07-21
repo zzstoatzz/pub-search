@@ -101,6 +101,7 @@ def connect(path: Path) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS turso_documents_did ON turso_documents(did);
         CREATE TABLE IF NOT EXISTS snapshot_documents (
           uri TEXT PRIMARY KEY,
+          source_rowid INTEGER,
           did TEXT NOT NULL,
           source_collection TEXT,
           indexed_at TEXT
@@ -120,6 +121,10 @@ def connect(path: Path) -> sqlite3.Connection:
         db.commit()
     if "source_rowid" not in columns:
         db.execute("ALTER TABLE turso_documents ADD COLUMN source_rowid INTEGER")
+        db.commit()
+    snapshot_columns = {row[1] for row in db.execute("PRAGMA table_info(snapshot_documents)")}
+    if "source_rowid" not in snapshot_columns:
+        db.execute("ALTER TABLE snapshot_documents ADD COLUMN source_rowid INTEGER")
         db.commit()
     return db
 
@@ -541,36 +546,68 @@ def import_turso(db: sqlite3.Connection) -> None:
 
 
 def import_snapshot(db: sqlite3.Connection) -> None:
-    if db.execute("SELECT COUNT(*) FROM snapshot_documents").fetchone()[0]:
+    global _BACKEND_MACHINE
+    if db.execute("SELECT 1 FROM meta WHERE key='snapshot_inventory_at'").fetchone():
         log("snapshot inventory already checkpointed")
         return
+    page_size = 2000
+    existing = db.execute("SELECT COUNT(*),MAX(source_rowid) FROM snapshot_documents").fetchone()
+    if existing[0] and existing[1] is None:
+        db.execute("DELETE FROM snapshot_documents")
+        db.commit()
+        existing = (0, None)
+    # Fly SSH can time out while buffering a full-table JSON response. Page the
+    # read and durably checkpoint each page so retries remain cheap and bounded.
     log("exporting adopted serving snapshot inventory")
-    sql = "SELECT uri,did,source_collection,indexed_at FROM documents;"
-    proc = subprocess.run(
-        [
-            "fly",
-            "ssh",
-            "console",
-            "-a",
-            "leaflet-search-backend",
-            "--machine",
-            backend_machine(),
-            "-C",
-            f'sqlite3 -readonly -json /data/local.db "{sql}"',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=True,
-    )
-    start = proc.stdout.find("[")
-    rows = json.loads(proc.stdout[start:]) if start >= 0 else []
-    db.executemany(
-        "INSERT INTO snapshot_documents(uri,did,source_collection,indexed_at) VALUES (:uri,:did,:source_collection,:indexed_at)",
-        rows,
+    last_rowid = int(existing[1] or 0)
+    total = int(existing[0])
+    while True:
+        sql = (
+            "SELECT rowid AS source_rowid,uri,did,source_collection,indexed_at FROM documents "
+            f"WHERE rowid>{last_rowid} ORDER BY rowid LIMIT {page_size};"
+        )
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                proc = subprocess.run(
+                    [
+                        "fly", "ssh", "console", "-a", "leaflet-search-backend",
+                        "--machine", backend_machine(), "-C",
+                        f'sqlite3 -readonly -json /data/local.db "{sql}"',
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=True,
+                )
+                break
+            except (subprocess.SubprocessError, OSError) as exc:
+                last_error = exc
+                _BACKEND_MACHINE = None
+                if attempt < 2:
+                    time.sleep(2**attempt)
+        else:
+            raise RuntimeError("snapshot admin query failed after 3 attempts") from last_error
+        start = proc.stdout.find("[")
+        rows = json.loads(proc.stdout[start:]) if start >= 0 else []
+        if not rows:
+            break
+        db.executemany(
+            """INSERT INTO snapshot_documents(source_rowid,uri,did,source_collection,indexed_at)
+               VALUES (:source_rowid,:uri,:did,:source_collection,:indexed_at)""",
+            rows,
+        )
+        db.commit()
+        total += len(rows)
+        last_rowid = int(rows[-1]["source_rowid"])
+        log(f"serving snapshot inventory: {total}")
+        if len(rows) < page_size:
+            break
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('snapshot_inventory_at',?)",
+        (dt.datetime.now(dt.timezone.utc).isoformat(),),
     )
     db.commit()
-    log(f"serving snapshot inventory: {len(rows)} documents")
 
 
 def import_vectors(db: sqlite3.Connection) -> None:
