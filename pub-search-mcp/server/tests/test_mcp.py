@@ -1,12 +1,18 @@
 """tests for pub-search MCP server."""
 
 import pytest
-from mcp.types import TextContent
-
 from fastmcp.client import Client
 from fastmcp.client.transports import FastMCPTransport
+from mcp_types import TextContent
 
-from pub_search._types import Document, EndpointTiming, PopularSearch, SearchResult, Stats, Tag
+from pub_search._types import (
+    Document,
+    EndpointTiming,
+    PopularSearch,
+    SearchResult,
+    Stats,
+    Tag,
+)
 from pub_search.server import mcp
 
 
@@ -160,7 +166,7 @@ class TestMcpServerRegistration:
         }
         assert expected == tool_names
         search_tool = next(t for t in tools if t.name == "search")
-        assert "offset" in search_tool.inputSchema["properties"]
+        assert "offset" in search_tool.input_schema["properties"]
 
     async def test_list_prompts(self, client):
         """verify prompts are registered."""

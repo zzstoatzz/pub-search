@@ -21,7 +21,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.0",
+    "fastmcp==4.0.0a1",
     "httpx>=0.28",
     "pdsx",
 ]
@@ -72,3 +72,10 @@ extend-select = ["B", "C4", "I", "PIE", "RUF", "SIM", "UP"]
 
 [tool.uv.sources]
 pdsx = { git = "https://github.com/zzstoatzz/pdsx.git" }
+
+[tool.uv]
+constraint-dependencies = [
+    "fastmcp-slim==4.0.0a1",
+    "mcp==2.0.0b2",
+    "mcp-types==2.0.0b2",
+]
