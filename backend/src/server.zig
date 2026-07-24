@@ -11,6 +11,7 @@ const db = @import("db.zig");
 const ingest = @import("ingest.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
+const documents = @import("server/documents.zig");
 const dashboard = @import("server/dashboard.zig");
 const recommended = @import("server/recommended.zig");
 const curators = @import("server/curators.zig");
@@ -160,6 +161,8 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleSubscribers(request, target);
     } else if (mem.eql(u8, path, "/wrapped")) {
         try handleWrapped(request, target, io);
+    } else if (mem.eql(u8, path, "/document")) {
+        try handleDocument(request, target);
     } else if (mem.startsWith(u8, path, "/similar")) {
         try handleSimilar(request, target, io);
     } else if (mem.eql(u8, path, "/activity")) {
@@ -1195,6 +1198,35 @@ fn handleDashboard(request: *http.Server.Request) !void {
             .{ .name = "location", .value = dashboard_url },
         },
     });
+}
+
+fn handleDocument(request: *http.Server.Request, target: []const u8) !void {
+    const json_hdr: []const http.Header = &.{.{ .name = "content-type", .value = "application/json" }};
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const raw = parseQueryParam(alloc, target, "uri") catch {
+        try request.respond("{\"error\":\"missing uri parameter (comma-separated AT-URIs)\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    const uris = documents.splitUris(alloc, raw) catch {
+        try request.respond("{\"error\":\"too many uris (max 25)\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    };
+    if (uris.len == 0) {
+        try request.respond("{\"error\":\"missing uri parameter (comma-separated AT-URIs)\"}", .{ .status = .bad_request, .extra_headers = json_hdr });
+        return;
+    }
+
+    const span = logfire.span("http.document", .{ .count = uris.len });
+    defer span.end();
+
+    const body = documents.fetch(alloc, uris) catch {
+        try request.respond("{\"error\":\"replica not ready, retry shortly\"}", .{ .status = .service_unavailable, .extra_headers = json_hdr });
+        return;
+    };
+    try sendJson(request, body);
 }
 
 fn handleSimilar(request: *http.Server.Request, target: []const u8, io: Io) !void {

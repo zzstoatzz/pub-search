@@ -207,6 +207,7 @@ test {
     _ = @import("ingest/extractor.zig");
     _ = @import("ingest/ingester.zig");
     _ = @import("server/search.zig");
+    _ = @import("server/documents.zig");
     _ = @import("server.zig");
     _ = @import("policy.zig");
     _ = @import("promote.zig");
