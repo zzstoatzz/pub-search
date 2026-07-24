@@ -87,6 +87,54 @@ hybrid mode adds `source` and `score` fields:
 
 **ranking:** hybrid BM25 + recency. text relevance primary, recent docs boosted (~1 point per 30 days).
 
+### document
+
+```
+GET /document?uri=<at-uri>[,<at-uri>...]
+```
+
+full extracted text for documents by AT-URI. search results carry snippets
+only; pass their `uri` values here to read the complete articles without
+fetching and flattening records from the author's PDS yourself. served from
+the local replica, so it inherits the same snapshot freshness as keyword
+search.
+
+**parameters:**
+| param | type | required | description |
+|-------|------|----------|-------------|
+| `uri` | string | yes | comma-separated AT-URIs, max 25 per request |
+
+**response:**
+```json
+{
+  "documents": [
+    {
+      "type": "article",
+      "uri": "at://did:plc:.../pub.leaflet.document/...",
+      "did": "did:plc:...",
+      "rkey": "...",
+      "title": "...",
+      "createdAt": "2026-01-01T00:00:00Z",
+      "platform": "leaflet",
+      "basePath": "example.leaflet.pub",
+      "path": "",
+      "publicationName": "...",
+      "coverImage": "",
+      "url": "https://example.leaflet.pub/...",
+      "tags": ["..."],
+      "content": "full extracted text..."
+    }
+  ],
+  "missing": ["at://..."]
+}
+```
+
+`documents` preserves request order. uris that are unknown, malformed, or
+policy-excluded (banned/labeled authors, bridgy fed, dead urls — the same
+set search hides) come back under `missing` rather than erroring the batch.
+`400` for a missing/oversized `uri` param, `503` while the replica is
+adopting a snapshot (retry shortly).
+
 ### similar
 
 ```

@@ -23,8 +23,8 @@
 - hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
 - local stdio: `claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/pub-search#subdirectory=pub-search-mcp/server' pub-search`
 - a curated layer, not a 1:1 of the HTTP API. tools: `search`,
-  `get_document` (fetches + flattens full article text from the author's PDS —
-  the API only returns snippets), `find_similar`, `discover_focal_post`,
+  `get_document` (fetches + flattens the live record from the author's PDS),
+  `find_similar`, `discover_focal_post`,
   `describe_cluster`, `recommended_by_top_authors`, `get_tags`, `get_stats`,
   `get_popular`. prompts: `usage_guide`, `search_tips`. resource:
   `pub-search://stats`.
@@ -33,9 +33,13 @@
 
 - base URL: `https://leaflet-search-backend.fly.dev` (no auth, GET only)
 - `curl -s 'https://leaflet-search-backend.fly.dev/search?q=relay&mode=hybrid&format=v2&limit=5' | jq`
-- endpoints: `/search`, `/similar`, `/tags`, `/popular`, `/stats`,
-  `/activity`, `/api/dashboard`, `/subscribed`, `/subscribers`, `/wrapped`,
-  `/api/labeler`, `/health`. full parameters + response shapes in api.md.
+- search returns snippets; `/document?uri=<at-uri>[,...]` returns the FULL
+  extracted article text (up to 25 uris per request) — use it to read what
+  search found instead of re-fetching records from each author's PDS.
+- endpoints: `/search`, `/document`, `/similar`, `/tags`, `/popular`,
+  `/stats`, `/activity`, `/api/dashboard`, `/subscribed`, `/subscribers`,
+  `/wrapped`, `/api/labeler`, `/health`. full parameters + response shapes
+  in api.md.
 
 ### AT Protocol labeler — a subscribable trust signal
 
@@ -51,7 +55,9 @@
 - every result is an `at://` record on its author's PDS. search returns enough
   metadata (`uri`, `did`, `rkey`, `basePath`, `path`, `platform`) to build a
   web URL or fetch the record directly (`com.atproto.repo.getRecord`, or
-  `uvx pdsx`). the MCP `get_document` does this fetch + extraction for you.
+  `uvx pdsx`). for reading, prefer the API's `/document` (indexed text,
+  batched) or the MCP `get_document` (live record) over rolling your own
+  extraction.
 
 ## Agent guidance
 

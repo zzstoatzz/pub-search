@@ -39,11 +39,11 @@ claude mcp add pub-search -- uvx --from 'git+https://github.com/zzstoatzz/pub-se
 the MCP server is **not** a 1:1 mapping of the HTTP API. it's a curated layer
 with three things the raw API doesn't have:
 
-1. **full document retrieval.** the HTTP API returns snippets only.
-   `get_document(uri)` fetches the actual record from the author's PDS (via
-   pdsx) and flattens the platform-specific block structure into plaintext.
-   if your agent needs to *read* what it found — not just rank it — this is
-   the surface that does it for you.
+1. **live-record retrieval.** `get_document(uri)` fetches the actual record
+   from the author's PDS (via pdsx) and flattens the platform-specific block
+   structure into plaintext — the canonical, current version straight from
+   the source. (for reading from the index instead, the HTTP API's
+   [`/document`](api.md#document) returns the stored extracted text, batched.)
 2. **composed curator tools.** `discover_focal_post` (what's notable now,
    top vs trending), `describe_cluster` (a post's semantic neighborhood with
    cross-platform/author/shared-term observations pre-computed), and
@@ -83,12 +83,15 @@ raw HTTP when:
 - you're building your own composition and want the primitives, not the
   curated layer.
 
-what raw HTTP does **not** give you: full document content. results carry
-snippets and enough metadata (`uri`, `did`, `rkey`, `basePath`, `path`,
-`platform`) to build web URLs or fetch the record from the PDS yourself
-(`com.atproto.repo.getRecord`, or `uvx pdsx`). budget for the per-platform
-content extraction if you go that route — it's the fiddly part the MCP's
-`get_document` already handles (see [content-extraction.md](content-extraction.md)).
+search results carry snippets; for the full text, pass their `uri` values to
+[`/document`](api.md#document) (comma-separated, up to 25 per request). it
+serves the extracted content the indexer already stored — no PDS fetch, no
+per-platform block flattening on your side. results also carry enough
+metadata (`uri`, `did`, `rkey`, `basePath`, `path`, `platform`) to build web
+URLs or fetch the live record from the PDS yourself
+(`com.atproto.repo.getRecord`, or `uvx pdsx`) when you need the canonical
+current version rather than the indexed one (see
+[content-extraction.md](content-extraction.md) for what that entails).
 
 ### SDK / CLI — what exists and what doesn't, honestly
 
@@ -113,7 +116,7 @@ project is yet.
 | a chat agent / claude code session that should search & read pubs | MCP (hosted) | zero setup beyond `claude mcp add`, full-text via `get_document`, curator tools |
 | an agent in a restricted network / pinned deps | MCP (local stdio via uvx) | same tools, runs where you run, `LEAFLET_SEARCH_API_URL` to repoint |
 | a coding agent, script, or scheduled pipeline | HTTP API | fewest moving parts; you control pagination, retries, composition |
-| something needing full article text at scale | HTTP API + your own PDS fetch | `get_document` is one-at-a-time and PDS-bound; bulk reading wants your own fetch loop with backoff |
+| something needing full article text at scale | HTTP API `/document` | batched (25 uris/request), served from the index — no per-PDS fetch loop needed |
 | a human-facing thing | the site ([pub-search.waow.tech](https://pub-search.waow.tech)) | the UI, atlas included, is the human surface |
 
 ## sharp edges (learned the hard way)
@@ -137,7 +140,8 @@ project is yet.
   `/api/dashboard` show current counts if staleness matters to you.
 - **`get_document` (MCP) reaches out to the author's PDS per call.** latency
   and availability depend on that PDS, not on pub-search. fine for reading a
-  handful of focal posts; wrong tool for bulk export.
+  handful of focal posts; for batches, the API's `/document` serves stored
+  text without touching any PDS.
 
 ## evaluating your integration
 
@@ -147,8 +151,9 @@ technically exposes. a useful smoke set, whichever surface you chose:
 1. keyword, semantic, and hybrid queries for the same topic — all three
    return results and the hybrid `source` field is populated. (exercising
    only one mode is how integrations look healthy while a mode is down.)
-2. search → take a result's `uri` → fetch full content (MCP `get_document`
-   or your own PDS fetch) — the round trip from "found" to "read" works.
+2. search → take a result's `uri` → fetch full content (HTTP `/document`,
+   MCP `get_document`, or your own PDS fetch) — the round trip from "found"
+   to "read" works, and the body is article text, not an empty string.
 3. an author-scoped browse (`search("", author=...)`) — filter plumbing works.
 4. a curator flow: `discover_focal_post` → `describe_cluster(focal.uri)` —
    the composed tools return non-empty neighborhoods.
