@@ -1,13 +1,18 @@
 name: Reconcile Recommends
 
-# Closes the small gap left by tap drops and PDSes that don't expose records
-# (Bridgy Fed bridged accounts on atproto.brid.gy, etc.) by checking each
-# indexed doc against constellation's view of the network.
+# Closes the small gap left by PDSes that don't expose records (Bridgy Fed
+# bridged accounts on atproto.brid.gy, etc.) by checking recently-recommended
+# docs against constellation's view of the network.
+#
+# constellation is community-run. This used to run hourly over every document
+# from 8 threads and got most of its requests 429'd (2026-09-07). Keep it
+# daily, single-worker, recency-scoped; the script fails the job when rate
+# limiting persists so a regression shows up red instead of silently doing
+# nothing.
 
 on:
   schedule:
-    # hourly at :15 — far enough from other cron'd jobs to avoid pile-ups
-    - cron: '15 * * * *'
+    - cron: '15 6 * * *'
   workflow_dispatch: # allow manual trigger
 
 jobs:
@@ -23,4 +28,4 @@ jobs:
         env:
           TURSO_URL: ${{ secrets.TURSO_URL }}
           TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
-        run: ./scripts/reconcile-recommends --workers 8
+        run: ./scripts/reconcile-recommends

@@ -16,12 +16,18 @@ insert a row. This closes the gap from PDSes that don't expose records
 to our CAR-walk backfill (notably Bridgy Fed bridged accounts on
 atproto.brid.gy, which return empty from listRecords + getRepo).
 
-Run intermittently (cron, manual). The live tap path stays primary.
+Run intermittently (cron, manual). The live jetstream path stays primary.
+
+constellation is community-run and rate-limits us; be a polite guest. By
+default this checks only documents with recommend activity in the last
+`--since-days` (7), one request at a time, honors Retry-After on 429, and
+exits non-zero if rate limiting persisted after retries (see
+constellation_pacing.py). `--since-days 0` walks the whole table.
 
 Usage:
     TURSO_URL=libsql://... TURSO_TOKEN=... ./scripts/reconcile-recommends
     ./scripts/reconcile-recommends --dry-run
-    ./scripts/reconcile-recommends --workers 16
+    ./scripts/reconcile-recommends --since-days 0 --workers 2
     ./scripts/reconcile-recommends --limit-docs 50         # debug
 """
 
@@ -30,6 +36,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,6 +44,9 @@ from dataclasses import dataclass, field
 
 import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from constellation_pacing import RunTally, retry_delay  # noqa: E402
 
 CONSTELLATION = "https://constellation.microcosm.blue"
 
@@ -149,6 +159,36 @@ def turso_upsert_recommends(settings: Settings, rows: list[tuple[str, str, str, 
 # ---- Constellation -------------------------------------------------------
 
 
+TALLY = RunTally()
+TALLY_LOCK = threading.Lock()
+
+
+def constellation_get(client: httpx.Client, params: dict) -> httpx.Response | None:
+    """One paced request: retry 429s per constellation_pacing, count the outcome."""
+    for attempt in range(64):
+        with TALLY_LOCK:
+            TALLY.requests += 1
+        r = client.get(f"{CONSTELLATION}/links", params=params, timeout=20)
+        if r.status_code < 400:
+            return r
+        delay = retry_delay(r.status_code, r.headers.get("Retry-After"), attempt)
+        if delay is None:
+            with TALLY_LOCK:
+                if r.status_code == 429:
+                    TALLY.rate_limited += 1
+                else:
+                    TALLY.other_errors += 1
+            print(
+                f"  constellation HTTP {r.status_code} for {params['target']} ({params['collection']})",
+                file=sys.stderr,
+            )
+            return None
+        with TALLY_LOCK:
+            TALLY.retried += 1
+        time.sleep(delay)
+    return None
+
+
 def constellation_links(
     client: httpx.Client, target_uri: str, collection: str, path: str
 ) -> list[dict]:
@@ -165,16 +205,13 @@ def constellation_links(
         if cursor:
             params["cursor"] = cursor
         try:
-            r = client.get(f"{CONSTELLATION}/links", params=params, timeout=20)
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            print(
-                f"  constellation HTTP {e.response.status_code} for {target_uri} ({collection})",
-                file=sys.stderr,
-            )
-            return out
+            r = constellation_get(client, params)
         except Exception as e:
+            with TALLY_LOCK:
+                TALLY.other_errors += 1
             print(f"  constellation error for {target_uri} ({collection}): {type(e).__name__}", file=sys.stderr)
+            return out
+        if r is None:
             return out
         data = r.json()
         for rec in data.get("linking_records", []):
@@ -229,7 +266,13 @@ def reconcile_doc(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reconcile recommends against constellation")
     parser.add_argument("--dry-run", action="store_true", help="Don't write to Turso")
-    parser.add_argument("--workers", type=int, default=10, help="Concurrent constellation requests")
+    parser.add_argument("--workers", type=int, default=1, help="Concurrent constellation requests")
+    parser.add_argument(
+        "--since-days",
+        type=int,
+        default=7,
+        help="Only check documents with a recommend indexed in the last N days (0 = every document)",
+    )
     parser.add_argument("--limit-docs", type=int, default=None, help="Cap docs to check (debug)")
     args = parser.parse_args()
 
@@ -246,6 +289,14 @@ def main() -> int:
         settings,
         "SELECT document_uri, did, uri FROM recommends",
     )
+    recent_docs: set[str] | None = None
+    if args.since_days > 0:
+        recent_rows = turso_query_rows(
+            settings,
+            "SELECT DISTINCT document_uri FROM recommends "
+            f"WHERE indexed_at >= strftime('%Y-%m-%dT%H:%M:%S','now','-{int(args.since_days)} days')",
+        )
+        recent_docs = {r[0] for r in recent_rows}
     by_doc: dict[str, set[str]] = {}
     counts: dict[str, int] = {}
     for doc_uri, did, link_uri in rows:
@@ -261,6 +312,9 @@ def main() -> int:
     # process most-recommended docs first — that's where gaps matter most
     # and where constellation has the largest result sets to validate.
     doc_uris = sorted(by_doc.keys(), key=lambda u: -counts.get(u, 0))
+    if recent_docs is not None:
+        doc_uris = [u for u in doc_uris if u in recent_docs]
+        print(f"  {len(doc_uris)} documents with recommend activity in the last {args.since_days} days")
     if args.limit_docs:
         doc_uris = doc_uris[: args.limit_docs]
 
@@ -289,19 +343,20 @@ def main() -> int:
 
     missing_total = sum(v for k, v in status_totals.items() if k.endswith(":missing"))
     print(f"\nfound {missing_total} recommends not yet in our index")
+    print(TALLY.summary())
     if args.dry_run:
         print("dry-run: skipping writes")
         # show a sample
         for r in pending[:10]:
             print(f"  would insert {r[0]} -> {r[3]}")
-        return 0
+        return TALLY.exit_code()
     if not pending:
         print("nothing to insert")
-        return 0
+        return TALLY.exit_code()
     print("upserting...")
     written = turso_upsert_recommends(settings, pending)
     print(f"  wrote {written} rows")
-    return 0
+    return TALLY.exit_code()
 
 
 if __name__ == "__main__":
