@@ -11,6 +11,7 @@ const db = @import("db.zig");
 const ingest = @import("ingest.zig");
 const metrics = @import("metrics.zig");
 const search = @import("server/search.zig");
+const health = @import("server/health.zig");
 const documents = @import("server/documents.zig");
 const visibility = @import("visibility.zig");
 const dashboard = @import("server/dashboard.zig");
@@ -140,6 +141,17 @@ fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !v
         try handleStats(request);
     } else if (mem.eql(u8, path, "/health")) {
         try sendJson(request, "{\"status\":\"ok\"}");
+    } else if (mem.eql(u8, path, "/health/freshness")) {
+        const report = health.probe(io);
+        const body = try json.Stringify.valueAlloc(std.heap.page_allocator, report, .{});
+        defer std.heap.page_allocator.free(body);
+        try request.respond(body, .{
+            .status = if (report.ok) .ok else .service_unavailable,
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "application/json" },
+                .{ .name = "cache-control", .value = "no-store" },
+            },
+        });
     } else if (mem.eql(u8, path, "/popular")) {
         try handlePopular(request, target, io);
     } else if (mem.eql(u8, path, "/dashboard")) {
@@ -1181,7 +1193,15 @@ fn handleReconcileDocument(request: *http.Server.Request, target: []const u8, io
     };
 
     const result = ingest.ingester.applyDocumentReconciliation(
-        alloc, io, did, collection, rkey, pds, expected_cid, action, observe_classifier,
+        alloc,
+        io,
+        did,
+        collection,
+        rkey,
+        pds,
+        expected_cid,
+        action,
+        observe_classifier,
     ) catch |err| {
         const body = try std.fmt.allocPrint(alloc, "{{\"error\":\"{s}\"}}", .{@errorName(err)});
         try request.respond(body, .{ .status = .service_unavailable, .extra_headers = json_hdr });

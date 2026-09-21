@@ -95,9 +95,19 @@ fn cursorPath() [:0]const u8 {
     return if (std.c.getenv("JETSTREAM_CURSOR_PATH")) |p| std.mem.span(p) else "/data/jetstream-cursor";
 }
 
-fn staleSeconds() u32 {
+pub fn staleSeconds() u32 {
     const raw = if (std.c.getenv("JETSTREAM_STALE_SECS")) |p| std.mem.span(p) else return STALE_SECONDS_DEFAULT;
     return std.fmt.parseInt(u32, raw, 10) catch STALE_SECONDS_DEFAULT;
+}
+
+pub fn progressAgeSeconds(io: Io) ?i64 {
+    return cursorAgeSeconds(io, cursorPath(), Io.Timestamp.now(io, .real).nanoseconds);
+}
+
+fn cursorAgeSeconds(io: Io, path: []const u8, now: i96) ?i64 {
+    const stat = Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    if (stat.size == 0 or stat.mtime.nanoseconds > now + 60 * std.time.ns_per_s) return null;
+    return @intCast(@max(0, @divFloor(now - stat.mtime.nanoseconds, std.time.ns_per_s)));
 }
 
 fn apiKey() ?[]const u8 {
@@ -446,4 +456,22 @@ test "cursor round-trips through the persist file" {
     try std.testing.expectEqual(@as(?i64, 23417264498), readCursor(path));
     persistCursor(path, 23417264999);
     try std.testing.expectEqual(@as(?i64, 23417264999), readCursor(path));
+}
+
+test "health observes durable cursor progress and missing cursor" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var path_buf: [96]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/pub-health-cursor-{d}", .{std.c.getpid()});
+    _ = std.c.unlink(path.ptr);
+    defer _ = std.c.unlink(path.ptr);
+    const now = Io.Timestamp.now(io, .real).nanoseconds;
+    try std.testing.expect(cursorAgeSeconds(io, path, now) == null);
+    persistCursor(path, 42);
+    try std.testing.expectEqual(@as(?i64, 42), readCursor(path));
+    const written = Io.Timestamp.now(io, .real).nanoseconds;
+    try std.testing.expect(cursorAgeSeconds(io, path, written).? < 2);
+    try std.testing.expect(cursorAgeSeconds(io, path, written + 901 * std.time.ns_per_s).? >= 900);
+    try std.testing.expect(cursorAgeSeconds(io, path, written - 120 * std.time.ns_per_s) == null);
 }

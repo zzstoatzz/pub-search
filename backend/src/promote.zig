@@ -187,7 +187,7 @@ fn adoptWindowOpen(hour_utc: u64) bool {
     return hoursListContains(getenv("PROMOTE_ADOPT_UTC_HOURS"), hour_utc);
 }
 
-fn hoursListContains(raw_opt: ?[]const u8, hour_utc: u64) bool {
+pub fn hoursListContains(raw_opt: ?[]const u8, hour_utc: u64) bool {
     const raw = raw_opt orelse return true;
     if (raw.len == 0) return true;
     var it = std.mem.splitScalar(u8, raw, ',');

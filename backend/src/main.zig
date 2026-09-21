@@ -273,6 +273,7 @@ test {
     _ = @import("ingest/ingester.zig");
     _ = @import("ingest/jetstream.zig");
     _ = @import("server/search.zig");
+    _ = @import("server/health.zig");
     _ = @import("server/memo.zig");
     _ = @import("server/documents.zig");
     _ = @import("server.zig");

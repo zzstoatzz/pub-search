@@ -91,3 +91,23 @@ barely-relevant mentions that recency had rescued.
   touching fly; backend blips serve stale. `/admin` is never proxied;
   `?edge=0` bypasses per-request; rollback is reverting the frontend to the
   fly URL (which still serves directly).
+
+## fleet freshness check
+
+`GET /health/freshness` returns 503 when the local serving replica is not ready,
+its `leaflet` FTS sentinel has no match, the enabled overlay cannot be queried,
+the durable ingest cursor is missing or older than `JETSTREAM_STALE_SECS`
+(default 900 seconds), or a snapshot adoption window closed without a recent
+enough build. `/health` remains process liveness.
+
+The snapshot timestamp comes from `sync_meta.last_sync` in the serving database
+(the builder stamps the same timestamp into its manifest). The adoption policy
+uses `PROMOTE_ADOPT_UTC_HOURS`, skips the current open window, and allows the
+existing watchdog's 150-minute builder-cadence margin. Unwindowed adoption has
+the watchdog's 180-minute limit. Invalid timestamps or adoption hours fail the
+check. No new documents is not a failure: ingest progress follows the durable
+cursor, which also advances on the subscription's identity/account events.
+
+Responses are uncached aggregate evidence, without document contents or secrets.
+The probe does not mutate state or restart processes. The external ingestion
+watchdog remains independent and retains its source-of-truth and builder checks.
