@@ -50,12 +50,25 @@
       }
     }
     assert(uploads === 1, 'Zoom or theme reuploaded the avatar');
+    var split = texture('#ff0000');
+    var splitContext = split.getContext('2d');
+    splitContext.fillStyle = '#0000ff';
+    splitContext.fillRect(64, 0, 64, 128);
+    var seamPixels = [];
+    for (var rotation of [Math.PI / 2 - 0.05, Math.PI / 2 + 0.05]) {
+      frame(true);
+      draw(split, 60, true, rotation);
+      gl.readPixels(80, 80, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      seamPixels.push(Array.from(pixel));
+    }
+    assert(seamPixels[0].every(function(v, i) { return Math.abs(v - seamPixels[1][i]) < 10; }),
+      'Avatar wrap jumps at the hemisphere boundary');
     var many = Array.from({length: 300}, function() { return texture('#00ff00'); });
     for (var pass = 0; pass < 3; pass++) {
       frame(true);
       for (var tex of many) draw(tex, 10, true, 0);
     }
-    assert(uploads === 301, 'Visible textures churned in the cache');
+    assert(uploads === 302, 'Visible textures churned in the cache');
     for (var pass = 0; pass < 4; pass++) {
       frame(true);
       draw(many[0], 10, true, 0);
@@ -71,7 +84,7 @@
     draw(blank, 30, false, 0);
     gl.readPixels(80, 80, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
     assert(pixel[3] > 240, 'Document planet path stopped rendering');
-    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; 300 visible textures without churn; inactive GPU eviction; document planet rendering.';
+    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; continuous hemisphere wrap; 300 visible textures without churn; inactive GPU eviction; document planet rendering.';
   } catch (error) {
     result.textContent = 'FAIL: ' + error.message;
     console.error(error);

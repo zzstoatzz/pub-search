@@ -76,7 +76,7 @@
     '    float z = sqrt(max(0.0, 1.0 - r * r));',
     '    vec3 N = vec3(vP, z);',
     '    vec3 Nt = vec3(N.x, N.y * ct + N.z * st, -N.y * st + N.z * ct);',
-    '    float lon = mod(atan(Nt.x, Nt.z) + uRot + 1.57079633, 3.14159265) - 1.57079633;',
+    '    float lon = atan(Nt.x, Nt.z) + uRot;',
     '    vec2 uv = vec2(0.5 + 0.5 * sqrt(max(0.0, 1.0 - Nt.y * Nt.y)) * sin(lon), 0.5 - 0.5 * Nt.y);',
     '    vec4 art = texture2D(uTex, uv);',
     '    vec3 L = normalize(vec3(-0.5, 0.45, 0.62));',
