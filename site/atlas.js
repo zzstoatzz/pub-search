@@ -787,13 +787,18 @@
     // title marquee — tile period must divide texW exactly or the wrap seam jumps
     var title = p.title || '(untitled)';
     if (title.length > 41) title = title.slice(0, 40) + '…';
-    g.font = 'bold 24px monospace';
+    g.font = 'bold 34px monospace';
     var tw = g.measureText(title).width;
     var m = Math.max(1, Math.floor(PLANET_TEX_W / (tw + 50)));
     var period = PLANET_TEX_W / m;
+    tw = Math.min(tw, period - 40);
+    g.save();
+    g.shadowColor = frameDark ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.65)';
+    g.shadowBlur = 2;
+    g.shadowOffsetY = 1;
     g.fillStyle = frameDark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)';
     for (var k = 0; k * period < cv.width; k++) {
-      g.fillText(title, k * period, 117.5);
+      g.fillText(title, k * period, 117.5, tw);
       // platform-colored beacon in the gap between copies
       if (period - tw > 20) {
         g.save();
@@ -804,23 +809,24 @@
         g.restore();
       }
     }
+    g.restore();
     // meta band near the south pole
     var meta = p.basePath || (p.uri.split('/')[2] || '');
     if (meta) {
       if (meta.length > 46) meta = meta.slice(0, 45) + '…';
-      g.font = '14px monospace';
+      g.font = '18px monospace';
       var mw = g.measureText(meta).width;
       var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 40)));
       var period2 = PLANET_TEX_W / m2;
       g.fillStyle = frameDark ? hexToRgba(c.core, 0.9) : 'rgba(0,0,0,0.6)';
       for (var k2 = 0; k2 * period2 < cv.width; k2++) {
-        g.fillText(meta, k2 * period2, 155);
+        g.fillText(meta, k2 * period2, 157, Math.min(mw, period2 - 30));
       }
     }
     e = {
       canvas: cv,
       theme: theme,
-      speed: 0.18 + (i % 7) * 0.02,
+      speed: 0.23 + (i % 7) * 0.02,
       phase: (i % 31) * 0.45,
       colors: c,
       coreRGB: [coreRGB[0] / 255, coreRGB[1] / 255, coreRGB[2] / 255],
@@ -2045,7 +2051,7 @@
     if (detailMeta.textContent !== meta) detailMeta.textContent = meta;
     var url = pub ? pubUrl(pub) : atUriToUrl(node.uri,node.basePath,node.platform,node.path);
     if (detailLink.getAttribute('href') !== url) detailLink.href = url;
-    var action = pub ? 'visit publisher ↗' : 'read document ↗';
+    var action = pub ? 'go to publication ↗' : 'read document ↗';
     if (detailLink.textContent !== action) detailLink.textContent = action;
     detail.hidden = false;
     if (W >= 600) {
