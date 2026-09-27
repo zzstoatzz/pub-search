@@ -2253,7 +2253,11 @@
           bumped++;
         }
         if (bumped > 0) {
+          var selected = selectedPub >= 0 ? pubData[selectedPub] : null;
+          var hovered = hoveredPub >= 0 ? pubData[hoveredPub] : null;
           pubData.sort(function(a, b) { return pubSizeScore(b) - pubSizeScore(a); });
+          selectedPub = selected ? pubData.indexOf(selected) : -1;
+          hoveredPub = hovered ? pubData.indexOf(hovered) : -1;
           markDirty();
         }
       })
