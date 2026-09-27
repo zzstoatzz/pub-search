@@ -54,7 +54,7 @@
     // zoomKnee: past this zoom the radius grows as sqrt, so score
     // differences keep separating circles instead of everything with a
     // few subscribers saturating maxPx into a uniform disc field
-    pubSize: { countWeight: 0.06, subWeight: 0.9, maxPx: 26, zoomKnee: 6 },
+    pubSize: { countWeight: 0.06, subWeight: 0.9, maxPx: { s: 10, l: 14 }, closeMaxPx: 26, zoomKnee: 6, gapPx: 10 },
     // publication circles: progressive disclosure gates
     pubCircle: {
       letterMinPx: 16, // letter glyph only once the circle is a real landmark
@@ -66,7 +66,7 @@
     // priority order: cluster labels (landmarks) first, then doc titles
     // (recommendation-ranked), then publication names with whatever's left.
     labels:    { titles: { s: 4, l: 12 }, coarse: { s: 5, l: 12 }, fine: { s: 6, l: 16 }, pubNames: { s: 3, l: 8 } },
-    avatars:   { budget: { s: 4, l: 12 }, cull: { s: 6, l: 4 }, imgThreshold: { s: 16, l: 12 } },
+    avatars:   { budget: { s: 4, l: 12 }, cull: { s: 6, l: 4 }, imgThreshold: { s: 10, l: 12 } },
     recommend: { limit: 250, boostFloor: 6 }, // popularity boost from /recommended
   };
 
@@ -152,6 +152,7 @@
   // --- publication state ---
   var pubData = null; // array from atlas.json
   var pubByBasePath = null; // Map<basePath, pub> for ?pub=<basePath> deep-links
+  var visiblePubs = [];
 
   // subscriber-weighted size score; pub.subs lands async from /subscribed
   function pubSizeScore(pub) {
@@ -162,10 +163,13 @@
   function pubRadius(pub, z) {
     var t = ATLAS_TUNE.pubSize;
     var zEff = z <= t.zoomKnee ? z : t.zoomKnee * Math.sqrt(z / t.zoomKnee);
-    var r = Math.min(t.maxPx, pubSizeScore(pub) * zEff);
+    var close = fadeIn(z, CARD_START, CARD_RANGE);
+    var maxPx = t.maxPx[W < 600 ? 's' : 'l'];
+    maxPx += close * (t.closeMaxPx - maxPx);
+    var r = Math.min(maxPx, pubSizeScore(pub) * zEff);
     // past card zoom pubs grow like the documents do, so their globes reach
     // marquee-readable size in the planet regime
-    if (r > 4) r += fadeIn(z, CARD_START, CARD_RANGE) * 34;
+    if (r > 4) r += close * 34;
     return r;
   }
 
@@ -1507,13 +1511,13 @@
     // the followed few read as real landmarks — accents, not confetti.
     var pubLabelCands = []; // deferred to the label economy below
     var pubPlanetCands = []; // pubs rendered as rotating GL planets
+    visiblePubs = [];
     planetsActive = false; // recomputed each frame (pub globes below, doc planets later)
     if (pubData && pubData.length > 0) {
       var pubLabelZoom = 3;
-      var pubRendered = 0;
       // Avatar imagery is the loudest thing on the map — spend it sparingly.
       // pubData is sorted biggest-first, so this budget lands on the most
-      // prominent publications; everyone else reads as a quiet ring/letter.
+      // prominent visible publications.
       var avKey = smallViewport ? 's' : 'l';
       var avatarBudget = ATLAS_TUNE.avatars.budget[avKey];
       var pubCull = ATLAS_TUNE.avatars.cull[avKey];
@@ -1525,7 +1529,13 @@
         var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
         // cull off-screen (with padding for labels)
         if (psx < -60 || psx > W + 60 || psy < -60 || psy > H + 60) continue;
-        pubRendered++;
+        var overlaps = visiblePubs.some(function(other) {
+          var dx = psx - other.sx, dy = psy - other.sy;
+          var separation = (pr + other.r) * 1.1 + ATLAS_TUNE.pubSize.gapPx;
+          return dx * dx + dy * dy < separation * separation;
+        });
+        if (overlaps) continue;
+        visiblePubs.push({ index: pi2, sx: psx, sy: psy, r: pr });
         var pPlatform = pub.platform || 'other';
         var pColors = frameColors[pPlatform] || frameColors.other;
 
@@ -2125,16 +2135,11 @@
   var mouseX = 0, mouseY = 0;
 
   function findNearestPub(sx, sy) {
-    if (!pubData || pubData.length === 0) return -1;
-    cacheTransform();
-    var z = view.zoom;
-    for (var i = 0; i < pubData.length; i++) {
-      var pub = pubData[i];
-      var pr = pubRadius(pub, z);
-      if (pr < 4) continue;
-      var psx = cx + pub.cx * scale, psy = cy + pub.cy * scale;
-      var dx = sx - psx, dy = sy - psy;
-      if (dx * dx + dy * dy <= pr * pr) return i;
+    if (view.dirty) render();
+    for (var i = 0; i < visiblePubs.length; i++) {
+      var pub = visiblePubs[i];
+      var dx = sx - pub.sx, dy = sy - pub.sy;
+      if (dx * dx + dy * dy <= pub.r * pub.r) return pub.index;
     }
     return -1;
   }
