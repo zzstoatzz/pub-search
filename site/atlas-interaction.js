@@ -12,14 +12,18 @@
   }
   function gesture(callbacks) {
     var pointers = new Map(), moved = false, origin = null;
+    function reset() { pointers.clear(); moved = true; origin = null; }
     function point(e) { return { x: e.clientX, y: e.clientY }; }
     function down(e) {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.isPrimary) reset();
       if (!pointers.size) { moved = false; origin = point(e); }
+      if (callbacks.start) callbacks.start();
       pointers.set(e.pointerId, point(e));
       if (pointers.size > 1) moved = true;
     }
     function move(e) {
+      if (e.buttons === 0 && pointers.has(e.pointerId)) { abort(e); return; }
       if (!pointers.has(e.pointerId)) {
         if (e.pointerType === 'mouse') callbacks.hover(e.clientX, e.clientY);
         return;
@@ -43,7 +47,7 @@
       if (tap) callbacks.select(e.clientX,e.clientY,e.pointerType);
     }
     function abort(e) { if (pointers.has(e.pointerId)) { pointers.delete(e.pointerId); moved = true; } }
-    return {down:down,move:move,up:up,abort:abort,leave:function(){ if (!pointers.size) callbacks.leave(); }};
+    return {down:down,move:move,up:up,abort:abort,reset:reset,leave:function(){ if (!pointers.size) callbacks.leave(); }};
   }
   function attach(canvas, callbacks) {
     var state = gesture(callbacks);
@@ -53,8 +57,14 @@
       state.down(e);
     });
     canvas.addEventListener('pointermove',state.move);
-    canvas.addEventListener('pointerup',state.up);
-    canvas.addEventListener('pointercancel',state.abort);
+    var doc = canvas.ownerDocument;
+    doc.addEventListener('pointerup',state.up);
+    doc.addEventListener('pointercancel',state.abort);
+    doc.defaultView.addEventListener('blur',state.reset);
+    doc.addEventListener('visibilitychange',function(){ if (doc.hidden) state.reset(); });
+    function endTouches(e) { if (!e.targetTouches.length) state.reset(); }
+    canvas.addEventListener('touchend',endTouches);
+    canvas.addEventListener('touchcancel',endTouches);
     canvas.addEventListener('lostpointercapture',state.abort);
     canvas.addEventListener('pointerleave',state.leave);
   }

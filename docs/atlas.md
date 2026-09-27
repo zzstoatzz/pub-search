@@ -33,15 +33,44 @@ dependencies: `umap-learn`, `hdbscan`, `scikit-learn`, `httpx`, `numpy`, `pydant
 
 ## frontend
 
-`site/atlas.html` + `site/atlas.js` + `site/atlas.css`
+`site/atlas.html` + `site/atlas.js` + `site/atlas-gl.js` + `site/atlas-interaction.js` + `site/atlas.css`
 
-- **canvas 2D** renderer — no libraries, sprite-based (pre-rendered offscreen canvas per platform); WebGL only for the rotating document planets at deep zoom
+- **WebGL** points, static connection buffers, and rotating planets; canvas 2D for nebulae/labels, with a sprite fallback when WebGL is unavailable
 - **pan/zoom** via wheel, drag, touch/pinch (max 500×; documents become rotating planets past ~45×, then flat cards)
 - **semantic zoom**: coarse labels → fine labels → document titles as you zoom in
 - **cluster nebulae as lanterns**: one smooth-falloff glow per fine cluster at the weighted center of its members, sized by RMS spread with a bounded peak opacity — wide, translucent, and smooth at every zoom (coarse regions use the same sprite, fading out by ~2.8×)
 - **label economy**: all text competes in one collision pass, placed in priority order — cluster labels (bold landmarks), then document titles ranked by real recommend counts (`/recommended` boost on `popScore`), then publication names with whatever room is left; per-layer caps live in `ATLAS_TUNE.labels`
 - **hover/selection card** with title, publication, platform; **click** opens the document
 - **theme support**: dark (default), light, system — synced with the rest of the site
+
+### gesture recovery and visible planet work
+
+The pointer controller introduced in `6acfcd1` (September 26) handles ordinary
+pointer cancellation but could retain a pointer if its termination event was
+missed. The regression sequence leaves one old pointer, starts a fresh primary
+contact, and drags it: the old controller applies a 1.23× scale instead of a pan.
+A new primary contact now clears old gesture state. Blur, page hiding, and the
+end of all canvas touches also reset it; no-contact moves discard stale pointers.
+Pointer termination is observed at the document so it still arrives if capture
+is lost. Manual input stops automatic camera animation.
+
+Planet candidates come from visible cells of the spatial index. Their positions,
+radii, and opacity weights are retained while planets rotate, then recomputed
+when the camera, viewport, geometry, or filters change. Other scene layers still
+redraw during rotation; this is not a full renderer rewrite.
+
+Run gesture regressions with `node scripts/tests/atlas-interaction.cjs`.
+Serve the repository root with `python3 -m http.server 8789`, then open
+`/scripts/tests/atlas-performance.html` and click **Run checks** for real-page
+spatial selection and cache tests at phone and desktop dimensions. Selection is
+compared with a full scan and brute-force nearest-neighbor spacing. Existing
+`/scripts/tests/atlas-gl.html` checks actual GPU output. Native iOS Safari gesture
+arbitration still needs a physical-device check.
+
+[Jaz's Atlas](https://atlas.jazco.dev/) uses MapLibre vector tiles and zoom-gated
+layers. The larger next step here is the geometry/metadata split below. Label
+summaries are a separate design question: decide what evidence supports each
+summary and where to reveal it without crowding the map or blocking interaction.
 
 ## recomputing
 

@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-require('../../site/atlas-interaction.js');
+require(process.argv[2] ? require('node:path').resolve(process.argv[2]) : '../../site/atlas-interaction.js');
 const {gesture,pick}=globalThis.AtlasInteraction;
 let selected=[], transforms=[];
 const state=gesture({select:(...args)=>selected.push(args),transform:(...args)=>transforms.push(args),hover:()=>{},leave:()=>{}});
@@ -23,3 +23,77 @@ assert.equal(pick([small],120,100,'mouse'),null);
 assert.equal(pick([small,large],108,100,'touch'),large,'visible surface beats nearby expanded target');
 assert.equal(pick([small,large],100,100,'touch'),small);
 console.log('PASS: jitter, drag-return, pinch-to-pan, cancellation, subsequent clicks, screen-space reach and overlapping targets');
+
+const test = require('node:test');
+function fixture() {
+  const moves = [], taps = [];
+  let starts = 0;
+  const input = gesture({
+    start: () => { starts++; },
+    transform: (...args) => moves.push(args),
+    select: (...args) => taps.push(args),
+    hover: () => {}, leave: () => {},
+  });
+  const finger = (id, x, primary = false, buttons = 1) => ({
+    pointerId: id, clientX: x, clientY: 100,
+    pointerType: 'touch', button: 0, buttons, isPrimary: primary,
+  });
+  return {input, moves, taps, finger, starts: () => starts};
+}
+test('a new primary contact clears a finger whose end event was lost', () => {
+  const {input, moves, taps, finger} = fixture();
+  input.down(finger(1, 100, true));
+  input.down(finger(2, 200));
+  input.move(finger(2, 240));
+  input.up(finger(2, 240));
+  input.down(finger(3, 200, true));
+  input.move(finger(3, 230, true));
+  input.move(finger(3, 260, true));
+  assert.equal(moves.at(-1)[4], 1, 'single-finger drag must not scale');
+  input.up(finger(3, 260, true));
+  assert.equal(taps.length, 0);
+});
+test('lifting either pinch contact continues as a pan', () => {
+  for (const remaining of [1, 2]) {
+    const {input, moves, finger} = fixture();
+    input.down(finger(1, 100, true)); input.down(finger(2, 200));
+    input.move(finger(2, 240));
+    input.up(finger(remaining === 1 ? 2 : 1, remaining === 1 ? 240 : 100));
+    input.move(finger(remaining, remaining === 1 ? 130 : 270));
+    assert.equal(moves.at(-1)[4], 1);
+    assert.equal(moves.at(-1)[2] - moves.at(-1)[0], 30);
+  }
+});
+test('canceling either pinch contact cannot leave a zooming drag', () => {
+  for (const remaining of [1, 2]) {
+    const {input, moves, finger} = fixture();
+    input.down(finger(1, 100, true)); input.down(finger(2, 200));
+    input.abort(finger(remaining === 1 ? 2 : 1, 100));
+    input.move(finger(remaining, remaining === 1 ? 130 : 230));
+    assert.equal(moves.at(-1)[4], 1);
+  }
+});
+test('lifecycle reset ends a pinch and allows the next gesture', () => {
+  const {input, moves, taps, finger} = fixture();
+  input.down(finger(1, 100, true)); input.down(finger(2, 200));
+  input.reset();
+  input.up(finger(1, 100)); input.up(finger(2, 200));
+  assert.equal(taps.length, 0);
+  input.down(finger(3, 100, true));
+  input.move(finger(3, 130, true)); input.move(finger(3, 160, true));
+  assert.equal(moves.at(-1)[4], 1);
+});
+test('a no-contact move removes the stale pointer instead of zooming', () => {
+  const {input, moves, finger} = fixture();
+  input.down(finger(1, 100, true)); input.down(finger(2, 200));
+  input.move(finger(1, 100, true, 0));
+  input.move(finger(2, 230));
+  assert.equal(moves.at(-1)[4], 1);
+});
+test('primary is per contact sequence, not a reason to reset each move', () => {
+  const {input, moves, finger, starts} = fixture();
+  input.down(finger(1, 100, true)); input.down(finger(2, 200));
+  input.move(finger(1, 50, true));
+  assert.equal(moves.at(-1)[4], 1.5);
+  assert.equal(starts(), 2);
+});

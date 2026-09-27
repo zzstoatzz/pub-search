@@ -1094,6 +1094,7 @@
 
   // point dim/highlight state, rebuilt only when search or filter changes
   function rebuildPointState() {
+    planetLayout = null;
     if (!atlasGL || !platformIdx) return;
     var n = platformIdx.length;
     var searching = searchMatches && searchMatches.size > 0;
@@ -1157,6 +1158,50 @@
     }
     atlasGL.uploadLines(count * 4 === verts.length ? verts : verts.slice(0, count * 4), count);
     markDirty();
+  }
+
+  var planetLayout = null;
+  var planetLayoutBuilds = 0;
+
+  function getPlanetCandidates(xMin, yMin, xMax, yMax, radius, limit) {
+    if (planetLayout && planetLayout.scale === scale && planetLayout.cx === cx &&
+        planetLayout.cy === cy && planetLayout.width === W && planetLayout.height === H &&
+        planetLayout.radius === radius && planetLayout.index === gridIndex) return planetLayout.points;
+    var cands = [];
+    var visited = 0;
+    var cs = gridIndex.cellSize;
+    var gxMin = Math.floor(xMin / cs), gxMax = Math.floor(xMax / cs);
+    var gyMin = Math.floor(yMin / cs), gyMax = Math.floor(yMax / cs);
+    for (var gx = gxMin; gx <= gxMax; gx++) {
+      for (var gy = gyMin; gy <= gyMax; gy++) {
+        var cell = gridIndex.cells[gx + ',' + gy];
+        if (!cell) continue;
+        for (var k = 0; k < cell.length; k++) {
+          var i = cell[k];
+          visited++;
+          var px = pointsX[i], py = pointsY[i];
+          if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
+          if (activePlatforms && !activePlatforms.has(PLATFORMS[platformIdx[i]])) continue;
+          if (searchMatches && searchMatches.size > 0 && !searchMatches.has(i)) continue;
+          var sx = cx + px * scale, sy = cy + py * scale;
+          if (sx + radius < 0 || sx - radius > W || sy + radius < 0 || sy - radius > H) continue;
+          var dx = sx - W / 2, dy = sy - H / 2;
+          var pointRadius = documentRadius(i, radius);
+          if (pointRadius > 2) cands.push({ i: i, sx: sx, sy: sy, r: pointRadius, d: dx * dx + dy * dy });
+        }
+      }
+    }
+    cands.sort(function(a, b) { return a.d - b.d || a.i - b.i; });
+    var cutoff = cands.length > limit ? Math.sqrt(cands[limit].d) : Math.sqrt(W * W + H * H) / 2;
+    if (cands.length > limit) cands.length = limit;
+    for (var c = 0; c < cands.length; c++) {
+      var weight = clamp01((cutoff - Math.sqrt(cands[c].d)) / Math.max(1, cutoff * 0.3));
+      cands[c].alpha = weight * weight * (3 - 2 * weight);
+    }
+    planetLayoutBuilds++;
+    planetLayout = { scale: scale, cx: cx, cy: cy, width: W, height: H,
+      radius: radius, index: gridIndex, points: cands, visited: visited };
+    return cands;
   }
 
   // --- rendering ---
@@ -1555,28 +1600,7 @@
       planetR = pointR;
       var tSec = performance.now() / 1000;
       // nearest-to-viewport-center docs win the planet slots
-      var maxPlanets = small ? 48 : 80;
-      var cands = [];
-      var vcx = W / 2, vcy = H / 2;
-      for (var i = 0; i < n; i++) {
-        var px = pointsX[i], py = pointsY[i];
-        if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
-        if (filtering && !activePlatforms.has(PLATFORMS[platformIdx[i]])) continue;
-        // while searching, only matches become planets — the rest stay dimmed dots
-        if (searchMatches && searchMatches.size > 0 && !searchMatches.has(i)) continue;
-        var sx = cx + px * scale, sy = cy + py * scale;
-        if (sx + planetR < 0 || sx - planetR > W || sy + planetR < 0 || sy - planetR > H) continue;
-        var ddx = sx - vcx, ddy = sy - vcy;
-        var radius = documentRadius(i, pointR);
-        if (radius > 2) cands.push({ i: i, sx: sx, sy: sy, r: radius, d: ddx * ddx + ddy * ddy });
-      }
-      cands.sort(function(a, b) { return a.d - b.d; });
-      var cutoff = cands.length > maxPlanets ? Math.sqrt(cands[maxPlanets].d) : Math.sqrt(W * W + H * H) / 2;
-      if (cands.length > maxPlanets) cands.length = maxPlanets;
-      for (var c = 0; c < cands.length; c++) {
-        var weight = clamp01((cutoff - Math.sqrt(cands[c].d)) / Math.max(1, cutoff * 0.3));
-        cands[c].alpha = weight * weight * (3 - 2 * weight);
-      }
+      var cands = getPlanetCandidates(xMin, yMin, xMax, yMax, pointR, small ? 48 : 80);
       if (atlasGL) {
         atlasGL.beginPlanets(W, H, dpr, dark);
         var texSpan = PLANET_TEX_W / (PLANET_TEX_W + PLANET_TEX_BLEED);
@@ -2001,6 +2025,7 @@
 
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
+    animating = false;
     hideTooltip();
     // scale zoom proportionally to deltaY — gentle for trackpad, snappy for mouse wheel
     // deltaMode 1 = lines (mouse wheel): multiply by 40 to approximate pixels
@@ -2063,6 +2088,7 @@
   }
 
   AtlasInteraction.attach(canvas, {
+    start: function() { animating = false; },
     hover: function(x,y) {
       if (selectedPub >= 0 || selectedIndex >= 0) return;
       mouseX = x; mouseY = y;
@@ -2710,6 +2736,9 @@
         zoom: view.zoom, panX: view.panX, panY: view.panY,
         animating: animating, planetsActive: planetsActive,
         hovered: hoveredIndex, selected: selectedIndex,
+        planetLayoutBuilds: planetLayoutBuilds,
+        planetPointsVisited: planetLayout ? planetLayout.visited : 0,
+        planetIndices: planetLayout ? planetLayout.points.map(function(p) { return p.i; }) : [],
       };
     }
   };
