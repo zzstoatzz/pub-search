@@ -54,7 +54,7 @@
     // zoomKnee: past this zoom the radius grows as sqrt, so score
     // differences keep separating circles instead of everything with a
     // few subscribers saturating maxPx into a uniform disc field
-    pubSize: { countWeight: 0.06, subWeight: 0.9, maxPx: { s: 10, l: 14 }, closeMaxPx: 26, zoomKnee: 6, gapPx: 10 },
+    pubSize: { countWeight: 0.06, subWeight: 0.9, maxPx: { s: 10, l: 14 }, closeMaxPx: 60, detailStart: 12, detailEnd: 300, zoomKnee: 6, gapPx: 10 },
     // publication circles: progressive disclosure gates
     pubCircle: {
       letterMinPx: 16, // letter glyph only once the circle is a real landmark
@@ -163,14 +163,11 @@
   function pubRadius(pub, z) {
     var t = ATLAS_TUNE.pubSize;
     var zEff = z <= t.zoomKnee ? z : t.zoomKnee * Math.sqrt(z / t.zoomKnee);
-    var close = fadeIn(z, CARD_START, CARD_RANGE);
     var maxPx = t.maxPx[W < 600 ? 's' : 'l'];
-    maxPx += close * (t.closeMaxPx - maxPx);
+    var close = clamp01(Math.log(z / t.detailStart) / Math.log(t.detailEnd / t.detailStart));
+    close = close * close * (3 - 2 * close);
     var r = Math.min(maxPx, pubSizeScore(pub) * zEff);
-    // past card zoom pubs grow like the documents do, so their globes reach
-    // marquee-readable size in the planet regime
-    if (r > 4) r += close * 34;
-    return r;
+    return r * Math.pow(t.closeMaxPx / maxPx, close);
   }
 
   // platform logos — drawn next to per-doc titles at high zoom for identity.
