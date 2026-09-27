@@ -710,11 +710,6 @@
     return bestIdx;
   }
 
-  // --- document planets + hover cards (high-zoom close-up view) ---
-  // past CARD_START each doc's dot grows into a rotating planet with the
-  // document's info projected onto its surface (vegas-sphere style); hovering
-  // (or tapping, on mobile) unfurls a flat card. CARD_FULL bounds the card's
-  // size growth.
   var CARD_START = 45, CARD_RANGE = 20, CARD_FULL = 250;
   var cardHitRects = null; // [{x, y, w, h, i}] rebuilt each frame, for hover/click
   var planetsActive = false; // true while planets render → continuous frames
@@ -722,74 +717,58 @@
 
   function planetRadiusFor(z) {
     var rmax = W < 600 ? 50 : 76;
-    // base stays 7 — the sprite→planet handoff at CARD_START depends on it
-    return Math.max(4, Math.min(rmax, 7 + (z - CARD_START) * 0.27));
+    return 1.2 + (rmax - 1.2) * (1 - Math.exp(-0.16 * Math.pow(z, 0.92) / (rmax - 1.2)));
   }
 
   // --- planet surface textures ---
   // one offscreen canvas per doc: title marquee + basePath, tiled so the
   // wrap at texW is seamless, plus a bleed strip past texW because edge
   // strips sample up to ~6% of the wrap width past their u origin.
-  var PLANET_TEX_W = 1024, PLANET_TEX_BLEED = 256, PLANET_TEX_H = 112;
+  var PLANET_TEX_W = 512, PLANET_TEX_BLEED = 128, PLANET_TEX_H = 256;
   var planetTex = new Map(); // point index -> {canvas, theme, speed, phase}
 
   function getPlanetTexture(i) {
     var theme = frameDark ? 'dark' : 'light';
     var p = data.points[i];
-    var pub = pubByBasePath && p.basePath ? pubByBasePath.get(p.basePath) : null;
-    if (pub) resolvePubAccent(pub);
-    var accent = p.basePath ? pubAccents[p.basePath] : null;
-    var accentKey = accent ? accent.key : 'none';
     var e = planetTex.get(i);
-    if (e && e.theme === theme && e.accentKey === accentKey) return e;
-    if (planetTex.size > 96) planetTex.delete(planetTex.keys().next().value);
+    if (e && e.theme === theme) {
+      planetTex.delete(i);
+      planetTex.set(i, e);
+      return e;
+    }
+    if (planetTex.size >= 128) planetTex.delete(planetTex.keys().next().value);
     var platform = PLATFORMS[platformIdx[i]];
-    var c = frameColors[platform];
+    var hue = pointHueArr ? pointHueArr[i] : 255;
+    var c = hue !== 255 ? hueColorsFor(hue) : frameColors[platform];
     var cv = document.createElement('canvas');
     cv.width = PLANET_TEX_W + PLANET_TEX_BLEED;
     cv.height = PLANET_TEX_H;
     var g = cv.getContext('2d');
-    // the texture is emissive-only (info on transparent): the WebGL path
-    // shades the surface itself from baseRGB/accentRGB, and the 2D fallback
-    // fills the disc with baseColor before stamping the strips.
-    // base surface: the publication's accent hue when we have it,
-    // otherwise a tint of the platform color
-    var baseRGB, accentRGB;
-    if (accent && accent.rgb) {
-      // literal author theme colors, exactly as they styled their publication
-      baseRGB = accent.bgRgb
-        ? [Math.round(accent.bgRgb[0] * 255), Math.round(accent.bgRgb[1] * 255), Math.round(accent.bgRgb[2] * 255)]
-        : hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
-      accentRGB = [Math.round(accent.rgb[0] * 255), Math.round(accent.rgb[1] * 255), Math.round(accent.rgb[2] * 255)];
-    } else if (accent) {
-      baseRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
-      accentRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.55 : 0.45);
-    } else {
-      baseRGB = parseHex(c.edge);
-      accentRGB = parseHex(c.mid);
-    }
+    var baseRGB = parseHex(c.edge);
+    var accentRGB = parseHex(c.mid);
+    var coreRGB = parseHex(c.core);
     // faint latitude rings
     g.fillStyle = hexToRgba(c.mid, 0.35);
-    g.fillRect(0, 10, cv.width, 2);
-    g.fillRect(0, PLANET_TEX_H - 12, cv.width, 2);
+    g.fillRect(0, 65, cv.width, 1);
+    g.fillRect(0, 185, cv.width, 1);
     g.textBaseline = 'middle';
     g.textAlign = 'left';
     // title marquee — tile period must divide texW exactly or the wrap seam jumps
     var title = p.title || '(untitled)';
     if (title.length > 41) title = title.slice(0, 40) + '…';
-    g.font = 'bold 40px monospace';
+    g.font = 'bold 24px monospace';
     var tw = g.measureText(title).width;
-    var m = Math.max(1, Math.floor(PLANET_TEX_W / (tw + 100)));
+    var m = Math.max(1, Math.floor(PLANET_TEX_W / (tw + 50)));
     var period = PLANET_TEX_W / m;
     g.fillStyle = frameDark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)';
     for (var k = 0; k * period < cv.width; k++) {
-      g.fillText(title, k * period, 46);
+      g.fillText(title, k * period, 117.5);
       // platform-colored beacon in the gap between copies
-      if (period - tw > 40) {
+      if (period - tw > 20) {
         g.save();
         g.fillStyle = c.core;
         g.beginPath();
-        g.arc(k * period + tw + (period - tw) / 2, 46, 7, 0, Math.PI * 2);
+        g.arc(k * period + tw + (period - tw) / 2, 117.5, 3.5, 0, Math.PI * 2);
         g.fill();
         g.restore();
       }
@@ -798,22 +777,22 @@
     var meta = p.basePath || (p.uri.split('/')[2] || '');
     if (meta) {
       if (meta.length > 46) meta = meta.slice(0, 45) + '…';
-      g.font = '21px monospace';
+      g.font = '14px monospace';
       var mw = g.measureText(meta).width;
-      var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 80)));
+      var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 40)));
       var period2 = PLANET_TEX_W / m2;
-      if (accent) g.fillStyle = accentCss(accent, frameDark ? 0.70 : 0.30);
-      else g.fillStyle = frameDark ? hexToRgba(c.core, 0.9) : 'rgba(0,0,0,0.6)';
+      g.fillStyle = frameDark ? hexToRgba(c.core, 0.9) : 'rgba(0,0,0,0.6)';
       for (var k2 = 0; k2 * period2 < cv.width; k2++) {
-        g.fillText(meta, k2 * period2, 79);
+        g.fillText(meta, k2 * period2, 155);
       }
     }
     e = {
       canvas: cv,
       theme: theme,
-      accentKey: accentKey,
       speed: 0.18 + (i % 7) * 0.02,
       phase: (i % 31) * 0.45,
+      colors: c,
+      coreRGB: [coreRGB[0] / 255, coreRGB[1] / 255, coreRGB[2] / 255],
       baseColor: 'rgb(' + baseRGB[0] + ',' + baseRGB[1] + ',' + baseRGB[2] + ')',
       baseRGB: [baseRGB[0] / 255, baseRGB[1] / 255, baseRGB[2] / 255],
       accentRGB: [accentRGB[0] / 255, accentRGB[1] / 255, accentRGB[2] / 255],
@@ -895,7 +874,7 @@
   // sphere projection: vertical strips, longitude per column via asin,
   // column height from the circle chord — a wrapped cylinder squashed into
   // the silhouette, which reads as a rotating globe.
-  function drawPlanet(i, sx, sy, R, alpha, tSec) {
+  function drawPlanet(i, sx, sy, R, alpha, tSec, textAlpha) {
     var tex = getPlanetTexture(i);
     var rot = tSec * tex.speed + tex.phase;
     var TWO_PI = Math.PI * 2;
@@ -907,7 +886,11 @@
     ctx.arc(sx, sy, R, 0, TWO_PI);
     ctx.clip();
     // the texture is emissive-only (transparent bg) — lay down the surface
-    ctx.fillStyle = tex.baseColor;
+    var body = ctx.createRadialGradient(sx - R * 0.3, sy - R * 0.36, R * 0.08, sx, sy, R);
+    body.addColorStop(0, tex.colors.core);
+    body.addColorStop(0.5, tex.colors.mid);
+    body.addColorStop(1, tex.colors.edge);
+    ctx.fillStyle = body;
     ctx.fillRect(sx - R, sy - R, R * 2, R * 2);
     // TILT: we view each planet from slightly north of its equator, so the
     // text rows dip at the center of the face and curl up toward the limb —
@@ -915,6 +898,7 @@
     // chord height (max at center, zero at the edges).
     var TILT = 0.22;
     var step = R > 50 ? 3 : 2;
+    ctx.globalAlpha = alpha * textAlpha;
     var prevLam = -Math.PI / 2;
     for (var x = -R; x < R; x += step) {
       var x2 = Math.min(R, x + step);
@@ -932,6 +916,7 @@
       ctx.drawImage(tex.canvas, u0, 0, srcW, texH, sx + x, sy - h, destW, h * 2 + dip);
       prevLam = lam2;
     }
+    ctx.globalAlpha = alpha;
     var shade = getPlanetShade(R);
     ctx.drawImage(shade, sx - R, sy - R, R * 2, R * 2);
     ctx.restore();
@@ -1391,13 +1376,7 @@
     }
 
     // --- points ---
-    // continuous size/starness curves: starlight points stay small through
-    // the midrange, reaching 7px right where the planets take over (planet
-    // radius starts at 7 at CARD_START, so the handoff is smooth); pure
-    // starlight below zoom ~7, fully a sphere by ~15.
-    // one continuous curve, pinned to radius 7 at CARD_START so the
-    // sprite→planet handoff stays a single object growing
-    var pointR = Math.max(1.2, Math.min(7, 1.25 + zoom * 0.1278));
+    var pointR = Math.min(7, planetRadiusFor(zoom));
     var starness = zoom >= 2 ? fadeOut(zoom, 7, 8) : 1;
     var filtering = activePlatforms !== null;
     if (atlasGL) {
@@ -1567,13 +1546,13 @@
     //   every fine nebula stays named (continuous with the zoomed-out regions);
     //   they ride the same fade-out as the nebulae, near card zoom.
     // titles: fade in 4.5–5.5, hold until planet surface text is readable
-    // planets: fade in over CARD_START..CARD_START+CARD_RANGE, keep growing
     // cards: hover/selection only — unfurl next to the planet
     var coarseAlpha = fadeOut(zoom, 1.7, 0.6);
     var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 45, 15);
     var titleAlpha = fadeIn(zoom, 4.5, 1.0) * fadeOut(zoom, 110, 40);
-    var planetAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
-    var cardAlpha = planetAlpha;
+    var planetAlpha = clamp01(Math.log(zoom / 12) / Math.log(100 / 12));
+    planetAlpha *= planetAlpha * (3 - 2 * planetAlpha);
+    var cardAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
 
     // --- document planets: info projected onto rotating orbs ---
     // (don't clobber the pub-planet rotation flag set above)
@@ -1584,7 +1563,7 @@
       planetR = planetRadiusFor(zoom);
       var tSec = performance.now() / 1000;
       // nearest-to-viewport-center docs win the planet slots
-      var maxPlanets = small ? 20 : 36;
+      var maxPlanets = small ? 48 : 80;
       var cands = [];
       var vcx = W / 2, vcy = H / 2;
       for (var i = 0; i < n; i++) {
@@ -1599,10 +1578,11 @@
         cands.push({ i: i, sx: sx, sy: sy, d: ddx * ddx + ddy * ddy });
       }
       cands.sort(function(a, b) { return a.d - b.d; });
+      var cutoff = cands.length > maxPlanets ? Math.sqrt(cands[maxPlanets].d) : Math.sqrt(W * W + H * H) / 2;
       if (cands.length > maxPlanets) cands.length = maxPlanets;
       // adaptive radius: shrink to local spacing so dense clusters read as
       // distinct globes instead of overlapping mud
-      var rMin = Math.min(9, planetR);
+      var rMin = Math.min(pointR, planetR);
       for (var c = 0; c < cands.length; c++) {
         var best = Infinity;
         for (var c2 = 0; c2 < cands.length; c2++) {
@@ -1611,8 +1591,14 @@
           var dd = dx2 * dx2 + dy2 * dy2;
           if (dd < best) best = dd;
         }
-        cands[c].r = best === Infinity ? planetR
-          : Math.max(rMin, Math.min(planetR, Math.sqrt(best) * 0.52));
+        var weight = clamp01((cutoff - Math.sqrt(cands[c].d)) / Math.max(1, cutoff * 0.3));
+        weight *= weight * (3 - 2 * weight);
+        var radius = best === Infinity ? planetR
+          : Math.max(rMin, Math.min(planetR, Math.sqrt(best) * 0.48));
+        cands[c].r = pointR + (radius - pointR) * weight;
+        cands[c].alpha = planetAlpha * weight;
+        var textAlpha = clamp01((cands[c].r - 4) / 28);
+        cands[c].textAlpha = textAlpha * textAlpha * (3 - 2 * textAlpha);
       }
       if (atlasGL) {
         atlasGL.beginPlanets(W, H, dpr, dark);
@@ -1621,7 +1607,9 @@
           var pcI = cands[c].i;
           var pcT = getPlanetTexture(pcI);
           var pcRot = (tSec * pcT.speed + pcT.phase) % (Math.PI * 2);
-          atlasGL.drawPlanet(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, planetAlpha, pcRot, {
+          atlasGL.drawPlanet(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, pcRot, {
+            core: pcT.coreRGB,
+            textAlpha: cands[c].textAlpha,
             base: pcT.baseRGB,
             accent: pcT.accentRGB,
             seed: (pcI % 97) * 1.3,
@@ -1632,7 +1620,7 @@
         }
       } else {
         for (var c = 0; c < cands.length; c++) {
-          drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, planetAlpha, tSec);
+          drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, tSec, cands[c].textAlpha);
         }
       }
       planetsActive = cands.length > 0 || pubPlanetsSpinning;

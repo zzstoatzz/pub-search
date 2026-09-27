@@ -34,6 +34,17 @@
     '}',
   ].join('\n');
 
+  var SPHERE_LIGHTING = [
+    'vec3 sphereColor(vec2 p, vec3 core, vec3 mid, vec3 edge, float polish) {',
+    '  float r = length(p);',
+    '  float g = clamp(length(p - vec2(-0.3, -0.36)), 0.0, 1.0);',
+    '  vec3 body = g < 0.5 ? mix(core, mid, g * 2.0) : mix(mid, edge, (g - 0.5) * 2.0);',
+    '  body *= 1.0 - smoothstep(0.55, 1.0, r) * 0.28;',
+    '  float sp = 1.0 - clamp(length(p - vec2(-0.38, -0.42)) / 0.5, 0.0, 1.0);',
+    '  return body + vec3(0.16) * sp * sp * polish;',
+    '}',
+  ].join('\n');
+
   var PLANET_FRAG = [
     '#ifdef GL_FRAGMENT_PRECISION_HIGH',
     'precision highp float;',
@@ -42,31 +53,10 @@
     '#endif',
     'varying vec2 vP;',
     'uniform sampler2D uTex;',
-    'uniform float uRot, uTilt, uAlpha, uSeed, uTexSpan, uHover, uDark, uPx, uMargin, uLift, uAvatar;',
-    'uniform vec3 uBase, uAccent;',
+    'uniform float uRot, uTilt, uAlpha, uTexSpan, uPx, uAvatar, uTextAlpha;',
+    'uniform vec3 uBase, uAccent, uCore;',
 
-    'float hash3(vec3 p) {',
-    '  p = fract(p * 0.3183099 + 0.1) + uSeed * 0.013;',
-    '  p *= 17.0;',
-    '  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));',
-    '}',
-    'float noise3(vec3 x) {',
-    '  vec3 i = floor(x), f = fract(x);',
-    '  f = f * f * (3.0 - 2.0 * f);',
-    '  return mix(',
-    '    mix(mix(hash3(i), hash3(i + vec3(1,0,0)), f.x),',
-    '        mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), f.x), f.y),',
-    '    mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), f.x),',
-    '        mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), f.x), f.y), f.z);',
-    '}',
-    'float fbm(vec3 p) {',
-    '  float v = 0.5 * noise3(p);',
-    '  p = p * 2.03 + 11.3; v += 0.275 * noise3(p);',
-    '  p = p * 2.03 + 11.3; v += 0.151 * noise3(p);',
-    '  p = p * 2.03 + 11.3; v += 0.083 * noise3(p);',
-    '  return v;',
-    '}',
-
+    SPHERE_LIGHTING,
     'void main() {',
     '  float r = length(vP);',
     '  vec4 outc = vec4(0.0);',
@@ -87,61 +77,18 @@
     '    gl_FragColor = vec4(color, edge * uAlpha);',
     '    return;',
     '  }',
-    // the info shell: billboards in orbit, a few percent above the surface —
-    // they float over the terrain and hang past the limb into space
-    '  vec4 em = vec4(0.0);',
-    '  if (r < uLift) {',
-    '    float zt = sqrt(uLift * uLift - r * r);',
-    '    vec3 Nb = vec3(vP, zt) / uLift;',
-    '    vec3 Nbt = vec3(Nb.x, Nb.y * ct + Nb.z * st, -Nb.y * st + Nb.z * ct);',
-    '    float latB = asin(clamp(Nbt.y, -1.0, 1.0));',
-    '    float lonB = atan(Nbt.x, Nbt.z) + uRot;',
-    '    em = texture2D(uTex, vec2(fract(lonB * 0.15915494) * uTexSpan, clamp(0.5 - latB * 0.31830988, 0.0, 1.0)));',
-    '    em.a *= smoothstep(uLift, uLift - 6.0 * uPx, r);',
-    '  }',
-    '  if (r < 1.0) {',
-    '    float z = sqrt(1.0 - r * r);',
-    '    vec3 N = vec3(vP, z);',
-    // tilt: we orbit slightly north of the equator, so the equator dips
-    '    vec3 Nt = vec3(N.x, N.y * ct + N.z * st, -N.y * st + N.z * ct);',
-    '    float lat = asin(clamp(Nt.y, -1.0, 1.0));',
-    '    float lon = atan(Nt.x, Nt.z) + uRot;',
-    // terrain in the planet-fixed frame so it spins with the surface
-    '    vec3 P = vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));',
-    '    float terr = fbm(P * 2.8);',
-    '    float terr2 = fbm(P * 6.1 + 31.7);',
-    '    vec3 land = mix(uBase * 0.45, uBase * 1.4, smoothstep(0.32, 0.68, terr));',
-    '    land = mix(land, uAccent * 0.6, smoothstep(0.56, 0.78, terr2) * 0.5);',
-    '    float cap = smoothstep(0.78, 0.94, abs(sin(lat)) + (terr2 - 0.5) * 0.15);',
-    '    land = mix(land, vec3(0.82, 0.88, 0.94), cap * 0.65);',
-    // lighting: sun upper-left, soft terminator
-    '    vec3 L = normalize(vec3(-0.5, 0.45, 0.62));',
-    '    float ndl = dot(N, L);',
-    '    float day = smoothstep(-0.12, 0.3, ndl);',
-    '    float ambient = mix(0.55, 0.10, uDark);',
-    '    vec3 surf = land * (ambient + (1.0 - ambient) * max(ndl, 0.0));',
-    '    vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));',
-    '    surf += uAccent * pow(max(dot(N, H), 0.0), 70.0) * 0.4 * day;',
-    // atmosphere hugging the limb
-    '    float fres = pow(1.0 - z, 2.2);',
-    '    surf += uAccent * fres * (0.55 + uHover * 0.5);',
-    // the orbital billboards over the surface: emissive, brightest at night
-    '    float emBoost = mix(1.0, mix(1.7, 1.1, day), uDark);',
-    '    surf = mix(surf, em.rgb * emBoost, em.a * 0.95);',
-    '    surf += em.rgb * em.a * 0.4 * (1.0 - day) * uDark;',
-    '    float edge = smoothstep(1.0, 1.0 - 3.0 * uPx, r);',
-    '    outc = vec4(surf, edge);',
-    '  } else {',
-    // past the limb: atmosphere halo, with billboards hanging into space
-    '    float d = (r - 1.0) / (uMargin - 1.0);',
-    '    float glow = pow(max(1.0 - d, 0.0), 2.6);',
-    '    vec3 col = uAccent * (0.8 + 0.4 * glow);',
-    '    float a = glow * (0.32 + uHover * 0.28);',
-    '    float billBoost = mix(1.0, 1.45, uDark);',
-    '    col = mix(col, em.rgb * billBoost, em.a);',
-    '    a = max(a, em.a * 0.95);',
-    '    outc = vec4(col, a);',
-    '  }',
+    '  if (r >= 1.0) discard;',
+    '  float z = sqrt(max(0.0, 1.0 - r * r));',
+    '  vec3 N = vec3(vP, z);',
+    '  vec3 Nt = vec3(N.x, N.y * ct + N.z * st, -N.y * st + N.z * ct);',
+    '  float lat = asin(clamp(Nt.y, -1.0, 1.0));',
+    '  float lon = atan(Nt.x, Nt.z) + uRot;',
+    '  vec4 text = texture2D(uTex, vec2(fract(lon * 0.15915494) * uTexSpan, clamp(0.5 - lat * 0.31830988, 0.0, 1.0)));',
+    '  vec3 surface = sphereColor(vec2(vP.x, -vP.y), uCore, uAccent, uBase, 1.0);',
+    '  float ink = text.a * uTextAlpha * smoothstep(0.1, 0.45, z);',
+    '  surface = mix(surface, text.rgb, ink * 0.92);',
+    '  float edge = 1.0 - smoothstep(1.0 - uPx, 1.0, r);',
+    '  outc = vec4(surface, edge);',
     '  gl_FragColor = vec4(outc.rgb, outc.a * uAlpha);',
     '}',
   ].join('\n');
@@ -187,18 +134,12 @@
     'varying vec3 vCore, vMid, vEdge;',
     'varying float vState, vAA;',
     'uniform float uStarness, uAlpha, uDark, uDim;',
+    SPHERE_LIGHTING,
     'void main() {',
     '  vec2 q = gl_PointCoord * 2.0 - 1.0;',
     '  float d = length(q);',
     '  float S = 0.714;',    // sphere edge; star halo reaches d = 1
-    // sphere body — same look as the old makeSprite: radial gradient from an
-    // upper-left light center, limb darkening, specular kiss, AA edge
-    '  float t = clamp(d / S, 0.0, 1.0);',
-    '  float g = clamp(length(q - vec2(-0.3, -0.36) * S) / S, 0.0, 1.0);',
-    '  vec3 body = g < 0.5 ? mix(vCore, vMid, g * 2.0) : mix(vMid, vEdge, (g - 0.5) * 2.0);',
-    '  body *= 1.0 - smoothstep(0.55, 1.0, t) * 0.55;',
-    '  float sp = 1.0 - clamp(length(q - vec2(-0.38, -0.42) * S) / (0.5 * S), 0.0, 1.0);',
-    '  body += vec3(1.0) * sp * sp * 0.5 * (1.0 - uStarness);',
+    '  vec3 body = sphereColor(q / S, vCore, vMid, vEdge, 1.0 - uStarness);',
     '  float sphereA = uAlpha * (1.0 - uStarness * 0.42) * (1.0 - smoothstep(S - vAA * S, S, d));',
     // starlight core — hot pinpoint with soft falloff to the halo edge
     '  vec3 starCol = mix(vMid, mix(vCore, vec3(1.0), 0.42), uDark);',
@@ -280,12 +221,12 @@
         // planet program
         var planetProg = link(gl, PLANET_VERT, PLANET_FRAG);
         var PU = uniforms(gl, planetProg, ['uRes', 'uCenter', 'uRadius', 'uMargin', 'uTex',
-          'uRot', 'uTilt', 'uAlpha', 'uSeed', 'uTexSpan', 'uHover', 'uDark', 'uPx', 'uBase', 'uAccent', 'uLift', 'uAvatar']);
+          'uRot', 'uTilt', 'uAlpha', 'uTexSpan', 'uPx', 'uBase', 'uAccent', 'uAvatar', 'uCore', 'uTextAlpha']);
         var planetAPos = gl.getAttribLocation(planetProg, 'aPos');
         var quadBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-        var MARGIN = 1.35;
+        var MARGIN = 1.02;
 
         // point program
         var pointProg = link(gl, POINT_VERT, POINT_FRAG);
@@ -330,12 +271,20 @@
           }
           var t = gl.createTexture();
           gl.bindTexture(gl.TEXTURE_2D, t);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+          var source = cv;
+          var width = Math.pow(2, Math.round(Math.log2(cv.width)));
+          var height = Math.pow(2, Math.round(Math.log2(cv.height)));
+          if (width !== cv.width || height !== cv.height) {
+            source = document.createElement('canvas');
+            source.width = width;
+            source.height = height;
+            source.getContext('2d').drawImage(cv, 0, 0, width, height);
+          }
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-          var powerOfTwo = (cv.width & (cv.width - 1)) === 0 && (cv.height & (cv.height - 1)) === 0;
-          if (powerOfTwo) gl.generateMipmap(gl.TEXTURE_2D);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, powerOfTwo ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+          gl.generateMipmap(gl.TEXTURE_2D);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
           texCache.set(cv, { texture: t, lastFrame: textureFrame });
           return t;
@@ -499,10 +448,8 @@
             gl.activeTexture(gl.TEXTURE0);
             gl.uniform1i(PU.uTex, 0);
             gl.uniform2f(PU.uRes, W, H);
-            gl.uniform1f(PU.uDark, dark ? 1 : 0);
             gl.uniform1f(PU.uMargin, MARGIN);
             gl.uniform1f(PU.uTilt, 0.35);
-            gl.uniform1f(PU.uLift, 1.08);
           },
           // opts: {base:[r,g,b 0-1], accent:[r,g,b 0-1], seed, texSpan, hover, dpr}
           drawPlanet: function(texCanvas, sx, sy, R, alpha, rot, opts) {
@@ -511,10 +458,11 @@
             gl.uniform1f(PU.uRadius, R);
             gl.uniform1f(PU.uRot, rot);
             gl.uniform1f(PU.uAvatar, opts.avatar ? 1 : 0);
+            gl.uniform1f(PU.uTextAlpha, opts.textAlpha === undefined ? 1 : opts.textAlpha);
+            var core = opts.core || opts.accent;
+            gl.uniform3f(PU.uCore, core[0], core[1], core[2]);
             gl.uniform1f(PU.uAlpha, alpha);
-            gl.uniform1f(PU.uSeed, opts.seed || 0);
             gl.uniform1f(PU.uTexSpan, opts.texSpan || 0.8);
-            gl.uniform1f(PU.uHover, opts.hover ? 1 : 0);
             gl.uniform1f(PU.uPx, 1 / Math.max(8, R * (opts.dpr || 1)));
             gl.uniform3f(PU.uBase, opts.base[0], opts.base[1], opts.base[2]);
             gl.uniform3f(PU.uAccent, opts.accent[0], opts.accent[1], opts.accent[2]);

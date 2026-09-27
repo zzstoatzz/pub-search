@@ -84,7 +84,39 @@
     draw(blank, 30, false, 0);
     gl.readPixels(80, 80, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
     assert(pixel[3] > 240, 'Document planet path stopped rendering');
-    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; continuous hemisphere wrap; 300 visible textures without churn; inactive GPU eviction; document planet rendering.';
+    var ink = texture('#ffffff');
+    ink.width = 1280;
+    ink.height = 112;
+    var inkContext = ink.getContext('2d');
+    inkContext.fillStyle = '#ffffff';
+    inkContext.fillRect(0, 0, ink.width, ink.height);
+    var material = {core: [0.6, 0.9, 0.8], mid: [0.2, 0.6, 0.4], edge: [0.05, 0.2, 0.1]};
+    atlas.setPalette([material]);
+    atlas.uploadPoints(1, new Float32Array([0]), new Float32Array([0]), new Uint8Array([0]));
+    atlas.frame({W:160,H:160,dpr:1,dark:true,scale:1,cx:80,cy:80,radius:30,starness:0,alpha:1,dim:1,lineFade:0,hoverIdx:-1});
+    var samples = [[80,80],[70,90],[90,70]], points = [];
+    for (var xy of samples) {
+      gl.readPixels(xy[0],xy[1],1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+      points.push(Array.from(pixel));
+    }
+    atlas.uploadPoints(0, new Float32Array(0), new Float32Array(0), new Uint8Array(0));
+    var levels = [], documentUploads = uploads;
+    for (var opacity of [0, 0.25, 0.5, 0.75, 1]) {
+      frame(true);
+      atlas.drawPlanet(ink,80,80,30,1,0,{core:material.core,accent:material.mid,base:material.edge,textAlpha:opacity,dpr:1});
+      gl.readPixels(80,80,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+      levels.push(pixel[0]);
+      if (opacity === 0) {
+        for (var j=0;j<samples.length;j++) {
+          gl.readPixels(samples[j][0],samples[j][1],1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+          assert(points[j].every(function(v,k){return Math.abs(v-pixel[k])<6;}), 'Point and document lighting differ: '+points[j]+' / '+pixel);
+        }
+      }
+    }
+    assert(levels.every(function(v,j){return j===0 || v>levels[j-1];}), 'Text does not emerge progressively');
+    assert(uploads===documentUploads+1, 'Document detail changes reupload texture');
+    assert(gl.getError()===gl.NO_ERROR, 'Document rendering produced a WebGL error');
+    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; continuous hemisphere wrap; 300 visible textures without churn; inactive GPU eviction; matching point/document lighting; progressive text opacity; mipmapped document texture reused across detail levels.';
   } catch (error) {
     result.textContent = 'FAIL: ' + error.message;
     console.error(error);
