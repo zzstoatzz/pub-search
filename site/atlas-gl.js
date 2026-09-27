@@ -17,7 +17,7 @@
 (function() {
   'use strict';
 
-  // --- planet shaders (unchanged from planet-gl.js) ---
+  // --- planet shaders ---
   var PLANET_VERT = [
     'attribute vec2 aPos;',
     'uniform vec2 uRes;',
@@ -42,7 +42,7 @@
     '#endif',
     'varying vec2 vP;',
     'uniform sampler2D uTex;',
-    'uniform float uRot, uTilt, uAlpha, uSeed, uTexSpan, uHover, uDark, uPx, uMargin, uLift;',
+    'uniform float uRot, uTilt, uAlpha, uSeed, uTexSpan, uHover, uDark, uPx, uMargin, uLift, uAvatar;',
     'uniform vec3 uBase, uAccent;',
 
     'float hash3(vec3 p) {',
@@ -71,6 +71,22 @@
     '  float r = length(vP);',
     '  vec4 outc = vec4(0.0);',
     '  float ct = cos(uTilt), st = sin(uTilt);',
+    '  if (uAvatar > 0.5) {',
+    '    if (r >= 1.0) discard;',
+    '    float z = sqrt(max(0.0, 1.0 - r * r));',
+    '    vec3 N = vec3(vP, z);',
+    '    vec3 Nt = vec3(N.x, N.y * ct + N.z * st, -N.y * st + N.z * ct);',
+    '    float lon = mod(atan(Nt.x, Nt.z) + uRot + 1.57079633, 3.14159265) - 1.57079633;',
+    '    vec2 uv = vec2(0.5 + 0.5 * sqrt(max(0.0, 1.0 - Nt.y * Nt.y)) * sin(lon), 0.5 - 0.5 * Nt.y);',
+    '    vec4 art = texture2D(uTex, uv);',
+    '    vec3 L = normalize(vec3(-0.5, 0.45, 0.62));',
+    '    float light = 0.6 + 0.4 * max(dot(N, L), 0.0);',
+    '    vec3 color = mix(uBase, art.rgb, art.a) * light;',
+    '    color += vec3(0.12) * pow(max(dot(N, normalize(L + vec3(0,0,1))), 0.0), 70.0);',
+    '    float edge = 1.0 - smoothstep(1.0 - uPx, 1.0, r);',
+    '    gl_FragColor = vec4(color, edge * uAlpha);',
+    '    return;',
+    '  }',
     // the info shell: billboards in orbit, a few percent above the surface —
     // they float over the terrain and hang past the limb into space
     '  vec4 em = vec4(0.0);',
@@ -264,7 +280,7 @@
         // planet program
         var planetProg = link(gl, PLANET_VERT, PLANET_FRAG);
         var PU = uniforms(gl, planetProg, ['uRes', 'uCenter', 'uRadius', 'uMargin', 'uTex',
-          'uRot', 'uTilt', 'uAlpha', 'uSeed', 'uTexSpan', 'uHover', 'uDark', 'uPx', 'uBase', 'uAccent', 'uLift']);
+          'uRot', 'uTilt', 'uAlpha', 'uSeed', 'uTexSpan', 'uHover', 'uDark', 'uPx', 'uBase', 'uAccent', 'uLift', 'uAvatar']);
         var planetAPos = gl.getAttribLocation(planetProg, 'aPos');
         var quadBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -302,22 +318,35 @@
         var palMid = new Float32Array(PALETTE_SIZE * 3);
         var palEdge = new Float32Array(PALETTE_SIZE * 3);
 
-        // GL textures keyed by their source canvas — atlas.js rebuilds the
-        // canvas object on theme/accent change, so stale entries just get
-        // garbage-collected with the old canvas
-        var texCache = new WeakMap();
+        var texCache = new Map();
+        var textureFrame = 0;
         function getTex(cv) {
-          var t = texCache.get(cv);
-          if (t) return t;
-          t = gl.createTexture();
+          var entry = texCache.get(cv);
+          if (entry) {
+            entry.lastFrame = textureFrame;
+            texCache.delete(cv);
+            texCache.set(cv, entry);
+            return entry.texture;
+          }
+          var t = gl.createTexture();
           gl.bindTexture(gl.TEXTURE_2D, t);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          var powerOfTwo = (cv.width & (cv.width - 1)) === 0 && (cv.height & (cv.height - 1)) === 0;
+          if (powerOfTwo) gl.generateMipmap(gl.TEXTURE_2D);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, powerOfTwo ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-          texCache.set(cv, t);
+          texCache.set(cv, { texture: t, lastFrame: textureFrame });
           return t;
+        }
+
+        function trimTextures() {
+          texCache.forEach(function(entry, cv) {
+            if (texCache.size <= 256 || entry.lastFrame >= textureFrame - 1) return;
+            gl.deleteTexture(entry.texture);
+            texCache.delete(cv);
+          });
         }
 
         function setBlend() {
@@ -394,6 +423,8 @@
           // opts: {W, H, dpr, dark, scale, cx, cy, radius, starness, alpha,
           //        dim, lineFade, lineAlphas: [a,b,c], hoverIdx}
           frame: function(o) {
+            textureFrame++;
+            trimTextures();
             this.resize(o.W, o.H, o.dpr);
             gl.viewport(0, 0, canvas.width, canvas.height);
             gl.clearColor(0, 0, 0, 0);
@@ -479,6 +510,7 @@
             gl.uniform2f(PU.uCenter, sx, sy);
             gl.uniform1f(PU.uRadius, R);
             gl.uniform1f(PU.uRot, rot);
+            gl.uniform1f(PU.uAvatar, opts.avatar ? 1 : 0);
             gl.uniform1f(PU.uAlpha, alpha);
             gl.uniform1f(PU.uSeed, opts.seed || 0);
             gl.uniform1f(PU.uTexSpan, opts.texSpan || 0.8);

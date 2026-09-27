@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Atlas GL rendering checks</title>
+<pre id="result">running</pre>
+<canvas id="scene"></canvas>
+<script src="../../site/atlas-gl.js"></script>
+<script>
+(async function() {
+  var result = document.getElementById('result');
+  var canvas = document.getElementById('scene');
+  var gl = canvas.getContext('webgl');
+  var uploads = 0, deletes = 0;
+  var upload = gl.texImage2D.bind(gl), remove = gl.deleteTexture.bind(gl);
+  gl.texImage2D = function() { uploads++; return upload.apply(null, arguments); };
+  gl.deleteTexture = function(texture) { deletes++; return remove(texture); };
+  function assert(value, message) { if (!value) throw new Error(message); }
+  function texture(color) {
+    var cv = document.createElement('canvas');
+    cv.width = cv.height = 128;
+    var ctx = cv.getContext('2d');
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, 128, 128);
+    return cv;
+  }
+  try {
+    var atlas = window.AtlasGL.create(canvas);
+    assert(atlas, 'WebGL initialization failed');
+    function frame(dark) {
+      atlas.frame({ W: 160, H: 160, dpr: 1, dark: dark, lineFade: 0 });
+      atlas.beginPlanets(160, 160, 1, dark);
+    }
+    function draw(tex, radius, avatar, rotation) {
+      atlas.drawPlanet(tex, 80, 80, radius, 1, rotation || 0, {
+        avatar: avatar, base: [0, 0, 0], accent: [0, 1, 0], dpr: 1,
+      });
+      assert(gl.getError() === gl.NO_ERROR, 'WebGL error');
+    }
+    var red = texture('#ff0000');
+    var pixel = new Uint8Array(4);
+    var radii = [4, 6, 10, 14, 29, 30, 31, 60];
+    for (var dark of [true, false]) {
+      for (var radius of radii) {
+        for (var rotation of [0, 1, 2, 3, 4, 5]) {
+          frame(dark);
+          draw(red, radius, true, rotation);
+          gl.readPixels(80, 80, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+          assert(pixel[0] > 140 && pixel[1] < 25 && pixel[2] < 25 && pixel[3] > 240,
+            'Avatar changed at radius ' + radius + ', rotation ' + rotation + ': ' + pixel);
+        }
+      }
+    }
+    assert(uploads === 1, 'Zoom or theme reuploaded the avatar');
+    var many = Array.from({length: 300}, function() { return texture('#00ff00'); });
+    for (var pass = 0; pass < 3; pass++) {
+      frame(true);
+      for (var tex of many) draw(tex, 10, true, 0);
+    }
+    assert(uploads === 301, 'Visible textures churned in the cache');
+    for (var pass = 0; pass < 4; pass++) {
+      frame(true);
+      draw(many[0], 10, true, 0);
+    }
+    assert(deletes >= 45, 'Unused GPU textures were not released');
+    var before = uploads;
+    frame(true);
+    draw(many[0], 60, true, 0);
+    assert(uploads === before, 'Active texture was evicted');
+    var blank = document.createElement('canvas');
+    blank.width = 1280;
+    blank.height = 112;
+    draw(blank, 30, false, 0);
+    gl.readPixels(80, 80, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    assert(pixel[3] > 240, 'Document planet path stopped rendering');
+    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; 300 visible textures without churn; inactive GPU eviction; document planet rendering.';
+  } catch (error) {
+    result.textContent = 'FAIL: ' + error.message;
+    console.error(error);
+  }
+})();
+</script>

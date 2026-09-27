@@ -66,7 +66,7 @@
     // priority order: cluster labels (landmarks) first, then doc titles
     // (recommendation-ranked), then publication names with whatever's left.
     labels:    { titles: { s: 4, l: 12 }, coarse: { s: 5, l: 12 }, fine: { s: 6, l: 16 }, pubNames: { s: 3, l: 8 } },
-    avatars:   { budget: { s: 4, l: 12 }, cull: { s: 6, l: 4 }, imgThreshold: { s: 10, l: 12 } },
+    avatars:   { cull: { s: 6, l: 4 }, cacheSize: 256 },
     recommend: { limit: 250, boostFloor: 6 }, // popularity boost from /recommended
   };
 
@@ -196,23 +196,26 @@
     });
   }
 
-  var pubImages = {}; // basePath → HTMLImageElement (loaded)
+  var pubImages = {}; // basePath → resized avatar canvas
   var pubFailed = {}; // basePath → true (failed to load)
   var pubLoading = {}; // basePath → true (currently loading)
   var PUB_MAX_CONCURRENT = 6;
   var pubLoadCount = 0;
+  var pubImageUsed = new Map();
+  var renderFrame = 0;
 
   function pubImageUrl(pub) {
-    // prefer cover image, fall back to author avatar
+    if (pub.avatar) return pub.avatar;
     if (pub.did && pub.coverImage) {
       return 'https://cdn.bsky.app/img/feed_thumbnail/plain/' + pub.did + '/' + pub.coverImage + '@jpeg';
     }
-    if (pub.avatar) return pub.avatar;
     return null;
   }
 
   function loadPubImage(pub) {
     var key = pub.basePath;
+    pubImageUsed.delete(key);
+    pubImageUsed.set(key, renderFrame);
     if (pubImages[key] || pubFailed[key] || pubLoading[key]) return;
     if (pubLoadCount >= PUB_MAX_CONCURRENT) return;
     var url = pubImageUrl(pub);
@@ -230,7 +233,12 @@
       img.crossOrigin = 'anonymous';
     }
     img.onload = function() {
-      pubImages[key] = img;
+      var cv = document.createElement('canvas');
+      cv.width = cv.height = 256;
+      var g = cv.getContext('2d');
+      var side = Math.min(img.naturalWidth, img.naturalHeight);
+      g.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
+      pubImages[key] = cv;
       delete pubLoading[key];
       pubLoadCount--;
       markDirty();
@@ -239,6 +247,7 @@
       pubFailed[key] = true;
       delete pubLoading[key];
       pubLoadCount--;
+      markDirty();
     };
     img.src = url;
   }
@@ -816,221 +825,49 @@
     return e;
   }
 
-  // shading overlay (highlight upper-left, darkened limb) per radius bucket
-  // publication globes: a real shaded sphere per (platform, size bucket,
-  // theme) — same light model as the doc sprites/planets. Cached because
-  // hundreds can be on screen.
-  var pubSphereCache = {};
+  var coarseLayer = null;
+  var pubPlanetTex = new Map();
 
-  function getPubSphere(platform, R) {
-    var bucket = Math.max(4, Math.round(R / 3) * 3);
-    var theme = frameDark ? 'd' : 'l';
-    var key = platform + '_' + bucket + '_' + theme;
-    if (pubSphereCache[key]) return pubSphereCache[key];
-    var colors = frameColors[platform] || frameColors.other;
-    var size = Math.ceil(bucket * 2.2);
-    var cv = makeSprite(size, bucket, colors, 1, false, 0);
-    pubSphereCache[key] = cv;
-    return cv;
-  }
-
-  var coarseLayer = null; // offscreen compositing surface for the coarse nebula layer
-
-  // avatar patch cache: the sphere-wrapped (inverse-orthographic) version
-  // of each pub's avatar, rebuilt only when the image changes
-  var avatarPatchCache = new Map(); // basePath -> canvas
-
-  function getAvatarPatch(img, key) {
-    var hit = avatarPatchCache.get(key);
-    if (hit && hit._src === img) return hit;
-    if (avatarPatchCache.size > 64) avatarPatchCache.delete(avatarPatchCache.keys().next().value);
-    var THETA_MAX = Math.PI * 0.46;              // ~83 deg — the face IS the hemisphere
-    var pw = Math.round(PLANET_TEX_W * (THETA_MAX / Math.PI)); // lon span (half-width) in texels
-    var ph = Math.round(PLANET_TEX_H * (THETA_MAX / Math.PI)); // lat span (half-height)
-    var W2 = pw * 2, H2 = ph * 2;
-    // read the source at a modest fixed size
-    var S = 128;
-    var sc = document.createElement('canvas');
-    sc.width = S; sc.height = S;
-    var sg = sc.getContext('2d');
-    sg.drawImage(img, 0, 0, S, S);
-    var src = sg.getImageData(0, 0, S, S).data;
-    var out = document.createElement('canvas');
-    out.width = W2; out.height = H2;
-    var og = out.getContext('2d');
-    var dst = og.createImageData(W2, H2);
-    var d = dst.data;
-    var sinMax = Math.sin(THETA_MAX);
-    for (var y = 0; y < H2; y++) {
-      var dPhi = ((y / H2) - 0.5) * 2 * THETA_MAX;       // latitude offset
-      for (var x = 0; x < W2; x++) {
-        var dLam = ((x / W2) - 0.5) * 2 * THETA_MAX;     // longitude offset
-        // angular distance from the tangent point (center on the equator)
-        var cosT = Math.cos(dPhi) * Math.cos(dLam);
-        var theta = Math.acos(Math.min(1, Math.max(-1, cosT)));
-        if (theta > THETA_MAX) continue;                 // outside the wrap
-        // bearing from center
-        var bx = Math.cos(dPhi) * Math.sin(dLam), by = Math.sin(dPhi);
-        var bLen = Math.sqrt(bx * bx + by * by) || 1;
-        // orthographic wrap: image radius proportional to sin(theta)
-        var r = Math.sin(theta) / sinMax;                // 0..1
-        var sx = Math.round((0.5 + 0.5 * r * (bx / bLen)) * (S - 1));
-        var sy = Math.round((0.5 + 0.5 * r * (by / bLen)) * (S - 1));
-        var si = (sy * S + sx) * 4, di = (y * W2 + x) * 4;
-        d[di] = src[si]; d[di + 1] = src[si + 1]; d[di + 2] = src[si + 2];
-        // feathered circular edge
-        var fade = Math.min(1, (THETA_MAX - theta) / (THETA_MAX * 0.12));
-        d[di + 3] = Math.round(src[si + 3] * fade);
-      }
-    }
-    og.putImageData(dst, 0, 0);
-    out._src = img;
-    avatarPatchCache.set(key, out);
-    return out;
-  }
-
-  // shared featureless texture for small pub globes (body still shaded by
-  // baseRGB/accentRGB in the GL path — this only omits the text)
-  var blankPlanetTexCanvas = null;
-  function getBlankPlanetTexture() {
-    if (!blankPlanetTexCanvas) {
-      blankPlanetTexCanvas = document.createElement('canvas');
-      blankPlanetTexCanvas.width = PLANET_TEX_W + PLANET_TEX_BLEED;
-      blankPlanetTexCanvas.height = PLANET_TEX_H;
-    }
-    return blankPlanetTexCanvas;
-  }
-
-  // publication planet textures — same vegas-sphere treatment as documents:
-  // name marquee + basePath band, rotated by the same GL renderer.
-  var pubPlanetTex = new Map(); // basePath -> texture entry
-
-  function getPubPlanetTexture(pub, img, withText) {
-    var theme = frameDark ? 'dark' : 'light';
-    resolvePubAccent(pub);
-    var accent = pubAccents[pub.basePath] || null;
-    var accentKey = accent ? accent.key : 'none';
+  function getPubPlanetTexture(pub) {
+    var img = pubImages[pub.basePath] || null;
     var e = pubPlanetTex.get(pub.basePath);
-    if (e && e.theme === theme && e.accentKey === accentKey && e.hasAvatar === !!img && e.withText === !!withText) return e;
-    if (pubPlanetTex.size > 96) pubPlanetTex.delete(pubPlanetTex.keys().next().value);
-    var platform = pub.platform || 'other';
-    var c = frameColors[platform] || frameColors.other;
-    var cv = document.createElement('canvas');
-    cv.width = PLANET_TEX_W + PLANET_TEX_BLEED;
-    cv.height = PLANET_TEX_H;
-    var g = cv.getContext('2d');
-    var baseRGB, accentRGB;
-    if (accent && accent.rgb) {
-      baseRGB = accent.bgRgb
-        ? [Math.round(accent.bgRgb[0] * 255), Math.round(accent.bgRgb[1] * 255), Math.round(accent.bgRgb[2] * 255)]
-        : hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
-      accentRGB = [Math.round(accent.rgb[0] * 255), Math.round(accent.rgb[1] * 255), Math.round(accent.rgb[2] * 255)];
-    } else if (accent) {
-      baseRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.30 : 0.62);
-      accentRGB = hslToRgb(accent.h, accent.s, frameDark ? 0.55 : 0.45);
-    } else {
-      baseRGB = parseHex(c.edge);
-      accentRGB = parseHex(c.mid);
+    if (e && e.image === img) return e;
+    var cv = img;
+    var c = PLATFORM_COLORS[pub.platform] || PLATFORM_COLORS.other;
+    if (!cv) {
+      cv = document.createElement('canvas');
+      cv.width = cv.height = 128;
+      var g = cv.getContext('2d');
+      g.fillStyle = c.edge;
+      g.fillRect(0, 0, 128, 128);
+      g.fillStyle = c.core;
+      g.font = 'bold 64px monospace';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText((pub.name || pub.basePath || '?').slice(0, 1).toUpperCase(), 64, 64);
     }
-    if (img) {
-      // shrink-wrap the avatar onto the sphere. The texture is equirect
-      // (u = longitude, v = latitude), so a linear blit is an arc-length
-      // decal — it reads as a flat sticker. Instead, inverse-orthographic
-      // azimuthal projection about the patch center: for each texel at
-      // angular distance theta / bearing alpha from the tangent point,
-      // sample the source at radius sin(theta)/sin(thetaMax) — what a flat
-      // image physically does when wrapped over a ball — with a feathered
-      // circular edge.
-      var patch = getAvatarPatch(img, pub.basePath);
-      var periodA = PLANET_TEX_W / 2; // two faces per revolution
-      for (var ka = 0; ka * periodA < cv.width; ka++) {
-        g.drawImage(patch, ka * periodA + (periodA - patch.width) / 2, (PLANET_TEX_H - patch.height) / 2);
-      }
-      if (withText) {
-        // the name hangs in the low atmosphere: same projected marquee as
-        // the text planets, in the southern band, at the doc planets' meta latitude (the shader draws polar caps past |sin lat| ~0.78, which swallows anything lower). stroked so it reads over
-        // whatever the avatar puts underneath it
-        var nameA = pub.name || pub.basePath || '?';
-        if (nameA.length > 41) nameA = nameA.slice(0, 40) + '…';
-        g.font = 'bold 26px monospace';
-        g.textBaseline = 'middle';
-        g.textAlign = 'left';
-        var twA = g.measureText(nameA).width;
-        var mT = Math.max(1, Math.floor(PLANET_TEX_W / (twA + 100)));
-        var periodT = PLANET_TEX_W / mT;
-        // darken the band first: the texture is sampled emissively, so
-        // white text over a bright avatar region has no contrast without it
-        g.fillStyle = 'rgba(0,0,0,0.55)';
-        g.fillRect(0, 64, cv.width, 30);
-        g.lineWidth = 5;
-        g.strokeStyle = 'rgba(0,0,0,0.75)';
-        g.fillStyle = 'rgba(255,255,255,0.95)';
-        for (var kt = 0; kt * periodT < cv.width; kt++) {
-          g.strokeText(nameA, kt * periodT, 79);
-          g.fillText(nameA, kt * periodT, 79);
-        }
-      }
-      var eA = buildTexEntry(pub, cv, theme, accentKey, baseRGB, accentRGB, true);
-      eA.withText = !!withText;
-      pubPlanetTex.set(pub.basePath, eA);
-      return eA;
-    }
-    g.fillStyle = hexToRgba(c.mid, 0.35);
-    g.fillRect(0, 10, cv.width, 2);
-    g.fillRect(0, PLANET_TEX_H - 12, cv.width, 2);
-    g.textBaseline = 'middle';
-    g.textAlign = 'left';
-    var title = pub.name || pub.basePath || '?';
-    if (title.length > 41) title = title.slice(0, 40) + '…';
-    g.font = 'bold 40px monospace';
-    var tw = g.measureText(title).width;
-    var m = Math.max(1, Math.floor(PLANET_TEX_W / (tw + 100)));
-    var period = PLANET_TEX_W / m;
-    g.fillStyle = frameDark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)';
-    for (var k = 0; k * period < cv.width; k++) {
-      g.fillText(title, k * period, 46);
-      if (period - tw > 40) {
-        g.save();
-        g.fillStyle = c.core;
-        g.beginPath();
-        g.arc(k * period + tw + (period - tw) / 2, 46, 7, 0, Math.PI * 2);
-        g.fill();
-        g.restore();
-      }
-    }
-    var meta = pub.count ? pub.count + ' documents' : (pub.basePath || '');
-    if (meta) {
-      if (meta.length > 46) meta = meta.slice(0, 45) + '…';
-      g.font = '21px monospace';
-      if (accent) g.fillStyle = accentCss(accent, frameDark ? 0.70 : 0.30);
-      else g.fillStyle = frameDark ? hexToRgba(c.core, 0.9) : 'rgba(0,0,0,0.6)';
-      var mw = g.measureText(meta).width;
-      var m2 = Math.max(1, Math.floor(PLANET_TEX_W / (mw + 80)));
-      var period2 = PLANET_TEX_W / m2;
-      for (var k2 = 0; k2 * period2 < cv.width; k2++) {
-        g.fillText(meta, k2 * period2, 79);
-      }
-    }
-    e = buildTexEntry(pub, cv, theme, accentKey, baseRGB, accentRGB, false);
-    e.withText = !!withText;
+    var seedN = 0;
+    for (var si = 0; si < pub.basePath.length; si++) seedN = (seedN * 31 + pub.basePath.charCodeAt(si)) >>> 0;
+    e = {
+      canvas: cv,
+      image: img,
+      speed: 0.14 + (seedN % 7) * 0.02,
+      phase: (seedN % 31) * 0.45,
+      baseRGB: parseHex(c.edge).map(function(v) { return v / 255; }),
+      accentRGB: parseHex(c.mid).map(function(v) { return v / 255; }),
+    };
     pubPlanetTex.set(pub.basePath, e);
     return e;
   }
 
-  function buildTexEntry(pub, cv, theme, accentKey, baseRGB, accentRGB, hasAvatar) {
-    var seedN = 0;
-    for (var si = 0; si < pub.basePath.length; si++) seedN = (seedN * 31 + pub.basePath.charCodeAt(si)) >>> 0;
-    return {
-      canvas: cv,
-      theme: theme,
-      accentKey: accentKey,
-      hasAvatar: hasAvatar,
-      speed: 0.14 + (seedN % 7) * 0.02,
-      phase: (seedN % 31) * 0.45,
-      seed: (seedN % 97) * 1.3,
-      baseRGB: [baseRGB[0] / 255, baseRGB[1] / 255, baseRGB[2] / 255],
-      accentRGB: [accentRGB[0] / 255, accentRGB[1] / 255, accentRGB[2] / 255],
-    };
+  function trimPubImages() {
+    pubImageUsed.forEach(function(lastFrame, key) {
+      if (pubImageUsed.size <= ATLAS_TUNE.avatars.cacheSize) return;
+      if (lastFrame >= renderFrame - 1 || pubLoading[key]) return;
+      pubImageUsed.delete(key);
+      delete pubImages[key];
+      pubPlanetTex.delete(key);
+    });
   }
 
   var planetShadeCache = {};
@@ -1326,6 +1163,7 @@
   function render() {
     if (!data || !view.dirty) return;
     view.dirty = false;
+    renderFrame++;
 
     // cache theme + colors once per frame
     cacheFrameColors();
@@ -1515,13 +1353,8 @@
     planetsActive = false; // recomputed each frame (pub globes below, doc planets later)
     if (pubData && pubData.length > 0) {
       var pubLabelZoom = 3;
-      // Avatar imagery is the loudest thing on the map — spend it sparingly.
-      // pubData is sorted biggest-first, so this budget lands on the most
-      // prominent visible publications.
       var avKey = smallViewport ? 's' : 'l';
-      var avatarBudget = ATLAS_TUNE.avatars.budget[avKey];
       var pubCull = ATLAS_TUNE.avatars.cull[avKey];
-      var imgThreshold = ATLAS_TUNE.avatars.imgThreshold[avKey];
       for (var pi2 = 0; pi2 < pubData.length; pi2++) {
         var pub = pubData[pi2];
         var pr = pubRadius(pub, zoom);
@@ -1536,24 +1369,18 @@
         });
         if (overlaps) continue;
         visiblePubs.push({ index: pi2, sx: psx, sy: psy, r: pr });
-        var pPlatform = pub.platform || 'other';
-        var pColors = frameColors[pPlatform] || frameColors.other;
-
+        loadPubImage(pub);
+        var pTex = getPubPlanetTexture(pub);
         if (atlasGL) {
-          // literal globe: the same rotating vegas-sphere as the documents.
-          // budgeted pubs get their avatar wrapped onto the surface — a
-          // planet of that person; the rest carry the name marquee.
-          // NOTE: drawn AFTER the point pass below, so publisher faces sit
-          // cleanly above the document confetti instead of under it.
-          var wantAvatar = pr >= imgThreshold && avatarBudget > 0;
-          if (wantAvatar) { loadPubImage(pub); avatarBudget--; }
-          var pImg = wantAvatar ? pubImages[pub.basePath] : null;
-          pubPlanetCands.push({ pub: pub, sx: psx, sy: psy, r: pr, img: pImg });
+          pubPlanetCands.push({ pub: pub, sx: psx, sy: psy, r: pr, texture: pTex });
         } else {
-          // no-GL fallback: a static shaded sphere in the platform palette
-          var sphere = getPubSphere(pPlatform, pr);
-          ctx.globalAlpha = 0.85;
-          ctx.drawImage(sphere, psx - pr * 1.1, psy - pr * 1.1, pr * 2.2, pr * 2.2);
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(psx, psy, pr, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(pTex.canvas, psx - pr, psy - pr, pr * 2, pr * 2);
+          ctx.drawImage(getPlanetShade(pr), psx - pr, psy - pr, pr * 2, pr * 2);
+          ctx.restore();
         }
 
         // name labels no longer draw here \u2014 they queue for the shared label
@@ -1631,21 +1458,15 @@
     if (atlasGL && pubPlanetCands.length > 0) {
       var pubTSec = performance.now() / 1000;
       atlasGL.beginPlanets(W, H, dpr, dark);
-      var pubTexSpan = PLANET_TEX_W / (PLANET_TEX_W + PLANET_TEX_BLEED);
       for (var pc = 0; pc < pubPlanetCands.length; pc++) {
         var pcand = pubPlanetCands[pc];
-        var pTex = getPubPlanetTexture(pcand.pub, pcand.img, pcand.r >= 30);
+        var pTex = pcand.texture;
         var pRot = (pubTSec * pTex.speed + pTex.phase) % (Math.PI * 2);
-        // below marquee size projected TEXT is illegible scribble, so
-        // text-only globes stay clean spheres until they're landmarks —
-        // but a face reads at any size, so avatar planets always wear it
-        var pCanvas = (pTex.hasAvatar || pcand.r >= 30) ? pTex.canvas : getBlankPlanetTexture();
         try {
-          atlasGL.drawPlanet(pCanvas, pcand.sx, pcand.sy, pcand.r, 1, pRot, {
+          atlasGL.drawPlanet(pTex.canvas, pcand.sx, pcand.sy, pcand.r, 1, pRot, {
             base: pTex.baseRGB,
             accent: pTex.accentRGB,
-            seed: pTex.seed,
-            texSpan: pubTexSpan,
+            avatar: true,
             hover: false,
             dpr: dpr,
           });
@@ -2092,6 +1913,7 @@
     }
 
     ctx.globalAlpha = 1;
+    trimPubImages();
   }
 
   // --- animation loop ---
@@ -2585,7 +2407,6 @@
           bumped++;
         }
         if (bumped > 0) {
-          // re-sort biggest-first so the avatar budget follows the new sizes
           pubData.sort(function(a, b) { return pubSizeScore(b) - pubSizeScore(a); });
           markDirty();
         }
@@ -2697,8 +2518,6 @@
         for (var pi = 0; pi < pubData.length; pi++) {
           if (pubData[pi].basePath) pubByBasePath.set(pubData[pi].basePath, pubData[pi]);
         }
-        // Render the biggest publications first so the per-frame avatar budget
-        // (see render) spends on the most prominent ones — the rest stay quiet.
         pubData.sort(function(a, b) { return (b.count || 0) - (a.count || 0); });
 
         // --- fine-cluster lanterns ---
