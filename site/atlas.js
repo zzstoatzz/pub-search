@@ -137,6 +137,7 @@
   var pointsY = null;
   var platformIdx = null;
   var gridIndex = null;
+  var pointSpacing = null;
   var uriToIndex = null; // Map<uri, index> for search matching
   var clusterFineArr = null; // Uint16Array of fine cluster IDs per point
   var pointHueArr = null; // Uint8Array: hue step for 'other' points, 255 = platform color
@@ -684,6 +685,36 @@
     }
   }
 
+  function buildPointSpacing() {
+    var cs = 0.006, cells = new Map(), n = pointsX.length;
+    pointSpacing = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var key = Math.floor(pointsX[i] / cs) + ',' + Math.floor(pointsY[i] / cs);
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(i);
+    }
+    for (var i = 0; i < n; i++) {
+      var gx = Math.floor(pointsX[i] / cs), gy = Math.floor(pointsY[i] / cs), best = cs * cs;
+      for (var x = gx - 1; x <= gx + 1; x++) for (var y = gy - 1; y <= gy + 1; y++) {
+        var cell = cells.get(x + ',' + y);
+        if (!cell) continue;
+        for (var k = 0; k < cell.length; k++) {
+          var j = cell[k];
+          if (j === i) continue;
+          var dx = pointsX[i] - pointsX[j], dy = pointsY[i] - pointsY[j];
+          best = Math.min(best, dx * dx + dy * dy);
+        }
+      }
+      pointSpacing[i] = Math.sqrt(best);
+    }
+  }
+
+  function documentRadius(i, radius) {
+    if (atlasGL) radius = Math.min(radius, atlasGL.pointRadiusLimit(dpr));
+    var room = Math.max(1.2, pointSpacing[i] * scale * 0.48);
+    return radius / Math.pow(1 + Math.pow(radius / room, 8), 0.125);
+  }
+
   function findNearest(sx, sy, maxDist) {
     if (!gridIndex) return -1;
     var d = screenToData(sx, sy);
@@ -874,7 +905,7 @@
   // sphere projection: vertical strips, longitude per column via asin,
   // column height from the circle chord — a wrapped cylinder squashed into
   // the silhouette, which reads as a rotating globe.
-  function drawPlanet(i, sx, sy, R, alpha, tSec, textAlpha) {
+  function drawPlanet(i, sx, sy, R, alpha, tSec) {
     var tex = getPlanetTexture(i);
     var rot = tSec * tex.speed + tex.phase;
     var TWO_PI = Math.PI * 2;
@@ -885,20 +916,13 @@
     ctx.beginPath();
     ctx.arc(sx, sy, R, 0, TWO_PI);
     ctx.clip();
-    // the texture is emissive-only (transparent bg) — lay down the surface
-    var body = ctx.createRadialGradient(sx - R * 0.3, sy - R * 0.36, R * 0.08, sx, sy, R);
-    body.addColorStop(0, tex.colors.core);
-    body.addColorStop(0.5, tex.colors.mid);
-    body.addColorStop(1, tex.colors.edge);
-    ctx.fillStyle = body;
-    ctx.fillRect(sx - R, sy - R, R * 2, R * 2);
     // TILT: we view each planet from slightly north of its equator, so the
     // text rows dip at the center of the face and curl up toward the limb —
     // approximated by stretching each strip downward in proportion to its
     // chord height (max at center, zero at the edges).
     var TILT = 0.22;
     var step = R > 50 ? 3 : 2;
-    ctx.globalAlpha = alpha * textAlpha;
+    ctx.globalAlpha = alpha;
     var prevLam = -Math.PI / 2;
     for (var x = -R; x < R; x += step) {
       var x2 = Math.min(R, x + step);
@@ -916,19 +940,7 @@
       ctx.drawImage(tex.canvas, u0, 0, srcW, texH, sx + x, sy - h, destW, h * 2 + dip);
       prevLam = lam2;
     }
-    ctx.globalAlpha = alpha;
-    var shade = getPlanetShade(R);
-    ctx.drawImage(shade, sx - R, sy - R, R * 2, R * 2);
     ctx.restore();
-    // rim
-    var platform = PLATFORMS[platformIdx[i]];
-    ctx.globalAlpha = alpha * (i === hoveredIndex || i === selectedIndex ? 0.95 : 0.5);
-    ctx.beginPath();
-    ctx.arc(sx, sy, R, 0, TWO_PI);
-    ctx.strokeStyle = frameColors[platform].core;
-    ctx.lineWidth = i === hoveredIndex || i === selectedIndex ? 2 : 1.25;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
   }
 
   function findCardAt(sx, sy) {
@@ -1376,7 +1388,7 @@
     }
 
     // --- points ---
-    var pointR = Math.min(7, planetRadiusFor(zoom));
+    var pointR = Math.min(planetRadiusFor(zoom), atlasGL ? atlasGL.pointRadiusLimit(dpr) : Infinity);
     var starness = zoom >= 2 ? fadeOut(zoom, 7, 8) : 1;
     var filtering = activePlatforms !== null;
     if (atlasGL) {
@@ -1420,7 +1432,8 @@
           if (useGlow) {
             var set = hue !== 255 ? getHueSprite(hue) : sprites[pi];
             var spr = i === hoveredIndex ? set.hover : set.normal;
-            ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
+            var size = spr.width / dpr * documentRadius(i, pointR) / pointR;
+            ctx.drawImage(spr, sx - size / 2, sy - size / 2, size, size);
           } else {
             var dot = hue !== 255 ? getHueDotSprite(hue) : dotSprites[pi];
             ctx.drawImage(dot, sx - dot.width / (2 * dpr), sy - dot.height / (2 * dpr), dot.width / dpr, dot.height / dpr);
@@ -1428,32 +1441,6 @@
         }
       }
       ctx.globalAlpha = 1;
-    }
-
-    // --- publication planets: drawn ABOVE the point field ---
-    if (atlasGL && pubPlanetCands.length > 0) {
-      var pubTSec = performance.now() / 1000;
-      atlasGL.beginPlanets(W, H, dpr, dark);
-      for (var pc = 0; pc < pubPlanetCands.length; pc++) {
-        var pcand = pubPlanetCands[pc];
-        var pTex = pcand.texture;
-        var pRot = (pubTSec * pTex.speed + pTex.phase) % (Math.PI * 2);
-        try {
-          atlasGL.drawPlanet(pTex.canvas, pcand.sx, pcand.sy, pcand.r, 1, pRot, {
-            base: pTex.baseRGB,
-            accent: pTex.accentRGB,
-            avatar: true,
-            hover: false,
-            dpr: dpr,
-          });
-        } catch (texErr) {
-          // tainted avatar canvas — evict and never retry the image
-          pubPlanetTex.delete(pcand.pub.basePath);
-          pubFailed[pcand.pub.basePath] = true;
-          delete pubImages[pcand.pub.basePath];
-        }
-      }
-      planetsActive = true; // keep frames coming so the globes rotate
     }
 
     // --- search highlights (2D fallback; GL handles this via point state) ---
@@ -1473,7 +1460,8 @@
         var hue = pointHueArr ? pointHueArr[i] : 255;
         if (useGlow) {
           var spr = hue !== 255 ? getHueSprite(hue).hover : sprites[pi].hover;
-          ctx.drawImage(spr, sx - spr.width / (2 * dpr), sy - spr.height / (2 * dpr), spr.width / dpr, spr.height / dpr);
+          var size = spr.width / dpr * documentRadius(i, pointR) / pointR;
+            ctx.drawImage(spr, sx - size / 2, sy - size / 2, size, size);
         } else {
           var dot = hue !== 255 ? getHueDotSprite(hue) : dotSprites[pi];
           ctx.drawImage(dot, sx - dot.width / (2 * dpr), sy - dot.height / (2 * dpr), dot.width / dpr, dot.height / dpr);
@@ -1550,8 +1538,6 @@
     var coarseAlpha = fadeOut(zoom, 1.7, 0.6);
     var fineAlpha = fadeIn(zoom, 1.7, 0.6) * fadeOut(zoom, 45, 15);
     var titleAlpha = fadeIn(zoom, 4.5, 1.0) * fadeOut(zoom, 110, 40);
-    var planetAlpha = clamp01(Math.log(zoom / 12) / Math.log(100 / 12));
-    planetAlpha *= planetAlpha * (3 - 2 * planetAlpha);
     var cardAlpha = fadeIn(zoom, CARD_START, CARD_RANGE);
 
     // --- document planets: info projected onto rotating orbs ---
@@ -1559,8 +1545,8 @@
     var pubPlanetsSpinning = planetsActive;
     planetsActive = pubPlanetsSpinning;
     var planetR = 0;
-    if (planetAlpha > 0.01) {
-      planetR = planetRadiusFor(zoom);
+    if (pointR > 2) {
+      planetR = pointR;
       var tSec = performance.now() / 1000;
       // nearest-to-viewport-center docs win the planet slots
       var maxPlanets = small ? 48 : 80;
@@ -1575,30 +1561,15 @@
         var sx = cx + px * scale, sy = cy + py * scale;
         if (sx + planetR < 0 || sx - planetR > W || sy + planetR < 0 || sy - planetR > H) continue;
         var ddx = sx - vcx, ddy = sy - vcy;
-        cands.push({ i: i, sx: sx, sy: sy, d: ddx * ddx + ddy * ddy });
+        var radius = documentRadius(i, pointR);
+        if (radius > 2) cands.push({ i: i, sx: sx, sy: sy, r: radius, d: ddx * ddx + ddy * ddy });
       }
       cands.sort(function(a, b) { return a.d - b.d; });
       var cutoff = cands.length > maxPlanets ? Math.sqrt(cands[maxPlanets].d) : Math.sqrt(W * W + H * H) / 2;
       if (cands.length > maxPlanets) cands.length = maxPlanets;
-      // adaptive radius: shrink to local spacing so dense clusters read as
-      // distinct globes instead of overlapping mud
-      var rMin = Math.min(pointR, planetR);
       for (var c = 0; c < cands.length; c++) {
-        var best = Infinity;
-        for (var c2 = 0; c2 < cands.length; c2++) {
-          if (c2 === c) continue;
-          var dx2 = cands[c].sx - cands[c2].sx, dy2 = cands[c].sy - cands[c2].sy;
-          var dd = dx2 * dx2 + dy2 * dy2;
-          if (dd < best) best = dd;
-        }
         var weight = clamp01((cutoff - Math.sqrt(cands[c].d)) / Math.max(1, cutoff * 0.3));
-        weight *= weight * (3 - 2 * weight);
-        var radius = best === Infinity ? planetR
-          : Math.max(rMin, Math.min(planetR, Math.sqrt(best) * 0.48));
-        cands[c].r = pointR + (radius - pointR) * weight;
-        cands[c].alpha = planetAlpha * weight;
-        var textAlpha = clamp01((cands[c].r - 4) / 28);
-        cands[c].textAlpha = textAlpha * textAlpha * (3 - 2 * textAlpha);
+        cands[c].alpha = weight * weight * (3 - 2 * weight);
       }
       if (atlasGL) {
         atlasGL.beginPlanets(W, H, dpr, dark);
@@ -1608,8 +1579,8 @@
           var pcT = getPlanetTexture(pcI);
           var pcRot = (tSec * pcT.speed + pcT.phase) % (Math.PI * 2);
           atlasGL.drawPlanet(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, pcRot, {
+            surfaceOnly: true,
             core: pcT.coreRGB,
-            textAlpha: cands[c].textAlpha,
             base: pcT.baseRGB,
             accent: pcT.accentRGB,
             seed: (pcI % 97) * 1.3,
@@ -1620,15 +1591,41 @@
         }
       } else {
         for (var c = 0; c < cands.length; c++) {
-          drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, tSec, cands[c].textAlpha);
+          drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, tSec);
         }
       }
       planetsActive = cands.length > 0 || pubPlanetsSpinning;
     }
 
+    // --- publication planets: drawn ABOVE the point field ---
+    if (atlasGL && pubPlanetCands.length > 0) {
+      var pubTSec = performance.now() / 1000;
+      atlasGL.beginPlanets(W, H, dpr, dark);
+      for (var pc = 0; pc < pubPlanetCands.length; pc++) {
+        var pcand = pubPlanetCands[pc];
+        var pTex = pcand.texture;
+        var pRot = (pubTSec * pTex.speed + pTex.phase) % (Math.PI * 2);
+        try {
+          atlasGL.drawPlanet(pTex.canvas, pcand.sx, pcand.sy, pcand.r, 1, pRot, {
+            base: pTex.baseRGB,
+            accent: pTex.accentRGB,
+            avatar: true,
+            hover: false,
+            dpr: dpr,
+          });
+        } catch (texErr) {
+          // tainted avatar canvas — evict and never retry the image
+          pubPlanetTex.delete(pcand.pub.basePath);
+          pubFailed[pcand.pub.basePath] = true;
+          delete pubImages[pcand.pub.basePath];
+        }
+      }
+      planetsActive = true; // keep frames coming so the globes rotate
+    }
+
     // --- hover/selection card: unfurled flat view of one document ---
     cardHitRects = null;
-    var focusIdx = hoveredIndex >= 0 ? hoveredIndex : selectedIndex;
+    var focusIdx = selectedIndex >= 0 || selectedPub >= 0 ? -1 : hoveredIndex;
     if (cardAlpha > 0.01 && focusIdx >= 0 && focusIdx < n) {
       cardHitRects = [];
       if (focusIdx !== unfurlFor) { unfurlFor = focusIdx; unfurlStart = performance.now(); }
@@ -1897,6 +1894,18 @@
       }
     }
 
+    if (selectedPub >= 0 || selectedIndex >= 0) {
+      var pub = selectedPub >= 0 ? pubData[selectedPub] : null;
+      var x = cx + (pub ? pub.cx : pointsX[selectedIndex]) * scale;
+      var y = cy + (pub ? pub.cy : pointsY[selectedIndex]) * scale;
+      var radius = pub ? pubRadius(pub,zoom) : documentRadius(selectedIndex,pointR);
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = dark ? '#fff' : '#222';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x,y,radius+4,0,Math.PI*2);
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
     trimPubImages();
   }
@@ -1927,6 +1936,8 @@
     frameRequested = false;
     tickAnimation();
     render();
+    updateSelection();
+
     // keep looping while animating, or while rotating planets are on screen
     if (animating) {
       scheduleFrame();
@@ -1941,14 +1952,10 @@
   var hoveredPub = -1; // index into pubData
   var mouseX = 0, mouseY = 0;
 
-  function findNearestPub(sx, sy) {
+  function findNearestPub(sx, sy, type) {
     if (view.dirty) render();
-    for (var i = 0; i < visiblePubs.length; i++) {
-      var pub = visiblePubs[i];
-      var dx = sx - pub.sx, dy = sy - pub.sy;
-      if (dx * dx + dy * dy <= pub.r * pub.r) return pub.index;
-    }
-    return -1;
+    var hit = AtlasInteraction.pick(visiblePubs, sx, sy, type || 'mouse');
+    return hit ? hit.index : -1;
   }
 
   function pubUrl(pub) {
@@ -1982,16 +1989,13 @@
 
   // --- mobile detection ---
   var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  var HIT_RADIUS = isMobile ? 40 : 20;
 
-  // --- interaction state ---
-  var dragging = false;
-  var dragStartX, dragStartY, dragStartPanX, dragStartPanY;
-  var pinchStartDist = 0, pinchStartZoom = 1;
-  var pinchMidX = 0, pinchMidY = 0, pinchStartPanX = 0, pinchStartPanY = 0;
+  var selectedIndex = -1;
+  var selectedPub = -1;
 
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
+    hideTooltip();
     // scale zoom proportionally to deltaY — gentle for trackpad, snappy for mouse wheel
     // deltaMode 1 = lines (mouse wheel): multiply by 40 to approximate pixels
     var dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
@@ -2007,238 +2011,95 @@
     markDirty();
   }, { passive: false });
 
-  canvas.addEventListener('mousedown', function(e) {
-    if (e.button !== 0) return;
-    dragging = true;
-    dragStartX = e.clientX; dragStartY = e.clientY;
-    dragStartPanX = view.panX; dragStartPanY = view.panY;
-  });
-
-  window.addEventListener('mousemove', function(e) {
-    mouseX = e.clientX; mouseY = e.clientY;
-    if (dragging) {
-      cacheTransform();
-      view.panX = dragStartPanX + (e.clientX - dragStartX) / scale;
-      view.panY = dragStartPanY + (e.clientY - dragStartY) / scale;
-      markDirty();
-      hideTooltip();
-      return;
-    }
+  function pickNode(x, y, type) {
     cacheTransform();
-    // document cards are topmost — they show everything the tooltip would,
-    // so hovering one just highlights it and arms the click
-    var cardIdx = findCardAt(mouseX, mouseY);
-    if (cardIdx >= 0) {
-      if (hoveredIndex !== cardIdx || hoveredPub !== -1) {
-        hoveredPub = -1;
-        hoveredIndex = cardIdx;
-        tooltip.style.display = 'none';
-        markDirty();
-      }
-      canvas.style.cursor = 'pointer';
-      return;
+    var card = findCardAt(x,y);
+    if (card >= 0) return {pub:-1,document:card};
+    var pub = findNearestPub(x, y, type);
+    if (pub >= 0) return {pub: pub, document: -1};
+    var reach = AtlasInteraction.reach(type);
+    var index = findNearest(x, y, Math.max(reach, planetRadiusFor(view.zoom)));
+    if (index >= 0 && pointSpacing) {
+      var radius = documentRadius(index, planetRadiusFor(view.zoom));
+      if (Math.hypot(x - (cx + pointsX[index] * scale), y - (cy + pointsY[index] * scale)) > Math.max(reach, radius)) index = -1;
+      if (activePlatforms && !activePlatforms.has(PLATFORMS[platformIdx[index]])) index = -1;
     }
-    // planets render above publication circles, so they get the next hit check;
-    // hovering one unfurls its card (no tooltip — the card shows everything)
-    if (planetsActive) {
-      var plIdx = findNearest(mouseX, mouseY, Math.max(HIT_RADIUS, planetRadiusFor(view.zoom) + 4));
-      if (plIdx >= 0) {
-        if (hoveredIndex !== plIdx || hoveredPub !== -1) {
-          hoveredPub = -1;
-          hoveredIndex = plIdx;
-          tooltip.style.display = 'none';
-          markDirty();
-        }
-        canvas.style.cursor = 'pointer';
-        return;
-      }
-    }
-    // check publications next (rendered on top of points)
-    var pi = findNearestPub(mouseX, mouseY);
-    if (pi >= 0) {
-      if (hoveredPub !== pi) {
-        hoveredPub = pi;
-        hoveredIndex = -1;
-        markDirty();
-        showPubTooltip(pi, mouseX, mouseY);
-      }
-      return;
-    }
-    hoveredPub = -1;
-    var idx = findNearest(mouseX, mouseY, HIT_RADIUS);
-    if (idx !== hoveredIndex) {
-      hoveredIndex = idx;
+    return {pub: -1, document: index};
+  }
+
+  function clearSelection() {
+    selectedPub = -1;
+    selectedIndex = -1;
+    detail.hidden = true;
+    hideTooltip();
+    markDirty();
+  }
+
+  function updateSelection() {
+    if (selectedPub < 0 && selectedIndex < 0) return;
+    var pub = selectedPub >= 0 ? pubData[selectedPub] : null;
+    var node = pub || data.points[selectedIndex];
+    var title = pub ? pub.name || pub.basePath : node.title || '(untitled)';
+    var meta = pub ? pub.count + ' documents · ' + pub.basePath : node.basePath || node.uri;
+    if (detailTitle.textContent !== title) detailTitle.textContent = title;
+    if (detailMeta.textContent !== meta) detailMeta.textContent = meta;
+    var url = pub ? pubUrl(pub) : atUriToUrl(node.uri,node.basePath,node.platform,node.path);
+    if (detailLink.getAttribute('href') !== url) detailLink.href = url;
+    var action = pub ? 'visit publisher ↗' : 'read document ↗';
+    if (detailLink.textContent !== action) detailLink.textContent = action;
+    detail.hidden = false;
+    if (W >= 600) {
+      var x = cx + (pub ? pub.cx : pointsX[selectedIndex]) * scale;
+      var y = cy + (pub ? pub.cy : pointsY[selectedIndex]) * scale;
+      detail.style.left = Math.max(12,Math.min(W-detail.offsetWidth-12,x+24))+'px';
+      detail.style.top = Math.max(60,Math.min(H-detail.offsetHeight-12,y+24))+'px';
+    } else { detail.style.left = ''; detail.style.top = ''; }
+  }
+
+  AtlasInteraction.attach(canvas, {
+    hover: function(x,y) {
+      if (selectedPub >= 0 || selectedIndex >= 0) return;
+      mouseX = x; mouseY = y;
+      var hit = pickNode(x,y,'mouse');
+      hoveredPub = hit.pub;
+      hoveredIndex = hit.document;
+      if (hoveredPub >= 0) showPubTooltip(hoveredPub,x,y);
+      else if (hoveredIndex >= 0 && view.zoom < CARD_START) showTooltip(hoveredIndex,x,y);
+      else tooltip.style.display = 'none';
+      canvas.style.cursor = hoveredPub >= 0 || hoveredIndex >= 0 ? 'pointer' : 'grab';
       markDirty();
-      if (idx >= 0 && !planetsActive) showTooltip(idx, mouseX, mouseY);
-      else if (idx >= 0) { tooltip.style.display = 'none'; canvas.style.cursor = 'pointer'; }
-      else hideTooltip();
-    }
-  });
-
-  window.addEventListener('mouseup', function(e) {
-    if (dragging) {
-      if (Math.abs(e.clientX - dragStartX) < 4 && Math.abs(e.clientY - dragStartY) < 4) {
-        // check publication click first
-        if (hoveredPub >= 0) {
-          var url = pubUrl(pubData[hoveredPub]);
-          if (url) window.open(url, '_blank');
-        } else if (hoveredIndex >= 0) {
-          var p = data.points[hoveredIndex];
-          var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
-          if (url) window.open(url, '_blank');
-        } else if (selectedIndex >= 0) {
-          // clicked empty space — dismiss a deep-link-selected card
-          selectedIndex = -1;
-          markDirty();
-        }
-      }
-      dragging = false;
-    }
-  });
-
-  // --- touch ---
-  var touches = {};
-  var touchMoved = false;
-  var selectedIndex = -1; // for tap-to-select, tap-again-to-open
-
-  canvas.addEventListener('touchstart', function(e) {
-    e.preventDefault();
-    for (var i = 0; i < e.changedTouches.length; i++) {
-      var t = e.changedTouches[i];
-      touches[t.identifier] = { x: t.clientX, y: t.clientY };
-    }
-    touchMoved = false;
-    var ids = Object.keys(touches);
-    if (ids.length === 1) {
-      dragging = true;
-      dragStartX = touches[ids[0]].x; dragStartY = touches[ids[0]].y;
-      dragStartPanX = view.panX; dragStartPanY = view.panY;
-    } else if (ids.length === 2) {
-      dragging = false;
-      var a = touches[ids[0]], b = touches[ids[1]];
-      pinchStartDist = Math.hypot(a.x - b.x, a.y - b.y);
-      pinchStartZoom = view.zoom;
-      pinchMidX = (a.x + b.x) / 2;
-      pinchMidY = (a.y + b.y) / 2;
-      pinchStartPanX = view.panX;
-      pinchStartPanY = view.panY;
-    }
-  }, { passive: false });
-
-  canvas.addEventListener('touchmove', function(e) {
-    e.preventDefault();
-    for (var i = 0; i < e.changedTouches.length; i++) {
-      var t = e.changedTouches[i];
-      touches[t.identifier] = { x: t.clientX, y: t.clientY };
-    }
-    touchMoved = true;
-    var ids = Object.keys(touches);
-    if (ids.length === 1 && dragging) {
-      cacheTransform();
-      view.panX = dragStartPanX + (touches[ids[0]].x - dragStartX) / scale;
-      view.panY = dragStartPanY + (touches[ids[0]].y - dragStartY) / scale;
-      markDirty();
+    },
+    select: function(x,y,type) {
+      var hit = pickNode(x,y,type);
+      selectedPub = hit.pub;
+      selectedIndex = hit.document;
       hideTooltip();
-      selectedIndex = -1;
-    } else if (ids.length === 2) {
-      var a = touches[ids[0]], b = touches[ids[1]];
-      var dist = Math.hypot(a.x - b.x, a.y - b.y);
-      var newZoom = Math.max(view.minZoom, Math.min(view.maxZoom, pinchStartZoom * (dist / pinchStartDist)));
-      // zoom toward pinch midpoint
-      var midDataOld = screenToData(pinchMidX, pinchMidY);
-      view.zoom = newZoom;
+      if (selectedPub < 0 && selectedIndex < 0) clearSelection();
+      else { updateSelection(); markDirty(); }
+    },
+    transform: function(x,y,nextX,nextY,factor) {
       cacheTransform();
-      var midDataNew = screenToData(pinchMidX, pinchMidY);
-      view.panX += midDataNew[0] - midDataOld[0];
-      view.panY += midDataNew[1] - midDataOld[1];
+      var before = screenToData(x,y);
+      view.zoom = Math.max(view.minZoom,Math.min(view.maxZoom,view.zoom*factor));
+      cacheTransform();
+      var after = screenToData(nextX,nextY);
+      view.panX += after[0]-before[0];
+      view.panY += after[1]-before[1];
+      hideTooltip();
       markDirty();
-    }
-  }, { passive: false });
-
-  canvas.addEventListener('touchend', function(e) {
-    var endedTouches = [];
-    for (var i = 0; i < e.changedTouches.length; i++) {
-      endedTouches.push(e.changedTouches[i]);
-      delete touches[e.changedTouches[i].identifier];
-    }
-    var remaining = Object.keys(touches).length;
-    if (remaining === 0) {
-      dragging = false;
-      // tap detection — didn't drag significantly
-      if (!touchMoved || (endedTouches.length === 1 &&
-          Math.abs(endedTouches[0].clientX - dragStartX) < 10 &&
-          Math.abs(endedTouches[0].clientY - dragStartY) < 10)) {
-        var tx = endedTouches[0].clientX, ty = endedTouches[0].clientY;
-        cacheTransform();
-        // document cards are topmost: first tap selects (highlight border),
-        // second tap opens — same pattern as dots, minus the redundant tooltip
-        var cardIdx = findCardAt(tx, ty);
-        if (cardIdx >= 0) {
-          if (cardIdx === selectedIndex) {
-            var cp = data.points[cardIdx];
-            var cu = atUriToUrl(cp.uri, cp.basePath, cp.platform, cp.path);
-            if (cu) window.open(cu, '_blank');
-            selectedIndex = -1;
-            hideTooltip();
-          } else {
-            selectedIndex = cardIdx;
-            hoveredIndex = cardIdx;
-            tooltip.style.display = 'none';
-            markDirty();
-          }
-          return;
-        }
-        // planets win over publication circles (they render above them):
-        // first tap selects + unfurls the card, second tap opens
-        if (planetsActive) {
-          var plIdx = findNearest(tx, ty, Math.max(HIT_RADIUS, planetRadiusFor(view.zoom) + 4));
-          if (plIdx >= 0) {
-            if (plIdx === selectedIndex) {
-              var pp = data.points[plIdx];
-              var pu = atUriToUrl(pp.uri, pp.basePath, pp.platform, pp.path);
-              if (pu) window.open(pu, '_blank');
-              selectedIndex = -1;
-              hideTooltip();
-            } else {
-              selectedIndex = plIdx;
-              hoveredIndex = plIdx;
-              tooltip.style.display = 'none';
-              markDirty();
-            }
-            return;
-          }
-        }
-        // check publications next
-        var pi = findNearestPub(tx, ty);
-        if (pi >= 0) {
-          var url = pubUrl(pubData[pi]);
-          if (url) window.open(url, '_blank');
-          selectedIndex = -1;
-          hideTooltip();
-        } else {
-          var idx = findNearest(tx, ty, HIT_RADIUS);
-          if (idx >= 0) {
-            if (idx === selectedIndex) {
-              var p = data.points[idx];
-              var url = atUriToUrl(p.uri, p.basePath, p.platform, p.path);
-              if (url) window.open(url, '_blank');
-              selectedIndex = -1;
-              hideTooltip();
-            } else {
-              selectedIndex = idx;
-              hoveredIndex = idx;
-              showTooltip(idx, tx, ty);
-              markDirty();
-            }
-          } else {
-            selectedIndex = -1;
-            hideTooltip();
-            markDirty();
-          }
-        }
-      }
-    }
+    },
+    leave: function() { hideTooltip(); markDirty(); }
   });
+
+  var detail = document.getElementById('node-detail');
+  var detailTitle = document.getElementById('node-detail-title');
+  var detailMeta = document.getElementById('node-detail-meta');
+  var detailLink = document.getElementById('node-detail-link');
+  document.getElementById('node-detail-close').addEventListener('click',clearSelection);
+  document.addEventListener('pointerdown',function(e){
+    if (e.target !== canvas && !detail.contains(e.target)) clearSelection();
+  });
+  document.addEventListener('keydown',function(e){ if(e.key === 'Escape') clearSelection(); });
 
   // --- tooltip ---
   var tooltip = document.getElementById('tooltip');
@@ -2275,7 +2136,7 @@
     tooltip.style.display = 'none';
     hoveredIndex = -1;
     hoveredPub = -1;
-    canvas.style.cursor = dragging ? 'grabbing' : 'grab';
+    canvas.style.cursor = 'grab';
   }
 
   function atUriToUrl(uri, basePath, platform, path) {
@@ -2552,13 +2413,14 @@
         fetchSubscriberCounts();
 
         buildSpatialIndex();
+        buildPointSpacing();
         if (atlasGL) {
           // one-time GPU upload: positions + palette index per point
           var colorIdx = new Uint8Array(n);
           for (var i = 0; i < n; i++) {
             colorIdx[i] = pointHueArr[i] !== 255 ? PLATFORMS.length + pointHueArr[i] : platformIdx[i];
           }
-          atlasGL.uploadPoints(n, pointsX, pointsY, colorIdx);
+          atlasGL.uploadPoints(n, pointsX, pointsY, colorIdx, pointSpacing);
           // connection-pair search is a load-time cost now, not a per-frame
           // one — defer it so the first paint isn't blocked
           setTimeout(buildConnectionLines, 0);

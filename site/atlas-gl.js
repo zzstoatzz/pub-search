@@ -53,7 +53,7 @@
     '#endif',
     'varying vec2 vP;',
     'uniform sampler2D uTex;',
-    'uniform float uRot, uTilt, uAlpha, uTexSpan, uPx, uAvatar, uTextAlpha;',
+    'uniform float uRot, uTilt, uAlpha, uTexSpan, uPx, uAvatar, uTextAlpha, uSurfaceOnly;',
     'uniform vec3 uBase, uAccent, uCore;',
 
     SPHERE_LIGHTING,
@@ -89,7 +89,7 @@
     '  surface = mix(surface, text.rgb, ink * 0.92);',
     '  float edge = 1.0 - smoothstep(1.0 - uPx, 1.0, r);',
     '  outc = vec4(surface, edge);',
-    '  gl_FragColor = vec4(outc.rgb, outc.a * uAlpha);',
+    '  gl_FragColor = uSurfaceOnly > 0.5 ? vec4(text.rgb, ink * 0.92 * edge * uAlpha) : vec4(outc.rgb, outc.a * uAlpha);',
     '}',
   ].join('\n');
 
@@ -102,6 +102,7 @@
   var POINT_VERT = [
     'attribute vec2 aPos;',       // data-space coords
     'attribute float aColor;',    // palette index
+    'attribute float aSpacing;',
     'attribute float aState;',    // 0 normal, 1 dim, 2 highlight
     'uniform vec2 uRes;',
     'uniform float uScale;',      // css px per data unit
@@ -118,9 +119,10 @@
     '  vec2 px = uCenter + aPos * uScale;',
     '  vec2 clip = (px / uRes) * 2.0 - 1.0;',
     '  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);',
-    '  float boost = max(uEmph, step(1.5, aState));',
     // 2.8x: the glyph needs headroom for the star halo (1.4 * radius)
-    '  float size = uRadius * 2.8 * uDpr * mix(1.0, 1.4, boost);',
+    '  float room = max(1.2, aSpacing * uScale * 0.48);',
+    '  float radius = uRadius / pow(1.0 + pow(uRadius / room, 8.0), 0.125);',
+    '  float size = radius * 2.8 * uDpr;',
     '  gl_PointSize = size;',
     '  vAA = 2.0 / max(size, 1.0);',
     '  int ci = int(aColor + 0.5);',
@@ -221,7 +223,7 @@
         // planet program
         var planetProg = link(gl, PLANET_VERT, PLANET_FRAG);
         var PU = uniforms(gl, planetProg, ['uRes', 'uCenter', 'uRadius', 'uMargin', 'uTex',
-          'uRot', 'uTilt', 'uAlpha', 'uTexSpan', 'uPx', 'uBase', 'uAccent', 'uAvatar', 'uCore', 'uTextAlpha']);
+          'uRot', 'uTilt', 'uAlpha', 'uTexSpan', 'uPx', 'uBase', 'uAccent', 'uAvatar', 'uCore', 'uTextAlpha', 'uSurfaceOnly']);
         var planetAPos = gl.getAttribLocation(planetProg, 'aPos');
         var quadBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -236,10 +238,12 @@
           aPos: gl.getAttribLocation(pointProg, 'aPos'),
           aColor: gl.getAttribLocation(pointProg, 'aColor'),
           aState: gl.getAttribLocation(pointProg, 'aState'),
+          aSpacing: gl.getAttribLocation(pointProg, 'aSpacing'),
         };
         var pointPosBuf = gl.createBuffer();
         var pointColorBuf = gl.createBuffer();
         var pointStateBuf = gl.createBuffer();
+        var pointSpacingBuf = gl.createBuffer();
         var pointCount = 0;
         var hasState = false;
 
@@ -312,8 +316,10 @@
           for (var i = 0; i < maxAttribs; i++) gl.disableVertexAttribArray(i);
         }
 
+        var maxPointSize = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
         return {
           canvas: canvas,
+          pointRadiusLimit: function(dpr) { return maxPointSize / (2.8 * dpr); },
 
           resize: function(W, H, dpr) {
             var bw = Math.round(W * dpr), bh = Math.round(H * dpr);
@@ -324,8 +330,10 @@
           },
 
           // one-time upload (positions and palette index never change)
-          uploadPoints: function(n, xArr, yArr, colorIdxArr) {
+          uploadPoints: function(n, xArr, yArr, colorIdxArr, spacingArr) {
             pointCount = n;
+            gl.bindBuffer(gl.ARRAY_BUFFER, pointSpacingBuf);
+            gl.bufferData(gl.ARRAY_BUFFER, spacingArr || new Float32Array(n).fill(100000), gl.STATIC_DRAW);
             var pos = new Float32Array(n * 2);
             for (var i = 0; i < n; i++) { pos[i * 2] = xArr[i]; pos[i * 2 + 1] = yArr[i]; }
             gl.bindBuffer(gl.ARRAY_BUFFER, pointPosBuf);
@@ -425,6 +433,9 @@
               gl.bindBuffer(gl.ARRAY_BUFFER, pointStateBuf);
               gl.enableVertexAttribArray(pA.aState);
               gl.vertexAttribPointer(pA.aState, 1, gl.UNSIGNED_BYTE, false, 0, 0);
+              gl.bindBuffer(gl.ARRAY_BUFFER, pointSpacingBuf);
+              gl.enableVertexAttribArray(pA.aSpacing);
+              gl.vertexAttribPointer(pA.aSpacing, 1, gl.FLOAT, false, 0, 0);
               gl.drawArrays(gl.POINTS, 0, pointCount);
               // hovered point re-drawn emphasized on top
               if (o.hoverIdx >= 0 && o.hoverIdx < pointCount) {
@@ -458,6 +469,7 @@
             gl.uniform1f(PU.uRadius, R);
             gl.uniform1f(PU.uRot, rot);
             gl.uniform1f(PU.uAvatar, opts.avatar ? 1 : 0);
+            gl.uniform1f(PU.uSurfaceOnly, opts.surfaceOnly ? 1 : 0);
             gl.uniform1f(PU.uTextAlpha, opts.textAlpha === undefined ? 1 : opts.textAlpha);
             var core = opts.core || opts.accent;
             gl.uniform3f(PU.uCore, core[0], core[1], core[2]);

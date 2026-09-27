@@ -116,7 +116,18 @@
     assert(levels.every(function(v,j){return j===0 || v>levels[j-1];}), 'Text does not emerge progressively');
     assert(uploads===documentUploads+1, 'Document detail changes reupload texture');
     assert(gl.getError()===gl.NO_ERROR, 'Document rendering produced a WebGL error');
-    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; continuous hemisphere wrap; 300 visible textures without churn; inactive GPU eviction; matching point/document lighting; progressive text opacity; mipmapped document texture reused across detail levels.';
+    for (var radius of [3,7,14,30,60]) {
+      atlas.uploadPoints(1,new Float32Array([0]),new Float32Array([0]),new Uint8Array([0]),new Float32Array([1000]));
+      atlas.frame({W:160,H:160,dpr:1,dark:true,scale:1,cx:80,cy:80,radius:radius,starness:0,alpha:1,dim:1,lineFade:0,hoverIdx:-1});
+      var body = new Uint8Array(160*160*4), layered = new Uint8Array(body.length);
+      gl.readPixels(0,0,160,160,gl.RGBA,gl.UNSIGNED_BYTE,body);
+      atlas.beginPlanets(160,160,1,true);
+      atlas.drawPlanet(blank,80,80,radius,1,0,{core:material.core,accent:material.mid,base:material.edge,surfaceOnly:true,dpr:1});
+      gl.readPixels(0,0,160,160,gl.RGBA,gl.UNSIGNED_BYTE,layered);
+      assert(body.every(function(v,j){return v===layered[j];}), 'Surface detail altered sphere body at radius '+radius);
+    }
+    assert(gl.getError()===gl.NO_ERROR, 'Single-body rendering produced a WebGL error');
+    result.textContent = 'PASS: avatar color at 8 radii, 6 rotations, and both themes; one upload across zoom/theme; continuous hemisphere wrap; 300 visible textures without churn; inactive GPU eviction; matching point/document lighting; progressive text opacity; mipmapped document texture reused across detail levels; surface detail preserves every body pixel at five radii.';
   } catch (error) {
     result.textContent = 'FAIL: ' + error.message;
     console.error(error);

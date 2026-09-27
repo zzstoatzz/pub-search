@@ -313,3 +313,63 @@ canvas:active {
   .tooltip .meta { font-size: 10px; }
   .tooltip .platform-badge { font-size: 9px; }
 }
+
+#canvas {
+  touch-action: none;
+}
+#node-detail {
+  position: fixed;
+  z-index: 30;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  padding: 20px;
+  box-sizing: border-box;
+  border: 1px solid var(--tooltip-border);
+  border-radius: 16px;
+  background: var(--tooltip-bg);
+  color: var(--text);
+  backdrop-filter: blur(16px);
+}
+#node-detail[hidden] {
+  display: none;
+}
+#node-detail-title {
+  padding-right: 30px;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+#node-detail-meta {
+  margin: 10px 0;
+  opacity: .65;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+#node-detail-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: inherit;
+}
+#node-detail-close {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 24px;
+  cursor: pointer;
+}
+@media (max-width: 599px) {
+  #node-detail {
+    left: 12px;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 42dvh;
+    overflow-y: auto;
+  }
+}

@@ -62,6 +62,13 @@
     <div class="platform-badge" id="tooltip-platform"></div>
   </div>
 
+  <section id="node-detail" aria-label="Selected node" hidden>
+    <button id="node-detail-close" aria-label="Close details">×</button>
+    <div id="node-detail-title" aria-live="polite"></div>
+    <div id="node-detail-meta"></div>
+    <a id="node-detail-link" target="_blank" rel="noopener"></a>
+  </section>
+
   <div class="bottom-bar">
     <div class="legend" id="legend"></div>
     <div class="stats" id="stats"></div>
@@ -78,6 +85,7 @@
   <script src="clients.js"></script>
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
+  <script src="atlas-interaction.js"></script>
   <script src="atlas.js"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
