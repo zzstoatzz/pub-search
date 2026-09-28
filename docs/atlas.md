@@ -141,3 +141,43 @@ at 1M points the *build* breaks before the payload does — UMAP on 1M×1024
 and the single-pod export already OOM'd once at a tenth of that
 (`prefect-rebuild-atlas-oom-2026-06-05.md`, `scaling-plan.md`). payload v3
 and the builder move are separable; do not couple them.
+
+## cluster summary preview
+
+`/atlas-summary-preview` is a separate reading page; the map does not load summary
+code or data. `scripts/build-atlas` runs `atlas_summaries.write_preview` after
+writing its normal gzip, so the existing six-hour Prefect flow generates and
+publishes summaries with the dataset. No flow registration change is needed.
+
+The first preview covers the 12 largest fine clusters. Each uses up to 10 actual
+members, ordered by membership strength with at most two per author before
+filling remaining slots. The document API supplies policy-filtered extracted
+text; only the first 3,000 characters of each sampled document go to
+the model, with identical excerpts deduplicated. The model is
+`claude-haiku-4-5`, using the same Anthropic credential as label generation.
+At least three readable documents are required. These are explicitly sample
+summaries, not independently evaluated descriptions of the entire cluster.
+
+`atlas-summaries.json` is an optional, gitignored sidecar. It records the exact
+Atlas content hash, membership hash, sampled source URIs, cited sources, model,
+and generation time. The preview verifies the dataset hash and source membership
+before displaying anything. It fetches both files without runtime-cache reuse;
+a deployment race or stale pair produces a retry message rather than attaching
+an old summary to a new cluster ID. Existing Atlas consumers remain unchanged.
+
+Generation uses at most three concurrent requests. Previously deployed summaries
+are reusable only when membership, sampled text, prompt, and model match. Missing
+credentials, unreadable documents, and model failures leave an unavailable or
+partial preview and do not block the map rebuild. The sidecar is always rewritten
+so an unsuccessful run cannot accidentally publish an old preview as current.
+
+For a standalone refresh using the flow's injected environment:
+
+```sh
+uv run scripts/atlas_summaries.py site/atlas.json.gz --limit 12
+```
+
+Checks: `uv run --script scripts/tests/test_atlas_summaries.py` and
+`node --test scripts/tests/atlas-summaries.mjs`. Tests cover missing credentials,
+legacy datasets, stale preview replacement, author diversity, source references,
+and rejection of stale or invalid membership in the browser contract.

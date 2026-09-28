@@ -10,6 +10,7 @@ zig-out/
 .loq_cache
 site/atlas.json
 site/atlas.json.gz
+site/atlas-summaries.json
 site/atlas-avatar-cache.json
 zig-pkg/
 .claude/

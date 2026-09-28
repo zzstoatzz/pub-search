@@ -1,0 +1,66 @@
+# /// script
+# dependencies = ["pytest", "httpx", "anthropic"]
+# ///
+import gzip
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from atlas_summaries import generate, prepare_evidence, sample_members, validate_answer, write_preview
+
+
+def test_crossposts_do_not_count_as_independent_evidence():
+    selected = [{'uri': uri} for uri in ['first', 'crosspost', 'unavailable', 'other']]
+    docs = {'first': {'title': 'Original', 'content': 'Some text here'},
+            'crosspost': {'title': 'Copied', 'content': 'Some  text\nhere'},
+            'other': {'title': 'Another', 'content': 'Different content'}}
+    evidence = prepare_evidence(selected, docs)
+    assert [item['uri'] for item in evidence] == ['first', 'other']
+    assert [item['id'] for item in evidence] == [1, 2]
+
+
+def test_sampling_is_deterministic_and_limits_author_dominance():
+    points = [{"uri": f"at://did:plc:{author}/site.standard.document/{i}", "membershipProbabilityFine": 1 - i / 100}
+              for i, author in enumerate(['a'] * 12 + list('bcdefghijk'))]
+    chosen = sample_members(points)
+    assert len(chosen) == 10
+    assert sum('/did:plc:a/' in p['uri'] for p in chosen) == 2
+    assert chosen == sample_members(list(reversed(points)))
+    assert chosen[0] == points[0]
+
+
+def test_model_cannot_cite_nonexistent_sources():
+    valid = dict(summary='A shared topic.', sourceIds=[1, 3], coherence='mixed', caveat='Excerpts only.')
+    assert validate_answer(valid, 3) == valid
+    for ids in ([4], [0], [True], [], ['1']):
+        with pytest.raises(ValueError):
+            validate_answer({**valid, 'sourceIds': ids}, 3)
+    with pytest.raises(ValueError):
+        validate_answer({**valid, 'summary': 'x' * 1201}, 3)
+
+
+def test_missing_key_and_legacy_dataset_preserve_atlas(tmp_path):
+    path = tmp_path / 'atlas.json.gz'
+    raw = gzip.compress(json.dumps({'meta': {'generatedAt': '2026-09-28'}, 'points': []}).encode())
+    path.write_bytes(raw)
+    assert generate(path, 'unused-key')['clusters'] == []
+    write_preview(path, '')
+    assert path.read_bytes() == raw
+    assert json.loads((tmp_path / 'atlas-summaries.json').read_text())['status'] == 'unavailable'
+
+
+def test_failure_removes_stale_preview(tmp_path):
+    path = tmp_path / 'atlas.json.gz'
+    path.write_bytes(b'invalid gzip')
+    sidecar = tmp_path / 'atlas-summaries.json'
+    sidecar.write_text('{"status":"ready","clusters":[{"id":9}]}')
+    write_preview(path, '')
+    assert json.loads(sidecar.read_text())['clusters'] == []
+    assert path.read_bytes() == b'invalid gzip'
+
+
+if __name__ == '__main__':
+    raise SystemExit(pytest.main([__file__, '-q']))
