@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-26T00:09:28+00:00",
+  "generated_at": "2026-09-28T03:09:21+00:00",
   "facts": [
     {
       "text": "the first document this index watched arrive live off the firehose was “do we not token predict?” by @enflux.bsky.social, January 1, 2026",
@@ -36,60 +36,61 @@
       "did": "did:plc:vd3vzujxkxsthkswrc2zzupm"
     },
     {
-      "text": "the longest document in the index is “Grok’s answers about more possible ways to sanction Ruzzia if they were really behind the assassination of Charlie Kirk” by @zendayafan.bsky.social — 18,719 words"
+      "text": "the longest document in the index is “The Dawn of Everything, by David Graeber and David Wengrow” by @littlefair.ca — 21,150 words",
+      "url": "https://littlefair.ca/reviews/dawn-of-everything"
     },
     {
-      "text": "the most-used tag is “theoryPosts” — 5,318 documents carry it"
+      "text": "the most-used tag is “news_politics” — 2,563 documents carry it"
     },
     {
-      "text": "2,470 documents are tagged “entertainment”"
+      "text": "2,486 documents are tagged “entertainment”"
     },
     {
-      "text": "2,342 documents are tagged “news_politics”"
+      "text": "2,056 documents are tagged “United States”"
     },
     {
-      "text": "1,666 documents are tagged “religion”"
+      "text": "1,953 documents are tagged “Black and White”"
     },
     {
-      "text": "1,663 documents are tagged “tech”"
+      "text": "1,935 documents are tagged “Fujifilm”"
     },
     {
-      "text": "1,518 documents are tagged “theology”"
+      "text": "1,859 documents are tagged “tech”"
     },
     {
-      "text": "18,976 tags have been used exactly once, ever"
+      "text": "25,576 tags have been used exactly once, ever"
     },
     {
-      "text": "the most prolific author is @jcrt.org — 23,514 documents",
-      "did": "did:plc:e24okfpxr7ctcbmruijop5gp"
+      "text": "the most prolific author is @trendingonweibo.com — 10,083 documents",
+      "did": "did:plc:qinncfejo7kleyzlcdetpx2o"
     },
     {
-      "text": "1,765 of 4,257 authors have published exactly one document — the long tail is 41% of the network"
+      "text": "2,025 of 5,000 authors have published exactly one document — the long tail is 40% of the network"
     },
     {
-      "text": "8% of all 104,854 documents were written in the last 30 days"
+      "text": "10% of all 99,702 documents were written in the last 30 days"
     },
     {
-      "text": "the busiest day this index has seen was August 22, 2026 — 9,641 documents arrived"
+      "text": "the busiest day this index has seen was August 22, 2026 — 9,618 documents arrived"
     },
     {
-      "text": "the largest publication is “The Journal for Cultural and Religious Theory” — 23,514 documents",
-      "url": "https://jcrt.org"
+      "text": "the largest publication is “Trending on Weibo” — 10,083 documents",
+      "url": "https://www.trendingonweibo.com"
     },
     {
-      "text": "9,542 publications are indexed across the network"
+      "text": "10,681 publications are indexed across the network"
     },
     {
-      "text": "21% of documents ship with cover art"
+      "text": "36% of documents ship with cover art"
     },
     {
-      "text": "the index holds 370 million characters of writing — roughly 740 novels' worth"
+      "text": "the index holds 320 million characters of writing — roughly 641 novels' worth"
     },
     {
-      "text": "707 authors published their first document in the last 30 days"
+      "text": "833 authors published their first document in the last 30 days"
     },
     {
-      "text": "85,665 documents come from outside the known platforms — self-hosted sites publishing straight to the protocol"
+      "text": "76,426 documents come from outside the known platforms — self-hosted sites publishing straight to the protocol"
     }
   ]
 }

@@ -144,40 +144,40 @@ and the builder move are separable; do not couple them.
 
 ## cluster summary preview
 
-`/atlas-summary-preview` is a separate reading page; the map does not load summary
-code or data. `scripts/build-atlas` runs `atlas_summaries.write_preview` after
-writing its normal gzip, so the existing six-hour Prefect flow generates and
-publishes summaries with the dataset. No flow registration change is needed.
+Atlas's **topics** button opens a summary panel. Choosing a topic centers its cluster;
+clicking an available fine-cluster label opens the same panel. On phones the panel
+sits at the bottom, with scrollable sources and excerpts. The old
+`/atlas-summary-preview` URL redirects to `/atlas?topics=1`.
 
-The first preview covers the 12 largest fine clusters. Each uses up to 10 actual
-members, ordered by membership strength with at most two per author before
-filling remaining slots. The document API supplies policy-filtered extracted
-text; only the first 3,000 characters of each sampled document go to
-the model, with identical excerpts deduplicated. The model is
-`claude-haiku-4-5`, using the same Anthropic credential as label generation.
-At least three readable documents are required. These are explicitly sample
-summaries, not independently evaluated descriptions of the entire cluster.
+`scripts/build-atlas` runs `atlas_summaries.write_preview` after writing its normal
+gzip, so the existing six-hour Prefect flow generates and publishes summaries with
+the dataset. No flow registration change is needed.
 
-`atlas-summaries.json` is an optional, gitignored sidecar. It records the exact
-Atlas content hash, membership hash, sampled source URIs, cited sources, model,
-and generation time. The preview verifies the dataset hash and source membership
-before displaying anything. It fetches both files without runtime-cache reuse;
-a deployment race or stale pair produces a retry message rather than attaching
-an old summary to a new cluster ID. Existing Atlas consumers remain unchanged.
+The preview covers the 12 largest fine clusters. Each uses up to 10 actual members,
+ordered by membership strength with at most two per author before filling remaining
+slots. The document API supplies policy-filtered extracted text; the first 3,000
+characters per document go to `claude-haiku-4-5`, with identical excerpts deduplicated.
+At least three readable documents are required. The prompt asks for short, direct
+subject descriptions; coverage and AI attribution appear in the sources disclosure.
+These descriptions have not undergone independent quality evaluation.
 
-Generation uses at most three concurrent requests. Previously deployed summaries
-are reusable only when membership, sampled text, prompt, and model match. Missing
-credentials, unreadable documents, and model failures leave an unavailable or
-partial preview and do not block the map rebuild. The sidecar is always rewritten
-so an unsuccessful run cannot accidentally publish an old preview as current.
+`atlas-summaries.json` is an optional, gitignored sidecar containing membership
+hashes, source URIs and excerpts, cited sources, model, and generation time. Atlas
+loads it after the map and checks the build timestamp, exact member hashes, counts,
+labels, and source membership. A stale or unavailable sidecar shows a retry message
+inside the panel; the map continues working. It does not download the Atlas twice.
 
-For a standalone refresh using the flow's injected environment:
+Generation uses at most three concurrent requests and the existing Atlas Anthropic
+credential. Cached summaries require matching membership, text, prompt, and model.
+Failures leave an unavailable or partial sidecar and do not block the map rebuild.
+The sidecar is always rewritten to prevent stale data from surviving a failed run.
+
+Standalone refresh in the flow's injected environment:
 
 ```sh
 uv run scripts/atlas_summaries.py site/atlas.json.gz --limit 12
 ```
 
-Checks: `uv run --script scripts/tests/test_atlas_summaries.py` and
-`node --test scripts/tests/atlas-summaries.mjs`. Tests cover missing credentials,
-legacy datasets, stale preview replacement, author diversity, source references,
-and rejection of stale or invalid membership in the browser contract.
+Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
+`node --test scripts/tests/atlas-summaries.mjs`, and
+`node scripts/tests/atlas-interaction.cjs`.

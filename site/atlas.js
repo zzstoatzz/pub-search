@@ -1806,6 +1806,7 @@
       return lx - halfW >= LABEL_MARGIN && lx + halfW <= W - LABEL_MARGIN;
     }
 
+    clusterLabelRects = [];
     if (coarseAlpha > 0.01) {
       ctx.font = (small ? '9px' : '12px') + ' monospace';
       ctx.globalAlpha = 0.95 * coarseAlpha;
@@ -1843,7 +1844,10 @@
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
         if (!fitsHoriz(sx, tw / 2)) continue;
-        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(cl.label, sx, sy, dark); shownFine++; }
+        if (canPlace(sx, sy, tw, fontSize)) {
+          drawLabel(cl.label, sx, sy, dark); shownFine++;
+          if (window.AtlasSummaries && AtlasSummaries.has(cl.id)) clusterLabelRects.push({id:cl.id,x:sx-tw/2-6,y:sy-22,w:tw+12,h:44});
+        }
       }
     }
 
@@ -2024,6 +2028,7 @@
   // --- mobile detection ---
   var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
+  var clusterLabelRects = [];
   var selectedIndex = -1;
   var selectedPub = -1;
 
@@ -2096,6 +2101,9 @@
     hover: function(x,y) {
       if (selectedPub >= 0 || selectedIndex >= 0) return;
       mouseX = x; mouseY = y;
+      if (window.AtlasSummaries && AtlasSummaries.hitTest(clusterLabelRects,x,y) !== null) {
+        hoveredPub = -1; hoveredIndex = -1; hideTooltip(); canvas.style.cursor = 'pointer'; markDirty(); return;
+      }
       var hit = pickNode(x,y,'mouse');
       hoveredPub = hit.pub;
       hoveredIndex = hit.document;
@@ -2106,6 +2114,9 @@
       markDirty();
     },
     select: function(x,y,type) {
+      var clusterId = window.AtlasSummaries ? AtlasSummaries.hitTest(clusterLabelRects,x,y) : null;
+      if (clusterId !== null) { clearSelection(); AtlasSummaries.open(clusterId,false); return; }
+      if (window.AtlasSummaries) AtlasSummaries.close();
       var hit = pickNode(x,y,type);
       selectedPub = hit.pub;
       selectedIndex = hit.document;
@@ -2474,6 +2485,14 @@
         if (pubData.length > 0) statsText += ' \u00B7 ' + pubData.length + ' publications';
         document.getElementById('stats').textContent = statsText;
         document.getElementById('loading').classList.add('hidden');
+        if (window.AtlasSummaries) AtlasSummaries.init(d,function(id) {
+          clearSelection();
+          var cluster = d.clusters.fine.find(function(c) { return c.id === id; });
+          if (cluster) {
+            var sheetHeight = W < 600 ? document.getElementById('cluster-summary').offsetHeight : 0;
+            animateTo(cluster.cx,cluster.cy + sheetHeight / (2 * Math.min(W,H) * 0.42 * 5),5);
+          }
+        },markDirty);
         markDirty();
         // jump to specific document by URI (from "view on atlas" links)
         if (pendingUri) {

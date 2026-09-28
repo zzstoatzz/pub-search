@@ -33,7 +33,7 @@ def test_sampling_is_deterministic_and_limits_author_dominance():
 
 
 def test_model_cannot_cite_nonexistent_sources():
-    valid = dict(summary='A shared topic.', sourceIds=[1, 3], coherence='mixed', caveat='Excerpts only.')
+    valid = dict(summary='A shared topic.', sourceIds=[1, 3])
     assert validate_answer(valid, 3) == valid
     for ids in ([4], [0], [True], [], ['1']):
         with pytest.raises(ValueError):

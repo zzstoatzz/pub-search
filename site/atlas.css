@@ -373,3 +373,24 @@ canvas:active {
     overflow-y: auto;
   }
 }
+
+#cluster-summary-button { font:inherit; color:var(--text-secondary); background:none; border:0; cursor:pointer; min-height:44px; padding:0 5px; }
+#cluster-summary { position:fixed; z-index:35; top:72px; right:16px; width:360px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; touch-action:pan-y; padding:0 18px 18px; background:var(--tooltip-bg); color:var(--text); border:1px solid var(--tooltip-border); border-radius:16px; backdrop-filter:blur(16px); }
+#cluster-summary[hidden], #cluster-summary [hidden] { display:none; }
+.cluster-summary-header { position:sticky; top:0; z-index:1; background:var(--bg); margin:0 -18px 8px; padding:0 10px 0 18px; display:flex; justify-content:space-between; align-items:center; min-height:48px; color:var(--text-secondary); }
+#cluster-summary-close { color:var(--text); background:none; border:0; width:44px; height:44px; font-size:24px; cursor:pointer; }
+#cluster-summary-picker { width:100%; min-height:44px; padding:8px; font:inherit; font-size:16px; color:var(--text); background:var(--bg-subtle); border:1px solid var(--tooltip-border); border-radius:6px; }
+#cluster-summary-title { font:600 16px/1.5 monospace; margin:18px 0 10px; color:var(--text-bright); }
+#cluster-summary-text { font:15px/1.65 monospace; margin-bottom:18px; }
+#cluster-summary-status { padding:12px 0; line-height:1.5; }
+#cluster-summary-evidence { border-top:1px solid var(--tooltip-border); padding-top:6px; }
+#cluster-summary summary { cursor:pointer; min-height:44px; padding:12px 0; }
+#cluster-summary-coverage { display:block; font-size:11px; color:var(--text-secondary); padding-top:4px; }
+.cluster-summary-method { font-size:11px; line-height:1.6; color:var(--text-secondary); margin-bottom:12px; }
+#cluster-summary-sources { list-style:none; }
+#cluster-summary-sources li { padding:12px 0; border-top:1px solid var(--tooltip-border); overflow-wrap:anywhere; line-height:1.5; }
+#cluster-summary-sources a { color:var(--text-bright); display:block; padding:6px 0; }
+#cluster-summary-sources details { color:var(--text-secondary); font-size:12px; }
+#cluster-summary-sources p { white-space:pre-wrap; line-height:1.6; }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+@media(max-width:599px) { #cluster-summary { top:auto; bottom:0; left:0; right:0; width:100%; max-width:none; max-height:55dvh; padding-bottom:max(18px,env(safe-area-inset-bottom)); border-radius:16px 16px 0 0; } #cluster-summary-text { font-size:14px; } }
