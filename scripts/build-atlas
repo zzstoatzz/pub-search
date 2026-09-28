@@ -857,10 +857,6 @@ def main():
     raw = json.dumps(output, separators=(",", ":")).encode()
     out_path.write_bytes(gzip.compress(raw, mtime=0))
 
-    from atlas_summaries import write_preview
-
-    write_preview(out_path, settings.anthropic_api_key)
-
     size_kb = out_path.stat().st_size / 1024
     elapsed = time.monotonic() - t_start
     log(f"\nwrote {out_path} ({size_kb:.0f} KB gz, {len(raw) / 1024:.0f} KB raw, {len(points)} points)")

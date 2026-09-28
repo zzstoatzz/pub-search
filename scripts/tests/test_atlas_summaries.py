@@ -1,5 +1,5 @@
 # /// script
-# dependencies = ["pytest", "httpx", "anthropic"]
+# dependencies = ["pytest", "httpx", "openai"]
 # ///
 import gzip
 import json
@@ -39,7 +39,7 @@ def test_model_cannot_cite_nonexistent_sources():
         with pytest.raises(ValueError):
             validate_answer({**valid, 'sourceIds': ids}, 3)
     with pytest.raises(ValueError):
-        validate_answer({**valid, 'summary': 'x' * 1201}, 3)
+        validate_answer({**valid, 'summary': 'x' * 1601}, 3)
 
 
 def test_missing_key_and_legacy_dataset_preserve_atlas(tmp_path):
@@ -60,6 +60,41 @@ def test_failure_removes_stale_preview(tmp_path):
     write_preview(path, '')
     assert json.loads(sidecar.read_text())['clusters'] == []
     assert path.read_bytes() == b'invalid gzip'
+
+
+def test_document_reader_recovers_from_real_http_throttling():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    import httpx
+    from atlas_summaries import DocumentReader
+
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(429 if len(requests) == 1 else 200)
+            self.send_header('Retry-After', '0')
+            self.end_headers()
+            self.wfile.write(b'{"documents":[],"missing":["at://a/x/1"]}')
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with httpx.Client() as http:
+            reader = DocumentReader(http, f'http://127.0.0.1:{server.server_port}/document', interval=0.01)
+            result = reader.read([{'uri': 'at://a/x/1'}])
+        assert result == {'documents': [], 'missing': ['at://a/x/1']}
+        assert len(requests) == 2
+        assert requests[0] == requests[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 if __name__ == '__main__':

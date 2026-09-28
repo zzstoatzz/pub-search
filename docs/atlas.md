@@ -159,17 +159,17 @@ documents. The panel always lists actual documents, with summaries and source
 excerpts when available. On phones it occupies at most 55% of the viewport. The old
 `/atlas-summary-preview` URL redirects to `/atlas?topics=1`.
 
-`scripts/build-atlas` runs `atlas_summaries.write_preview` after writing its normal
-gzip, so the existing six-hour Prefect flow generates and publishes summaries with
-the dataset. No flow registration change is needed.
+The six-hour Prefect flow builds the map, then runs `scripts/atlas_summaries.py`
+as a separate step with a one-hour timeout. Summary failure does not block publishing.
 
-The preview covers the 12 largest fine clusters. Each uses up to 10 actual members,
-ordered by membership strength with at most two per author before filling remaining
-slots. The document API supplies policy-filtered extracted text; the first 3,000
-characters per document go to `claude-haiku-4-5`, with identical excerpts deduplicated.
-At least three readable documents are required. The prompt asks for short, direct
-subject descriptions; coverage and AI attribution appear in the sources disclosure.
-These descriptions have not undergone independent quality evaluation.
+Generation covers all fine clusters with at least three readable member documents.
+Each uses up to 10 actual members, ordered by membership strength with a stable URI
+hash to break ties and at most two per author before filling remaining slots. The
+document API supplies policy-filtered extracted text; the first 3,000 characters per
+document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
+80–140 words in direct language; coverage and AI attribution appear in the sources
+disclosure. Coarse regions remain browsable without generated summaries. These
+summaries have not undergone independent quality evaluation.
 
 `atlas-summaries.json` is an optional, gitignored sidecar containing membership
 hashes, source URIs and excerpts, cited sources, model, and generation time. Atlas
@@ -177,15 +177,21 @@ loads it after the map and checks the build timestamp, exact member hashes, coun
 labels, and source membership. A stale or unavailable sidecar shows a retry message
 inside the panel; the map continues working. It does not download the Atlas twice.
 
-Generation uses at most three concurrent requests and the existing Atlas Anthropic
-credential. Cached summaries require matching membership, text, prompt, and model.
+Generation uses at most six concurrent requests and the dedicated
+`pub-search-atlas-openai-api-key` Prefect Secret, injected as `OPENAI_API_KEY`.
+Document hydration is paced to one request per second, with bounded retries for
+429 and transient gateway failures.
+SOPS holds its canonical value under `prefect.blocks`; `pub_search_atlas.OPENAI_API_KEY`
+references that block. Cached summaries require matching membership, text, label,
+prompt, and model. The sidecar records actual input/output token usage and cache hits.
 Failures leave an unavailable or partial sidecar and do not block the map rebuild.
 The sidecar is always rewritten to prevent stale data from surviving a failed run.
 
 Standalone refresh in the flow's injected environment:
 
 ```sh
-uv run scripts/atlas_summaries.py site/atlas.json.gz --limit 12
+uv run scripts/atlas_summaries.py site/atlas.json.gz
+# Add --limit 4 for a bounded quality check; --limit 0 disables generation.
 ```
 
 Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
