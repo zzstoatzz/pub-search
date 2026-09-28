@@ -13,7 +13,7 @@ module.exports = {
   globIgnores: ['sw.js', 'workbox-*.js', 'workbox-config.cjs'],
   manifestTransforms: [async entries => ({
     manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js'].includes(entry.url)
-      ? { ...entry, url: entry.url + '?build=topics-3' } : entry),
+      ? { ...entry, url: entry.url + '?build=topics-4' } : entry),
     warnings: [],
   })],
   swDest: 'sw.js',

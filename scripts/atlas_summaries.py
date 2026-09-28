@@ -55,8 +55,8 @@ def fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def sample_members(members: list[dict]) -> list[dict]:
-    ordered = sorted(members, key=lambda p: (-p.get("membershipProbabilityFine", 0), fingerprint(p["uri"])))
+def sample_members(members: list[dict], level: str = "fine") -> list[dict]:
+    ordered = sorted(members, key=lambda p: (-p.get("membershipProbabilityCoarse" if level == "coarse" else "membershipProbabilityFine", 0), fingerprint(p["uri"])))
     selected = []
     authors = defaultdict(int)
     for point in ordered:
@@ -144,23 +144,37 @@ class DocumentReader:
         raise RuntimeError("document retries exhausted")
 
 
-def generate(atlas_path: Path, api_key: str, limit: int | None = None) -> dict:
+def summary_cache(data: dict) -> dict:
+    if data.get("version") != VERSION:
+        return {}
+    return {(level, entry["evidenceHash"]): entry
+            for level, field in (("fine", "clusters"), ("coarse", "regions"))
+            for entry in data.get(field, [])}
+
+
+def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both") -> dict:
     if limit is not None and not 0 <= limit <= 2000:
         raise ValueError("summary limit must be between 0 and 2000")
+    if level not in ("fine", "coarse", "both"):
+        raise ValueError("invalid summary level")
+    levels = ("fine", "coarse") if level == "both" else (level,)
     raw = gzip.decompress(atlas_path.read_bytes())
     atlas = json.loads(raw)
     result = {"version": VERSION, "atlasSha256": hashlib.sha256(raw).hexdigest(),
               "atlasGeneratedAt": atlas["meta"]["generatedAt"],
               "generatedAt": datetime.now(timezone.utc).isoformat(), "model": MODEL,
               "sampling": "Up to 10 actual members, ranked by membership strength with author diversity; first 3,000 characters each.",
-              "clusters": [], "failed": 0, "status": "unavailable"}
+              "clusters": [], "regions": [], "failed": 0, "status": "unavailable"}
     if not api_key or limit == 0 or atlas["meta"].get("membershipVersion") != 1:
         return result
     members = defaultdict(list)
-    for point in atlas["points"]:
-        if point["clusterFine"] >= 0:
-            members[point["clusterFine"]].append(point)
-    clusters = sorted(atlas["clusters"]["fine"], key=lambda c: (-c["count"], c["id"]))[:limit]
+    clusters = []
+    for tier in levels:
+        field = "clusterCoarse" if tier == "coarse" else "clusterFine"
+        for point in atlas["points"]:
+            if point[field] >= 0:
+                members[(tier, point[field])].append(point)
+        clusters.extend((tier, c) for c in sorted(atlas["clusters"][tier], key=lambda c: (-c["count"], c["id"]))[:limit])
     with httpx.Client(timeout=20) as http:
         reader = DocumentReader(http)
         cache = {}
@@ -168,69 +182,73 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None) -> dict:
             cached_response = http.get(CACHE_URL)
             cached_response.raise_for_status()
             cached = cached_response.json()
-            cache = {c["evidenceHash"]: c for c in cached.get("clusters", [])} if cached.get("version") == VERSION else {}
+            cache = summary_cache(cached)
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             pass
         try:
             local = json.loads(atlas_path.with_name("atlas-summaries.json").read_text())
             if local.get("version") == VERSION:
-                cache.update({c["evidenceHash"]: c for c in local.get("clusters", [])})
+                cache.update(summary_cache(local))
         except (OSError, ValueError, KeyError, TypeError):
             pass
 
-        def build(cluster: dict) -> dict | None:
+        def build(item: tuple[str, dict]) -> dict | None:
+            tier, cluster = item
             try:
-                actual = members[cluster["id"]]
-                selected = sample_members(actual)
+                actual = members[(tier, cluster["id"])]
+                selected = sample_members(actual, tier)
                 docs = {d["uri"]: d for d in reader.read(selected)["documents"] if isinstance(d.get("content"), str) and d["content"].strip()}
                 evidence = prepare_evidence(selected, docs)
                 if len(evidence) < 3:
                     return None
                 member_hash = fingerprint(sorted(p["uri"] for p in actual))
                 evidence_hash = fingerprint({"members": member_hash, "evidence": evidence, "label": cluster["label"], "system": SYSTEM, "model": MODEL})
-                previous = cache.get(evidence_hash)
+                previous = cache.get((tier, evidence_hash))
                 usage = previous.get("usage", {}) if previous else {}
                 if previous:
                     answer = validate_answer({k: previous[k] for k in ("summary", "sourceIds")}, len(evidence))
                 else:
                     with OpenAI(api_key=api_key, timeout=60, max_retries=1) as model:
                         answer, usage = request_summary(model, cluster["label"], evidence)
-                    print(f"summary cluster {cluster['id']}: {usage['inputTokens']} input, {usage['outputTokens']} output tokens", flush=True)
+                    print(f"summary {tier} {cluster['id']}: {usage['inputTokens']} input, {usage['outputTokens']} output tokens", flush=True)
                 sources = [{"id": e["id"], "uri": e["uri"], "title": e["title"], "url": docs[e["uri"]].get("url", ""),
                             "excerpt": e["text"], "charactersRead": len(e["text"])} for e in evidence]
-                return {"id": cluster["id"], "label": cluster["label"], "memberCount": len(actual),
+                return {"level": tier, "id": cluster["id"], "label": cluster["label"], "memberCount": len(actual),
                         "membershipHash": member_hash, "evidenceHash": evidence_hash, "sources": sources,
                         "usage": usage, "cached": bool(previous),
                         "missingSources": sum(p["uri"] not in docs for p in selected), **answer}
             except Exception as exc:
                 detail = str(exc.response.status_code) if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
-                print(f"summary cluster {cluster['id']} unavailable ({detail})", flush=True)
+                print(f"summary {tier} {cluster['id']} unavailable ({detail})", flush=True)
                 return None
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             built = list(pool.map(build, clusters))
-    result["clusters"] = [entry for entry in built if entry is not None]
-    result["generated"] = sum(not entry["cached"] for entry in result["clusters"])
-    result["usage"] = {name: sum(entry["usage"].get(name, 0) for entry in result["clusters"] if not entry["cached"]) for name in ("inputTokens", "outputTokens")}
-    result["failed"] = len(built) - len(result["clusters"])
-    result["status"] = "ready" if result["clusters"] else "unavailable"
+    entries = [entry for entry in built if entry is not None]
+    result["clusters"] = [entry for entry in entries if entry["level"] == "fine"]
+    result["regions"] = [entry for entry in entries if entry["level"] == "coarse"]
+    result["generated"] = sum(not entry["cached"] for entry in entries)
+    result["usage"] = {name: sum(entry["usage"].get(name, 0) for entry in entries if not entry["cached"]) for name in ("inputTokens", "outputTokens")}
+    result["failed"] = len(built) - len(entries)
+    result["status"] = "ready" if entries else "unavailable"
     return result
 
 
-def write_preview(atlas_path: Path, api_key: str, limit: int | None = None) -> None:
+def write_preview(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both") -> None:
     output = atlas_path.with_name("atlas-summaries.json")
     try:
-        result = generate(atlas_path, api_key, limit)
+        result = generate(atlas_path, api_key, limit, level)
     except Exception as exc:
         print(f"summary preview unavailable ({type(exc).__name__})", flush=True)
         result = {"version": VERSION, "status": "unavailable", "clusters": []}
     output.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
-    print(f"summary preview: {len(result['clusters'])} clusters", flush=True)
+    print(f"summaries: {len(result['clusters'])} clusters, {len(result.get('regions', []))} regions", flush=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("atlas", type=Path)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--level", choices=("fine", "coarse", "both"), default="both")
     args = parser.parse_args()
-    write_preview(args.atlas, os.environ.get("OPENAI_API_KEY", ""), args.limit)
+    write_preview(args.atlas, os.environ.get("OPENAI_API_KEY", ""), args.limit, args.level)

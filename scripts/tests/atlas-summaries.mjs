@@ -5,7 +5,7 @@ import '../../site/atlas-summaries.js';
 const {validate, hitTest} = globalThis.AtlasSummaries;
 const atlas = {meta:{generatedAt:'today'},clusters:{fine:[{id:7,label:'agents'}]},points:[1,2,3].map(i=>({uri:`at://did:plc:a/site.standard.document/${i}`,clusterFine:7}))};
 const data = {version:2,status:'ready',atlasGeneratedAt:'today',clusters:[{id:7,label:'agents',memberCount:3,membershipHash:createHash('sha256').update(JSON.stringify(atlas.points.map(p=>p.uri).sort())).digest('hex'),summary:'Software agents coordinate tasks.',sourceIds:[1],sources:atlas.points.map((p,i)=>({id:i+1,uri:p.uri,title:'Document',excerpt:'Content'}))}]};
-test('accepts summaries tied to exact memberships',async()=>assert.equal(await validate(data,atlas),data.clusters));
+test('accepts summaries tied to exact memberships',async()=>assert.deepEqual(await validate(data,atlas),data.clusters.map(c=>({...c,level:'fine'}))));
 test('rejects stale build, counts, labels and evidence',async()=>{
   for(const field of ['atlasGeneratedAt','memberCount','label','sourceIds','membershipHash']) {
     const changed=structuredClone(data);
@@ -60,4 +60,19 @@ test('nearby topics count actual visible members, excluding unassigned and filte
 
 test('overlapping touch padding selects the closer label',()=>{
   assert.equal(hitTest([{id:1,x:0,y:20,w:100,h:44},{id:2,x:0,y:50,w:100,h:44}],40,53),1);
+});
+
+
+test('regions use their own membership even when a fine cluster has the same id', async()=>{
+  const map=structuredClone(atlas), sidecar=structuredClone(data);
+  map.clusters.coarse=[{id:7,label:'product development'}];
+  map.points.forEach(p=>p.clusterCoarse=-1);
+  const regionPoints=[4,5,6].map(i=>({uri:`at://did:plc:b/site.standard.document/${i}`,clusterCoarse:7,clusterFine:-1}));
+  map.points.push(...regionPoints);
+  sidecar.regions=[{...structuredClone(data.clusters[0]),label:'product development',
+    membershipHash:createHash('sha256').update(JSON.stringify(regionPoints.map(p=>p.uri).sort())).digest('hex'),
+    sources:regionPoints.map((p,i)=>({id:i+1,uri:p.uri,title:'Region document',excerpt:'Evidence'}))}];
+  assert.deepEqual((await validate(sidecar,map)).map(c=>[c.level,c.id]),[['fine',7],['coarse',7]]);
+  sidecar.regions[0].sources[0].uri=atlas.points[0].uri;
+  await assert.rejects(validate(sidecar,map));
 });

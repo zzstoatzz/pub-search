@@ -162,13 +162,13 @@ excerpts when available. On phones it occupies at most 55% of the viewport. The 
 The six-hour Prefect flow builds the map, then runs `scripts/atlas_summaries.py`
 as a separate step with a one-hour timeout. Summary failure does not block publishing.
 
-Generation covers all fine clusters with at least three readable member documents.
+Generation covers both coarse regions and fine clusters with at least three distinct readable member documents. Regions use direct coarse membership and coarse membership strength; they never roll up fine clusters.
 Each uses up to 10 actual members, ordered by membership strength with a stable URI
 hash to break ties and at most two per author before filling remaining slots. The
 document API supplies policy-filtered extracted text; the first 3,000 characters per
 document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
 two short sentences (30–45 words, at most 50) in direct language; coverage and AI
-attribution appear in the sources disclosure. Coarse regions remain browsable without generated summaries. These
+attribution appear in the sources disclosure. Both tiers use the same summary panel. These
 summaries have not undergone independent quality evaluation.
 
 `atlas-summaries.json` is an optional, gitignored sidecar containing membership
@@ -198,7 +198,7 @@ Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
 `node --test scripts/tests/atlas-summaries.mjs`, and
 `node scripts/tests/atlas-interaction.cjs`.
 
-Atlas's summary release uses `?build=topics-3` on its CSS and map scripts, with
+Atlas's summary release uses `?build=topics-4` on its CSS and map scripts, with
 matching URLs in the Workbox manifest. When changing those assets, bump the build
 value in both `atlas.html` and `workbox-config.cjs`, then regenerate `sw.js`.
 The previous worker ignores `v` parameters; reusing that parameter can combine

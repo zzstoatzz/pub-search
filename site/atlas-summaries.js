@@ -2,28 +2,34 @@
   'use strict';
   async function validate(data, atlas) {
     if (data?.version !== 2 || data.status !== 'ready' || data.atlasGeneratedAt !== atlas.meta.generatedAt || !Array.isArray(data.clusters)) throw Error('Summaries are updating. Try again shortly.');
-    var members = new Map();
-    atlas.points.forEach(function(p) {
-      if (p.clusterFine < 0) return;
-      if (!members.has(p.clusterFine)) members.set(p.clusterFine, []);
-      members.get(p.clusterFine).push(p.uri);
-    });
-    var known = new Map(atlas.clusters.fine.map(function(c) { return [c.id,c]; }));
-    var seen = new Set();
-    for (var c of data.clusters) {
-      var actual = known.get(c.id), uris = members.get(c.id);
-      if (!actual || seen.has(c.id) || c.label !== actual.label || c.memberCount !== uris?.length || typeof c.summary !== 'string' || !c.summary.trim() || !Array.isArray(c.sources) || c.sources.length < 3 || !Array.isArray(c.sourceIds) || !c.sourceIds.length) throw Error('Summaries are updating. Try again shortly.');
-      seen.add(c.id);
-      var hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(uris.slice().sort()))))).map(function(n) { return n.toString(16).padStart(2,'0'); }).join('');
-      if (hash !== c.membershipHash) throw Error('Summaries are updating. Try again shortly.');
-      var allowed = new Set(uris), sourceIds = new Set();
-      for (var s of c.sources) {
-        if (!allowed.has(s.uri) || !Number.isInteger(s.id) || sourceIds.has(s.id) || typeof s.title !== 'string' || typeof s.excerpt !== 'string') throw Error('Summary sources could not be verified.');
-        sourceIds.add(s.id);
+    var result = [];
+    for (var level of ['fine','coarse']) {
+      var entries=level==='fine' ? data.clusters : (data.regions === undefined ? [] : data.regions);
+      if (!Array.isArray(entries)) throw Error('Summaries are updating. Try again shortly.');
+      var members = new Map(), field=level==='fine'?'clusterFine':'clusterCoarse';
+      atlas.points.forEach(function(p) {
+        if (p[field] < 0) return;
+        if (!members.has(p[field])) members.set(p[field], []);
+        members.get(p[field]).push(p.uri);
+      });
+      var known = new Map((atlas.clusters[level] || []).map(function(c) { return [c.id,c]; }));
+      var seen = new Set();
+      for (var c of entries) {
+        var actual = known.get(c.id), uris = members.get(c.id);
+        if (!actual || seen.has(c.id) || c.label !== actual.label || c.memberCount !== uris?.length || typeof c.summary !== 'string' || !c.summary.trim() || !Array.isArray(c.sources) || c.sources.length < 3 || !Array.isArray(c.sourceIds) || !c.sourceIds.length) throw Error('Summaries are updating. Try again shortly.');
+        seen.add(c.id);
+        var hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(uris.slice().sort()))))).map(function(n) { return n.toString(16).padStart(2,'0'); }).join('');
+        if (hash !== c.membershipHash) throw Error('Summaries are updating. Try again shortly.');
+        var allowed = new Set(uris), sourceIds = new Set();
+        for (var source of c.sources) {
+          if (!allowed.has(source.uri) || !Number.isInteger(source.id) || sourceIds.has(source.id) || typeof source.title !== 'string' || typeof source.excerpt !== 'string') throw Error('Summary sources could not be verified.');
+          sourceIds.add(source.id);
+        }
+        if (c.sourceIds.some(function(id) { return !sourceIds.has(id); })) throw Error('Summary sources could not be verified.');
+        result.push(Object.assign({}, c, {level:level}));
       }
-      if (c.sourceIds.some(function(id) { return !sourceIds.has(id); })) throw Error('Summary sources could not be verified.');
     }
-    return data.clusters;
+    return result;
   }
   function hitTest(rects,x,y) {
     var best=null, distance=Infinity;
@@ -44,7 +50,7 @@
   }
   var summaries = new Map(), dataset, loading, panel, status, body, button, list, listView;
   var onSelect, onDocument, toUrl, active=null, topics=new Map(), members=new Map(), visible=[], listLimit=20, documentLimit=20;
-  var viewKey='', viewTimer, loadError='';
+  var viewKey='', viewTimer, loadError='', loaded=false;
   function key(id,level) { return (level || 'fine')+':'+id; }
   function setOpen(value) {
     panel.hidden=!value;
@@ -60,11 +66,11 @@
   }
   function renderSummary() {
     if (!active) return;
-    var c=active.level==='fine' ? summaries.get(active.id) : null;
+    var c=summaries.get(key(active.id,active.level));
     var text=document.getElementById('cluster-summary-text'), evidence=document.getElementById('cluster-summary-evidence');
     text.hidden=!c; evidence.hidden=!c;
     status.hidden=!!c;
-    status.textContent=loadError || (summaries.size ? 'No summary yet. Browse the documents below.' : loading ? 'Loading summary…' : 'No summary yet. Browse the documents below.');
+    status.textContent=loadError || (loaded ? 'Summary unavailable.' : 'Loading summary…');
     if (!c) return;
     text.textContent=c.summary;
     document.getElementById('cluster-summary-coverage').textContent=c.sources.length+' of '+c.memberCount.toLocaleString()+' documents · AI summary';
@@ -87,7 +93,7 @@
   }
   function markSummaries() {
     list.querySelectorAll('small[data-topic-id]').forEach(function(meta) {
-      meta.textContent=meta.dataset.countLabel+(meta.dataset.level==='fine' && summaries.has(Number(meta.dataset.topicId)) ? ' · summary' : '');
+      meta.textContent=meta.dataset.countLabel+(summaries.has(key(Number(meta.dataset.topicId),meta.dataset.level)) ? ' · summary' : '');
     });
   }
   function renderList() {
@@ -124,7 +130,7 @@
     loading=fetch('atlas-summaries.json?build='+encodeURIComponent(dataset.meta.generatedAt),{cache:'no-store'})
       .then(function(r) { if (!r.ok) throw Error('Summary unavailable. You can still browse the documents.'); return r.json(); })
       .then(function(d) { return validate(d,dataset); })
-      .then(function(clusters) { summaries=new Map(clusters.map(function(c) { return [c.id,c]; })); loadError=''; markSummaries(); })
+      .then(function(clusters) { summaries=new Map(clusters.map(function(c) { return [key(c.id,c.level),c]; })); loaded=true; loadError=''; markSummaries(); })
       .catch(function(error) { loadError=error.message; loading=null; throw error; });
     return loading;
   }

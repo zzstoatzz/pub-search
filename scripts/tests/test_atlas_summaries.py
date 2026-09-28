@@ -147,3 +147,21 @@ def test_summary_retries_invalid_output_over_http(first):
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-q']))
+
+
+def test_region_sampling_uses_region_strength():
+    points = [{"uri": f"at://did:plc:{i}/site.standard.document/1",
+               "membershipProbabilityFine": i / 20,
+               "membershipProbabilityCoarse": 1 - i / 20} for i in range(20)]
+    assert sample_members(points, "coarse") == points[:10]
+    assert sample_members(points, "fine") == list(reversed(points))[:10]
+
+
+def test_cache_keeps_region_and_cluster_evidence_separate():
+    from atlas_summaries import summary_cache
+    fine = {"evidenceHash": "same", "summary": "Fine topic."}
+    coarse = {"evidenceHash": "same", "summary": "Broad topic."}
+    cache = summary_cache({"version": 2, "clusters": [fine], "regions": [coarse]})
+    assert cache[("fine", "same")] == fine
+    assert cache[("coarse", "same")] == coarse
+    assert summary_cache({"version": 2, "clusters": [fine]}) == {("fine", "same"): fine}
