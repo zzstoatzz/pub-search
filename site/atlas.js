@@ -139,7 +139,7 @@
   var gridIndex = null;
   var pointSpacing = null;
   var uriToIndex = null; // Map<uri, index> for search matching
-  var clusterFineArr = null; // Uint16Array of fine cluster IDs per point
+  var clusterFineArr = null; // Int32Array of fine cluster IDs; -1 is unassigned
   var pointHueArr = null; // Uint8Array: hue step for 'other' points, 255 = platform color
 
   // --- popularity / label ranking ---
@@ -1119,6 +1119,7 @@
   var CONN_RADIUS = 0.025;
   var CONN_MAX_PER_POINT = 4;
   var CONN_MAX_LINES = 120000;
+  var connectionVertexCount = 0;
 
   function buildConnectionLines() {
     if (!atlasGL || !gridIndex || !clusterFineArr) return;
@@ -1130,6 +1131,7 @@
     for (var i = 0; i < n && count / 2 < CONN_MAX_LINES; i++) {
       var px = pointsX[i], py = pointsY[i];
       var ci = clusterFineArr[i];
+      if (ci < 0) continue;
       var colorIdx = pointHueArr[i] !== 255 ? PLATFORMS.length + pointHueArr[i] : platformIdx[i];
       var gxMin = Math.floor((px - CONN_RADIUS) / cs), gxMax = Math.floor((px + CONN_RADIUS) / cs);
       var gyMin = Math.floor((py - CONN_RADIUS) / cs), gyMax = Math.floor((py + CONN_RADIUS) / cs);
@@ -1156,6 +1158,7 @@
         }
       }
     }
+    connectionVertexCount = count;
     atlasGL.uploadLines(count * 4 === verts.length ? verts : verts.slice(0, count * 4), count);
     markDirty();
   }
@@ -1333,6 +1336,7 @@
 
         var sx1 = cx + px * scale, sy1 = cy + py * scale;
         var ci = clusterFineArr[i];
+        if (ci < 0) continue;
         var gxMin2 = Math.floor((px - connRadius) / cs);
         var gxMax2 = Math.floor((px + connRadius) / cs);
         var gyMin2 = Math.floor((py - connRadius) / cs);
@@ -2328,10 +2332,7 @@
           uriToIndex.set(d.points[i].uri, i);
         }
         // build cluster metadata: fine cluster array, dominant platform, spatial radius
-        // Uint16, not Uint8: fine cluster ids run into the hundreds, and
-        // truncation aliased distant clusters together (id 300 → 44), which
-        // drew connection lines between unrelated documents.
-        clusterFineArr = new Uint16Array(n);
+        clusterFineArr = new Int32Array(n);
         // 'other' points inherit their fine cluster's lantern hue (255 = use
         // platform color) so the dense center isn't a monotonous gray mass
         pointHueArr = new Uint8Array(n);
@@ -2342,13 +2343,17 @@
           var cc = d.points[i].clusterCoarse;
           var cf = d.points[i].clusterFine;
           clusterFineArr[i] = cf;
-          if (platformIdx[i] === otherIdx) {
+          if (cf >= 0 && platformIdx[i] === otherIdx) {
             pointHueArr[i] = Math.floor(hash01(cf) * HUE_STEPS) % HUE_STEPS;
           }
-          if (!coarsePlatCounts[cc]) coarsePlatCounts[cc] = new Uint16Array(PLATFORMS.length);
-          if (!finePlatCounts[cf]) finePlatCounts[cf] = new Uint16Array(PLATFORMS.length);
-          coarsePlatCounts[cc][platformIdx[i]]++;
-          finePlatCounts[cf][platformIdx[i]]++;
+          if (cc >= 0) {
+            if (!coarsePlatCounts[cc]) coarsePlatCounts[cc] = new Uint32Array(PLATFORMS.length);
+            coarsePlatCounts[cc][platformIdx[i]]++;
+          }
+          if (cf >= 0) {
+            if (!finePlatCounts[cf]) finePlatCounts[cf] = new Uint32Array(PLATFORMS.length);
+            finePlatCounts[cf][platformIdx[i]]++;
+          }
         }
         function dominantPlatform(counts) {
           if (!counts) return 'other';
@@ -2410,6 +2415,7 @@
         var finePts = {};
         for (var i = 0; i < n; i++) {
           var cf = d.points[i].clusterFine;
+          if (cf < 0) continue;
           (finePts[cf] || (finePts[cf] = [])).push([pointsX[i], pointsY[i]]);
         }
         for (var c = 0; c < d.clusters.fine.length; c++) {
@@ -2731,8 +2737,14 @@
       renderLegend();
       markDirty();
     },
-    _debug: function() {
+    _debug: function(index) {
       return {
+        connectionVertexCount: connectionVertexCount,
+        membership: data && data.points[index] ? {
+          coarse: data.points[index].clusterCoarse,
+          fine: clusterFineArr[index],
+          hue: pointHueArr[index],
+        } : null,
         zoom: view.zoom, panX: view.panX, panY: view.panY,
         animating: animating, planetsActive: planetsActive,
         hovered: hoveredIndex, selected: selectedIndex,

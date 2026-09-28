@@ -252,7 +252,9 @@ def llm_refine_labels(
     client = AsyncAnthropic(api_key=api_key)
     rng = np.random.default_rng(42)
 
-    cluster_ids = sorted(tfidf_labels.keys())
+    cluster_ids = sorted(cid for cid in tfidf_labels if titles_per_cluster.get(cid))
+    if not cluster_ids:
+        return tfidf_labels.copy()
     batches = [cluster_ids[i : i + batch_size] for i in range(0, len(cluster_ids), batch_size)]
 
     # Split fixed instructions (system, cached) from variable per-batch payload
@@ -317,29 +319,71 @@ def llm_refine_labels(
 
     # merge: use LLM labels where available, fall back to c-TF-IDF
     final = {}
-    for cid in cluster_ids:
+    for cid in tfidf_labels:
         final[cid] = refined.get(cid, tfidf_labels[cid])
     log(f"  {tier}: {len(refined)}/{len(cluster_ids)} labels refined by LLM")
     return final
 
 
-def assign_outliers(coords_2d: np.ndarray, labels: np.ndarray, centroids: dict[int, np.ndarray]) -> np.ndarray:
-    """Assign outlier points (label == -1) to nearest cluster centroid."""
-    result = labels.copy()
-    outlier_mask = result == -1
-    if not outlier_mask.any() or not centroids:
-        return result
+def cluster_tier(name, semantic_coords, display_coords, min_cluster_size, min_samples):
+    import hdbscan
 
-    centroid_ids = sorted(centroids.keys())
-    centroid_arr = np.array([centroids[c] for c in centroid_ids])
-    outlier_coords = coords_2d[outlier_mask]
+    log(f"HDBSCAN {name} (min_cluster_size={min_cluster_size}) on 10D...")
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=min_cluster_size, min_samples=min_samples
+    ).fit(semantic_coords)
+    labels = clusterer.labels_
+    centroids = {
+        int(cid): display_coords[labels == cid].mean(axis=0)
+        for cid in sorted(set(labels)) if cid >= 0
+    }
+    n_out = int((labels == -1).sum())
+    log(f"  {len(centroids)} clusters, {n_out} unassigned ({n_out / len(labels):.1%})")
+    return labels, centroids, clusterer.probabilities_
 
-    # nearest centroid for each outlier
-    dists = np.linalg.norm(outlier_coords[:, None] - centroid_arr[None, :], axis=2)
-    nearest = dists.argmin(axis=1)
-    result[outlier_mask] = np.array(centroid_ids)[nearest]
 
-    return result
+def titles_by_membership(labels, metadata):
+    titles = {int(cid): [] for cid in sorted(set(labels)) if cid >= 0}
+    for cid, meta in zip(labels, metadata, strict=True):
+        if cid >= 0 and meta.get("title"):
+            titles[int(cid)].append(meta["title"])
+    return titles
+
+
+def parent_memberships(fine, coarse):
+    parents = {}
+    for cid in sorted(set(fine)):
+        if cid < 0:
+            continue
+        counts = Counter(int(c) for c in coarse[fine == cid] if c >= 0)
+        parents[int(cid)] = counts.most_common(1)[0][0] if counts else None
+    return parents
+
+
+def validate_memberships(output):
+    for tier in ("coarse", "fine"):
+        suffix = tier.capitalize()
+        clusters = output["clusters"][tier]
+        ids = {c["id"] for c in clusters}
+        if len(ids) != len(clusters) or any(cid < 0 for cid in ids):
+            raise ValueError(f"invalid {tier} cluster IDs")
+        counts = Counter()
+        for point in output["points"]:
+            cid = point[f"cluster{suffix}"]
+            strength = point[f"membershipProbability{suffix}"]
+            if cid != -1 and cid not in ids:
+                raise ValueError(f"unknown {tier} cluster {cid}")
+            if not 0 <= strength <= 1 or (cid == -1 and strength != 0):
+                raise ValueError(f"invalid {tier} membership strength")
+            counts[cid] += 1
+        if any(c["count"] != counts[c["id"]] for c in clusters):
+            raise ValueError(f"incorrect {tier} member count")
+        if output["meta"][f"nUnassigned{suffix}"] != counts[-1]:
+            raise ValueError(f"incorrect {tier} unassigned count")
+    coarse_ids = {c["id"] for c in output["clusters"]["coarse"]}
+    if any(c["parent"] is not None and c["parent"] not in coarse_ids
+           for c in output["clusters"]["fine"]):
+        raise ValueError("unknown parent region")
 
 
 def load_avatar_cache(local_path: Path, remote_url: str) -> dict[str, dict]:
@@ -623,85 +667,24 @@ def main():
     )
     X_10d = cluster_reducer.fit_transform(X_pca)
 
-    import hdbscan
+    labels_coarse, coarse_centroids, probability_coarse = cluster_tier(
+        "coarse", X_10d, X_2d, 50, 10
+    )
+    labels_fine, fine_centroids, probability_fine = cluster_tier(
+        "fine", X_10d, X_2d, 20, 3
+    )
 
-    def cluster_tier(name, min_cluster_size, min_samples):
-        """HDBSCAN in 10D; outliers snapped to the nearest 10D centroid.
-
-        Returns (labels, centroids_2d, is_core) — centroids are recomputed in
-        display space afterwards, since that's where labels get placed.
-        `is_core` marks points HDBSCAN actually assigned, before snapping.
-        """
-        log(f"HDBSCAN {name} (min_cluster_size={min_cluster_size}) on 10D...")
-        raw = hdbscan.HDBSCAN(
-            min_cluster_size=min_cluster_size, min_samples=min_samples
-        ).fit_predict(X_10d)
-        n_clusters = len(set(raw)) - (1 if -1 in raw else 0)
-        n_out = (raw == -1).sum()
-        log(f"  {n_clusters} clusters, {n_out} outliers ({n_out / len(raw):.1%})")
-
-        centroids_10d = {}
-        for cid in set(raw):
-            if cid == -1:
-                continue
-            centroids_10d[cid] = X_10d[raw == cid].mean(axis=0)
-
-        labels = assign_outliers(X_10d, raw, centroids_10d)
-
-        centroids_2d = {}
-        for cid in set(labels):
-            centroids_2d[cid] = X_2d[labels == cid].mean(axis=0)
-        return labels, centroids_2d, raw != -1
-
-    labels_coarse, coarse_centroids, core_coarse = cluster_tier("coarse", 50, 10)
-    labels_fine, fine_centroids, core_fine = cluster_tier("fine", 20, 3)
-
-    # --- step 4: labels via c-TF-IDF + optional LLM refinement ---
-    log("computing cluster labels (c-TF-IDF on titles)...")
-
-    # Label evidence comes from CORE members only — points HDBSCAN actually
-    # assigned, not the ~40% it calls noise and assign_outliers snaps to a
-    # nearest centroid for display. Snapped points are ~2.6x further from the
-    # centroid they inherit than real members, and they make up a median 36%
-    # (coarse) / 42% (fine) of each cluster's titles, so pooling them blurs
-    # the vocabulary the label is drawn from. On a ~53k-doc corpus this
-    # changes 61% of coarse and 70% of fine labels — e.g. "startup marketing
-    # video" -> "startup microsoft senior".
-    #
-    # Cluster ids always originate from core points, but a cluster whose core
-    # members all have empty titles would end up with no evidence at all, so
-    # fall back to the full membership in that case rather than emitting
-    # "cluster 47".
-    coarse_titles: dict[int, list[str]] = {int(c): [] for c in coarse_centroids}
-    fine_titles: dict[int, list[str]] = {int(c): [] for c in fine_centroids}
-    coarse_all: dict[int, list[str]] = {int(c): [] for c in coarse_centroids}
-    fine_all: dict[int, list[str]] = {int(c): [] for c in fine_centroids}
-    for i, meta in enumerate(metadata):
-        title = meta.get("title", "")
-        if not title:
-            continue
-        cc, cf = int(labels_coarse[i]), int(labels_fine[i])
-        coarse_all[cc].append(title)
-        fine_all[cf].append(title)
-        if core_coarse[i]:
-            coarse_titles[cc].append(title)
-        if core_fine[i]:
-            fine_titles[cf].append(title)
-
-    for cid, titles in coarse_titles.items():
-        if not titles:
-            coarse_titles[cid] = coarse_all[cid]
-    for cid, titles in fine_titles.items():
-        if not titles:
-            fine_titles[cid] = fine_all[cid]
+    log("computing cluster labels (c-TF-IDF on assigned titles)...")
+    coarse_titles = titles_by_membership(labels_coarse, metadata)
+    fine_titles = titles_by_membership(labels_fine, metadata)
 
     coarse_labels = cluster_labels(coarse_titles)
     fine_labels = cluster_labels(fine_titles)
 
     if settings.anthropic_api_key:
         log("refining labels with LLM...")
-        coarse_counts = {int(cid): int((labels_coarse == cid).sum()) for cid in set(labels_coarse)}
-        fine_counts = {int(cid): int((labels_fine == cid).sum()) for cid in set(labels_fine)}
+        coarse_counts = {int(cid): int((labels_coarse == cid).sum()) for cid in coarse_centroids}
+        fine_counts = {int(cid): int((labels_fine == cid).sum()) for cid in fine_centroids}
         try:
             coarse_labels = llm_refine_labels(
                 coarse_labels, coarse_titles, coarse_counts,
@@ -716,13 +699,7 @@ def main():
     else:
         log("  (no ANTHROPIC_API_KEY — using c-TF-IDF labels only)")
 
-    # map fine clusters to their parent coarse cluster (majority vote)
-    fine_to_coarse = {}
-    for fine_id in set(labels_fine):
-        fine_mask = labels_fine == fine_id
-        coarse_for_fine = labels_coarse[fine_mask]
-        counts = Counter(coarse_for_fine)
-        fine_to_coarse[int(fine_id)] = int(counts.most_common(1)[0][0])
+    fine_to_coarse = parent_memberships(labels_fine, labels_coarse)
 
     log(f"  coarse: {len(coarse_labels)} labels")
     log(f"  fine: {len(fine_labels)} labels")
@@ -825,6 +802,8 @@ def main():
             "path": meta["path"],
             "clusterCoarse": int(labels_coarse[i]),
             "clusterFine": int(labels_fine[i]),
+            "membershipProbabilityCoarse": round(float(probability_coarse[i]), 4),
+            "membershipProbabilityFine": round(float(probability_fine[i]), 4),
         })
 
     coarse_clusters = []
@@ -847,7 +826,7 @@ def main():
             "cx": round(float(fine_centroids[cid][0]), 4),
             "cy": round(float(fine_centroids[cid][1]), 4),
             "count": count,
-            "parent": fine_to_coarse.get(int(cid), 0),
+            "parent": fine_to_coarse[int(cid)],
         })
 
     output = {
@@ -860,9 +839,14 @@ def main():
         "meta": {
             "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "nDocuments": len(points),
+            "membershipVersion": 1,
+            "nUnassignedCoarse": int((labels_coarse == -1).sum()),
+            "nUnassignedFine": int((labels_fine == -1).sum()),
             "nPublications": len(publications),
         },
     }
+
+    validate_memberships(output)
 
     # gzipped only: the raw json outgrew cloudflare pages' 25 MiB per-file
     # limit (83k points), so the site ships atlas.json.gz and the client
