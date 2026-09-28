@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>Atlas topic interaction checks</title>
+<style>body{font:14px monospace}iframe{border:1px solid #aaa}pre{white-space:pre-wrap}</style>
+<h1>Atlas topic interaction checks</h1><pre id="result">Running…</pre>
+<iframe title="Atlas under test" style="width:390px;height:844px" src="/site/atlas.html?x=0.0075&y=0&z=5"></iframe>
+<script type="module">
+const frame=document.querySelector('iframe'), output=document.querySelector('#result');
+if(new URLSearchParams(location.search).has('desktop')) frame.style.width='1280px';
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const check=(ok,msg)=>{if(!ok)throw Error(msg);output.textContent+='\nPASS '+msg;};
+try {
+ await new Promise(resolve=>frame.onload=resolve);
+ const w=frame.contentWindow,d=w.document,canvas=d.querySelector('#canvas');
+ const deadline=Date.now()+20000;
+ while(!w.atlas || !d.querySelector('#loading').classList.contains('hidden') || w.atlas._debug().animating) {if(Date.now()>deadline)throw Error('load timeout');await wait(50);}
+ await wait(250);output.textContent='';
+ const event=(type,x,y)=>canvas.dispatchEvent(new w.PointerEvent(type,{bubbles:true,pointerId:1,pointerType:'touch',isPrimary:true,buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+ const tap=(x,y)=>{event('pointerdown',x,y);event('pointerup',x,y);};
+ tap(w.innerWidth/2,w.innerHeight/2-14);
+ check(!d.querySelector('#cluster-summary').hidden && d.querySelector('#cluster-summary-title').textContent==='agent tools','label without a summary opens its cluster above underlying documents');
+ check(d.querySelector('#node-detail').hidden,'label tap does not select an underlying document');
+ check(JSON.stringify(w.atlas._debug().selectedTopicIndices)==='[0,1]','highlight contains assigned members only');
+ check(d.querySelectorAll('#cluster-documents li').length===2,'documents remain available without summary data');
+ event('pointerdown',190,180);event('pointermove',240,210);event('pointerup',240,210);await wait(250);
+ check(!d.querySelector('#cluster-summary').hidden && d.querySelector('#cluster-summary-title').textContent==='agent tools','panning preserves the selected topic');
+ d.querySelector('#cluster-documents button').click();
+ check(!d.querySelector('#node-detail').hidden && !d.querySelector('#node-detail-cluster').hidden,'document selection offers a route back to its cluster');
+ d.querySelector('#node-detail-cluster').click();
+ check(!d.querySelector('#cluster-summary').hidden && d.querySelector('#node-detail').hidden,'document topic link opens the cluster');
+ d.querySelector('#cluster-summary-close').click();await wait(250);
+ check(w.atlas._debug().selectedTopicIndices.length===0,'closing clears member highlighting');
+ d.querySelector('#cluster-summary-button').click();
+ check(d.querySelector('#cluster-nearby button')?.textContent.includes('agent tools'),'nearby list includes clusters without summaries');
+ d.querySelector('#cluster-summary-close').click();
+ while(w.atlas._debug().animating) await wait(30);
+ const zoom=w.atlas._debug().zoom;
+ canvas.dispatchEvent(new w.WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:w.innerWidth/2,clientY:w.innerHeight/2,deltaY:Math.log(1/zoom)/Math.log(0.995)}));
+ await wait(100);
+ const state=w.atlas._debug(), scale=Math.min(w.innerWidth,w.innerHeight)*0.42*state.zoom;
+ tap(w.innerWidth/2+(0.0075+state.panX)*scale,w.innerHeight/2+state.panY*scale-Math.sqrt(2)*1.5);
+ check(!d.querySelector('#cluster-summary').hidden && d.querySelector('#cluster-summary-title').textContent==='AI agents','region labels use direct region membership');
+ output.textContent+='\nAll topic interaction checks passed';
+} catch(error){output.textContent+='\nFAIL '+error.stack;}
+</script>

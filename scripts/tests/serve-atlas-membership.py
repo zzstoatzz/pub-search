@@ -65,7 +65,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path == "/":
+        if path == "/topics":
+            body, kind = (ROOT / "scripts/tests/atlas-topics.html").read_bytes(), "text/html"
+        elif path == "/site/atlas-summaries.json":
+            body, kind = b'{"version":2,"status":"unavailable","clusters":[]}', "application/json"
+        elif path == "/":
             body, kind = PAGE, "text/html"
         elif path == "/site/atlas.json.gz":
             body, kind = DATA, "application/gzip"

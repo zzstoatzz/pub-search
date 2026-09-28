@@ -1098,7 +1098,7 @@
     if (!atlasGL || !platformIdx) return;
     var n = platformIdx.length;
     var searching = searchMatches && searchMatches.size > 0;
-    if (!searching && activePlatforms === null) {
+    if (!searching && activePlatforms === null && !selectedTopicSet) {
       atlasGL.setPointState(null);
       return;
     }
@@ -1107,9 +1107,10 @@
       var dim = false;
       if (activePlatforms !== null && !activePlatforms.has(PLATFORMS[platformIdx[i]])) dim = true;
       if (searching && !searchMatches.has(i)) dim = true;
+      if (selectedTopicSet && !selectedTopicSet.has(i)) dim = true;
       st[i] = dim ? 1 : 0;
     }
-    if (searching) searchMatches.forEach(function(i) { st[i] = 2; });
+    if (searching) searchMatches.forEach(function(i) { if (!selectedTopicSet || selectedTopicSet.has(i)) st[i] = 2; });
     atlasGL.setPointState(st);
   }
 
@@ -1235,6 +1236,8 @@
     var pad = 0.05;
     var xMin = tl[0] - pad, xMax = br[0] + pad;
     var yMin = tl[1] - pad, yMax = br[1] + pad;
+
+    if (window.AtlasSummaries) AtlasSummaries.updateView({left:tl[0],right:br[0],top:tl[1],bottom:br[1]},'fine',activePlatforms);
 
     var smallViewport = W < 600;
 
@@ -1445,7 +1448,7 @@
     // --- points ---
     var pointR = Math.min(planetRadiusFor(zoom), atlasGL ? atlasGL.pointRadiusLimit(dpr) : Infinity);
     var starness = zoom >= 2 ? fadeOut(zoom, 7, 8) : 1;
-    var filtering = activePlatforms !== null;
+    var filtering = activePlatforms !== null || !!selectedTopicSet;
     if (atlasGL) {
       // one GPU pass: static lines, then all 83k points in a single draw.
       // Dim/highlight (filter + search) ride a per-point state buffer that
@@ -1459,7 +1462,7 @@
         radius: pointR,
         starness: starness,
         alpha: zoom >= 2 ? 0.95 : 0.55 + 0.4 * fadeIn(zoom, 1.5, 0.5),
-        dim: searching ? 0.35 : 0.12,
+        dim: selectedTopicSet || searching ? 0.35 : 0.12,
         lineFade: connAlphaFactor,
         lineAlphas: connAlphas,
         hoverIdx: hoveredIndex,
@@ -1472,13 +1475,13 @@
       else buildDotSprites();
       // draw dimmed points first, then active points on top
       for (var pass = 0; pass < (filtering ? 2 : 1); pass++) {
-        if (filtering && pass === 0) ctx.globalAlpha = 0.12;
+        if (filtering && pass === 0) ctx.globalAlpha = selectedTopicSet ? 0.35 : 0.12;
         else ctx.globalAlpha = 1;
         for (var i = 0; i < n; i++) {
           var px = pointsX[i], py = pointsY[i];
           if (px < xMin || px > xMax || py < yMin || py > yMax) continue;
           var pi = platformIdx[i];
-          var isActive = !filtering || activePlatforms.has(PLATFORMS[pi]);
+          var isActive = (!activePlatforms || activePlatforms.has(PLATFORMS[pi])) && (!selectedTopicSet || selectedTopicSet.has(i));
           // pass 0 = dimmed (inactive), pass 1 = bright (active)
           if (filtering && ((pass === 0 && isActive) || (pass === 1 && !isActive))) continue;
           if (!filtering && pass === 1) continue;
@@ -1823,7 +1826,7 @@
         if (sy < LABEL_MARGIN || sy > H - 40) continue;
         var tw = ctx.measureText(cl.label).width;
         if (!fitsHoriz(sx, tw / 2)) continue;
-        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(cl.label, sx, sy, dark); shownCoarse++; }
+        if (canPlace(sx, sy, tw, fontSize)) { drawLabel(cl.label, sx, sy, dark); shownCoarse++; clusterLabelRects.push({id:'coarse:'+cl.id,x:sx-tw/2-6,y:sy-22,w:tw+12,h:44}); }
       }
     }
 
@@ -1846,7 +1849,7 @@
         if (!fitsHoriz(sx, tw / 2)) continue;
         if (canPlace(sx, sy, tw, fontSize)) {
           drawLabel(cl.label, sx, sy, dark); shownFine++;
-          if (window.AtlasSummaries && AtlasSummaries.has(cl.id)) clusterLabelRects.push({id:cl.id,x:sx-tw/2-6,y:sy-22,w:tw+12,h:44});
+          clusterLabelRects.push({id:'fine:'+cl.id,x:sx-tw/2-6,y:sy-22,w:tw+12,h:44});
         }
       }
     }
@@ -2029,6 +2032,9 @@
   var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
   var clusterLabelRects = [];
+  var selectedTopicIndices = [];
+  var selectedTopicSet = null;
+  var detailClusterIndex = -2;
   var selectedIndex = -1;
   var selectedPub = -1;
 
@@ -2087,6 +2093,16 @@
     if (detailLink.getAttribute('href') !== url) detailLink.href = url;
     var action = pub ? 'go to publication ↗' : 'read document ↗';
     if (detailLink.textContent !== action) detailLink.textContent = action;
+    if (detailClusterIndex !== selectedIndex) {
+      detailClusterIndex=selectedIndex;
+      var clusterButton=document.getElementById('node-detail-cluster');
+      var cluster=!pub && data.clusters.fine.find(function(c) { return c.id===node.clusterFine; });
+      if (clusterButton) clusterButton.hidden=!cluster;
+      if (clusterButton && cluster) {
+        clusterButton.textContent='topic: '+cluster.label+' →';
+        clusterButton.onclick=function() { AtlasSummaries.open(cluster.id,false); };
+      }
+    }
     detail.hidden = false;
     if (W >= 600) {
       var x = cx + (pub ? pub.cx : pointsX[selectedIndex]) * scale;
@@ -2115,7 +2131,7 @@
     },
     select: function(x,y,type) {
       var clusterId = window.AtlasSummaries ? AtlasSummaries.hitTest(clusterLabelRects,x,y) : null;
-      if (clusterId !== null) { clearSelection(); AtlasSummaries.open(clusterId,false); return; }
+      if (clusterId !== null) { var topic = clusterId.split(':'); clearSelection(); AtlasSummaries.open(Number(topic[1]),false,topic[0]); return; }
       if (window.AtlasSummaries) AtlasSummaries.close();
       var hit = pickNode(x,y,type);
       selectedPub = hit.pub;
@@ -2485,14 +2501,24 @@
         if (pubData.length > 0) statsText += ' \u00B7 ' + pubData.length + ' publications';
         document.getElementById('stats').textContent = statsText;
         document.getElementById('loading').classList.add('hidden');
-        if (window.AtlasSummaries) AtlasSummaries.init(d,function(id) {
+        if (window.AtlasSummaries) AtlasSummaries.init(d,function(topic,focus,indices) {
+          selectedTopicIndices=indices || [];
+          selectedTopicSet=topic ? new Set(selectedTopicIndices) : null;
+          rebuildPointState();
           clearSelection();
-          var cluster = d.clusters.fine.find(function(c) { return c.id === id; });
+          markDirty();
+          if (!topic || !focus) return;
+          var cluster=d.clusters[topic.level].find(function(c) { return c.id===topic.id; });
           if (cluster) {
-            var sheetHeight = W < 600 ? document.getElementById('cluster-summary').offsetHeight : 0;
-            animateTo(cluster.cx,cluster.cy + sheetHeight / (2 * Math.min(W,H) * 0.42 * 5),5);
+            var z=topic.level==='coarse'?2:5;
+            var sheetHeight=W<600?document.getElementById('cluster-summary').offsetHeight:0;
+            animateTo(cluster.cx,cluster.cy+sheetHeight/(2*Math.min(W,H)*0.42*z),z);
           }
-        },markDirty);
+        },function(index) {
+          selectedIndex=index; selectedPub=-1;
+          animateTo(pointsX[index],pointsY[index],Math.max(12,view.zoom));
+          updateSelection(); markDirty();
+        },function(point) { return atUriToUrl(point.uri,point.basePath,point.platform,point.path); });
         markDirty();
         // jump to specific document by URI (from "view on atlas" links)
         if (pendingUri) {
@@ -2767,6 +2793,7 @@
         zoom: view.zoom, panX: view.panX, panY: view.panY,
         animating: animating, planetsActive: planetsActive,
         hovered: hoveredIndex, selected: selectedIndex,
+        selectedTopicIndices: selectedTopicIndices.slice(),
         planetLayoutBuilds: planetLayoutBuilds,
         planetPointsVisited: planetLayout ? planetLayout.visited : 0,
         planetIndices: planetLayout ? planetLayout.points.map(function(p) { return p.i; }) : [],

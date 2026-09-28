@@ -43,3 +43,21 @@ test('new Atlas assets bypass legacy caches and match the new offline manifest',
     assert.ok(manifest.some(entry=>entry.url===reference), `${file} must remain available offline`);
   }
 });
+
+test('nearby topics count actual visible members, excluding unassigned and filtered documents', () => {
+  const points=[
+    {x:0,y:0,clusterFine:7,clusterCoarse:2,platform:'leaflet'},
+    {x:0.5,y:0.5,clusterFine:7,clusterCoarse:3,platform:'other'},
+    {x:0,y:0,clusterFine:-1,clusterCoarse:-1,platform:'leaflet'},
+    {x:5,y:5,clusterFine:8,clusterCoarse:2,platform:'leaflet'},
+  ];
+  const bounds={left:-1,right:1,top:-1,bottom:1};
+  assert.deepEqual(globalThis.AtlasSummaries.nearby(points,bounds,'fine',null),[{id:7,count:2,level:'fine'}]);
+  assert.deepEqual(globalThis.AtlasSummaries.nearby(points,bounds,'fine',new Set(['leaflet'])),[{id:7,count:1,level:'fine'}]);
+  assert.deepEqual(globalThis.AtlasSummaries.nearby(points,bounds,'coarse',null),[{id:2,count:1,level:'coarse'},{id:3,count:1,level:'coarse'}]);
+  assert.deepEqual(globalThis.AtlasSummaries.nearby(points,{left:9,right:10,top:9,bottom:10},'fine',null),[]);
+});
+
+test('overlapping touch padding selects the closer label',()=>{
+  assert.equal(hitTest([{id:1,x:0,y:20,w:100,h:44},{id:2,x:0,y:50,w:100,h:44}],40,53),1);
+});

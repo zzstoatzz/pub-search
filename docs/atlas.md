@@ -144,9 +144,19 @@ and the builder move are separable; do not couple them.
 
 ## cluster summary preview
 
-Atlas's **topics** button opens a summary panel. Choosing a topic centers its cluster;
-clicking an available fine-cluster label opens the same panel. On phones the panel
-sits at the bottom, with scrollable sources and excerpts. The old
+Atlas's **topics in view** control opens a list ranked by the number of actual
+cluster members in the viewport, respecting platform filters. Counts update after
+180 ms without view changes. The list includes every fine cluster in view, whether
+or not a summary exists, with 20 rows at a time. Choosing a topic centers it and
+keeps its members bright while softening other points. Selection stays fixed while
+panning. Closing the panel clears that highlight.
+
+Every visible region and cluster label is selectable and takes priority over
+documents underneath. Overlapping touch padding picks the closer label. Region
+documents use direct coarse membership; they do not roll up fine clusters. Document
+cards link to their assigned fine cluster, with no invented link for unassigned
+documents. The panel always lists actual documents, with summaries and source
+excerpts when available. On phones it occupies at most 55% of the viewport. The old
 `/atlas-summary-preview` URL redirects to `/atlas?topics=1`.
 
 `scripts/build-atlas` runs `atlas_summaries.write_preview` after writing its normal
@@ -182,8 +192,15 @@ Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
 `node --test scripts/tests/atlas-summaries.mjs`, and
 `node scripts/tests/atlas-interaction.cjs`.
 
-Atlas's summary release uses `?build=topics-2` on its CSS and map scripts, with
+Atlas's summary release uses `?build=topics-3` on its CSS and map scripts, with
 matching URLs in the Workbox manifest. When changing those assets, bump the build
 value in both `atlas.html` and `workbox-config.cjs`, then regenerate `sw.js`.
 The previous worker ignores `v` parameters; reusing that parameter can combine
 new HTML with old cached code during an update.
+
+
+Interaction regression: run `uv run scripts/tests/serve-atlas-membership.py` and
+open `http://127.0.0.1:8794/topics` (also `?desktop=1`). This exercises the real
+Atlas renderer and pointer handlers with a label over documents, no summaries,
+and unassigned neighbors. Checks include label priority, nearby browsing, exact
+highlight membership, stable selection during panning, and document-to-topic links.
