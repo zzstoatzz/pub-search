@@ -97,5 +97,46 @@ def test_document_reader_recovers_from_real_http_throttling():
         thread.join()
 
 
+@pytest.mark.parametrize('first', ['invalid json', '{"summary":"Topic.","sourceIds":[99]}'])
+def test_summary_retries_invalid_output_over_http(first):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    from openai import OpenAI
+    from atlas_summaries import request_summary
+
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            text = first if len(requests) == 1 else '{"summary":"Topic.","sourceIds":[1]}'
+            payload = {'id': 'resp_test', 'object': 'response', 'created_at': 0,
+                       'status': 'completed', 'model': 'gpt-6-luna',
+                       'output': [{'id': 'msg_test', 'type': 'message', 'role': 'assistant',
+                                   'content': [{'type': 'output_text', 'text': text, 'annotations': []}]}],
+                       'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}}
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with OpenAI(api_key='local-test', base_url=f'http://127.0.0.1:{server.server_port}/v1') as client:
+            answer, usage = request_summary(client, 'topic', [{'id': 1, 'text': 'Topic evidence.'}])
+        assert answer == {'summary': 'Topic.', 'sourceIds': [1]}
+        assert usage == {'inputTokens': 20, 'outputTokens': 10}
+        assert len(requests) == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-q']))

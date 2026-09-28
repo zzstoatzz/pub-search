@@ -94,6 +94,26 @@ def prepare_evidence(selected: list[dict], docs: dict) -> list[dict]:
     return evidence
 
 
+def request_summary(model: OpenAI, label: str, evidence: list[dict]) -> tuple[dict, dict]:
+    usage = {"inputTokens": 0, "outputTokens": 0}
+    for attempt in range(2):
+        message = model.responses.create(
+            model=MODEL, reasoning={"effort": "none"}, max_output_tokens=1200,
+            store=False, instructions=SYSTEM,
+            text={"format": {"type": "json_schema", "name": "cluster_summary", "strict": True, "schema": OUTPUT_SCHEMA}},
+            input=json.dumps({"clusterLabel": label, "articles": evidence}, ensure_ascii=False))
+        usage["inputTokens"] += message.usage.input_tokens
+        usage["outputTokens"] += message.usage.output_tokens
+        try:
+            if message.status != "completed":
+                raise ValueError("incomplete summary")
+            return validate_answer(json.loads(message.output_text), len(evidence)), usage
+        except ValueError:
+            if attempt:
+                raise
+    raise RuntimeError("summary retries exhausted")
+
+
 class DocumentReader:
     def __init__(self, http: httpx.Client, url: str = DOCUMENT_API, interval: float = 1):
         self.http = http
@@ -169,15 +189,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None) -> dict:
                     answer = validate_answer({k: previous[k] for k in ("summary", "sourceIds")}, len(evidence))
                 else:
                     with OpenAI(api_key=api_key, timeout=60, max_retries=1) as model:
-                        message = model.responses.create(
-                            model=MODEL, reasoning={"effort": "none"}, max_output_tokens=1200,
-                            store=False, instructions=SYSTEM,
-                            text={"format": {"type": "json_schema", "name": "cluster_summary", "strict": True, "schema": OUTPUT_SCHEMA}},
-                            input=json.dumps({"clusterLabel": cluster["label"], "articles": evidence}, ensure_ascii=False))
-                    if message.status != "completed":
-                        raise ValueError("incomplete summary")
-                    answer = validate_answer(json.loads(message.output_text), len(evidence))
-                    usage = {"inputTokens": message.usage.input_tokens, "outputTokens": message.usage.output_tokens}
+                        answer, usage = request_summary(model, cluster["label"], evidence)
                     print(f"summary cluster {cluster['id']}: {usage['inputTokens']} input, {usage['outputTokens']} output tokens", flush=True)
                 sources = [{"id": e["id"], "uri": e["uri"], "title": e["title"], "url": docs[e["uri"]].get("url", ""),
                             "excerpt": e["text"], "charactersRead": len(e["text"])} for e in evidence]
