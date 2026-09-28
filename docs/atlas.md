@@ -181,3 +181,9 @@ uv run scripts/atlas_summaries.py site/atlas.json.gz --limit 12
 Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
 `node --test scripts/tests/atlas-summaries.mjs`, and
 `node scripts/tests/atlas-interaction.cjs`.
+
+Atlas's summary release uses `?build=topics-2` on its CSS and map scripts, with
+matching URLs in the Workbox manifest. When changing those assets, bump the build
+value in both `atlas.html` and `workbox-config.cjs`, then regenerate `sw.js`.
+The previous worker ignores `v` parameters; reusing that parameter can combine
+new HTML with old cached code during an update.

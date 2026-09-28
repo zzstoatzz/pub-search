@@ -26,3 +26,20 @@ test('only visible label bounds activate a summary',()=>{
   assert.equal(hitTest(rects,9,40),null);
   assert.equal(hitTest([],30,40),null);
 });
+
+test('new Atlas assets bypass legacy caches and match the new offline manifest', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const {createRequire} = await import('node:module');
+  const config = createRequire(import.meta.url)('../../site/workbox-config.cjs');
+  const html = await readFile(new URL('../../site/atlas.html', import.meta.url), 'utf8');
+  const files = ['atlas.css','atlas.js','atlas-summaries.js'];
+  const {manifest} = await config.manifestTransforms[0](files.map(url=>({url,revision:'content-hash'})));
+  for (const file of files) {
+    const reference = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map(m=>m[1]).find(url=>url.startsWith(file+'?'));
+    assert.ok(reference, `${file} must bypass the previous worker's unversioned cache`);
+    const url = new URL(reference,'https://example.com');
+    for (const key of [...url.searchParams.keys()]) if (/^v$/.test(key)) url.searchParams.delete(key);
+    assert.notEqual(url.search,'');
+    assert.ok(manifest.some(entry=>entry.url===reference), `${file} must remain available offline`);
+  }
+});
