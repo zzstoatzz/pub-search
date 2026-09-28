@@ -167,8 +167,8 @@ Each uses up to 10 actual members, ordered by membership strength with a stable 
 hash to break ties and at most two per author before filling remaining slots. The
 document API supplies policy-filtered extracted text; the first 3,000 characters per
 document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
-80–140 words in direct language; coverage and AI attribution appear in the sources
-disclosure. Coarse regions remain browsable without generated summaries. These
+two short sentences (30–45 words, at most 50) in direct language; coverage and AI
+attribution appear in the sources disclosure. Coarse regions remain browsable without generated summaries. These
 summaries have not undergone independent quality evaluation.
 
 `atlas-summaries.json` is an optional, gitignored sidecar containing membership

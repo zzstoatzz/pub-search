@@ -42,6 +42,13 @@ def test_model_cannot_cite_nonexistent_sources():
         validate_answer({**valid, 'summary': 'x' * 1601}, 3)
 
 
+def test_summary_word_limit_prevents_long_panel_copy():
+    concise = {'summary': ' '.join(['word'] * 50), 'sourceIds': [1]}
+    assert validate_answer(concise, 1) == concise
+    with pytest.raises(ValueError):
+        validate_answer({**concise, 'summary': concise['summary'] + ' extra'}, 1)
+
+
 def test_missing_key_and_legacy_dataset_preserve_atlas(tmp_path):
     path = tmp_path / 'atlas.json.gz'
     raw = gzip.compress(json.dumps({'meta': {'generatedAt': '2026-09-28'}, 'points': []}).encode())
