@@ -2521,8 +2521,10 @@
             AtlasSummaries.open(item.id,true,item.kind==='region'?'coarse':'fine');return;
           }
           if(item.kind==='publication') {
-            selectedPub=item.id;selectedIndex=-1;
-            focusPoint(pubData[item.id].cx,pubData[item.id].cy);
+            var publication=pubByBasePath.get(item.id);
+            if(!publication)return;
+            selectedPub=pubData.indexOf(publication);selectedIndex=-1;
+            focusPoint(publication.cx,publication.cy);
           } else {
             selectedIndex=item.id;selectedPub=-1;
             focusPoint(pointsX[item.id],pointsY[item.id]);

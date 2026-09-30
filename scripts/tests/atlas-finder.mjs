@@ -27,3 +27,13 @@ test('document text search preserves author filters without treating quoted hand
  assert.equal(new URL(globalThis.AtlasFinder.textUrl('@zzstoatzz.io'),'https://example.com').searchParams.get('mode'),'keyword');
  assert.equal(new URL(globalThis.AtlasFinder.textUrl('"@zzstoatzz.io"'),'https://example.com').searchParams.has('author'),false);
 });
+
+test('publication identity survives subscriber-driven reordering after indexing',()=>{
+ const snapshot=structuredClone(data);
+ snapshot.publications.push({name:'Other journal',basePath:'other.example',count:1});
+ const indexed=index(snapshot);
+ const picked=search(indexed,'Agent Memory Journal')[0].entry;
+ snapshot.publications.reverse();
+ assert.equal(picked.id,'journal.example');
+ assert.equal(snapshot.publications.find(p=>p.basePath===picked.id).name,'Agent Memory Journal');
+});

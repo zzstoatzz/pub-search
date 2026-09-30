@@ -16,7 +16,7 @@
     ['coarse','fine'].forEach(function(level) { data.clusters[level].forEach(function(c) {
       entries.push({kind:level==='fine'?'topic':'region',id:c.id,title:c.label,text:normalize(c.label),count:c.count,parent:c.parent,breadcrumb:level==='fine'?(regions.get(c.parent)||'Atlas'):'Atlas'});
     }); });
-    (data.publications||[]).forEach(function(p,i) { entries.push({kind:'publication',id:i,title:p.name||p.basePath,text:normalize((p.name||'')+' '+p.basePath),exact:normalize(p.name||p.basePath),count:p.count,basePath:p.basePath,breadcrumb:p.basePath}); });
+    (data.publications||[]).forEach(function(p,i) { entries.push({kind:'publication',id:p.basePath,title:p.name||p.basePath,text:normalize((p.name||'')+' '+p.basePath),exact:normalize(p.name||p.basePath),count:p.count,basePath:p.basePath,breadcrumb:p.basePath}); });
     data.points.forEach(function(p,i) { entries.push({kind:'document',id:i,title:p.title||'Untitled document',text:normalize(p.title),topic:p.clusterFine,region:p.clusterCoarse,basePath:p.basePath,uri:p.uri,breadcrumb:[topics.get(p.clusterFine),p.basePath].filter(Boolean).join(' / ')}); });
     return entries;
   }
