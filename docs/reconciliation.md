@@ -211,3 +211,20 @@ a secondary feature on top of PDS verification: HEAD the destination URL we'd li
 - upgrade zig + retry (only viable when 0.17+ ships and `std.http.Client` is reworked)
 
 **how to re-enable when fixed.** flip `RECONCILE_URL_CHECK_ENABLED=true` via `fly secrets`. the cycle log will then include `reconcile: marked url_dead: {uri} → {url}` entries when a destination 404s.
+
+## Observed retry starvation (2026-09-30)
+
+Investigating an Atlas link to a deleted courtdaemon.com record found the legacy
+verifier 207 days behind its 7-day target. The 06:22 UTC cycle selected 200 rows,
+verified 15, and logged repeated PDS timeouts. `.error_skip` leaves `verified_at`
+unchanged, so failing rows remain at the head of the oldest-first queue. A retry
+schedule separate from successful verification time is needed; marking failures
+verified would hide the lag rather than fix it. That scheduling change is not
+part of the Atlas publication-selection fix.
+
+The reported URI,
+`at://did:plc:vd3vzujxkxsthkswrc2zzupm/site.standard.document/55zbv7f2moqvs`,
+returned `RecordNotFound` from the DID-resolved PDS. Targeted reconciliation
+returned `deleted`, removing it from Turso, the serving overlay, and vectors.
+The Atlas refresh was triggered as flow run
+`1cb10576-54d4-4a19-9a10-ddb9307b6113`.
