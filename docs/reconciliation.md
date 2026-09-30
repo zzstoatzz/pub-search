@@ -104,7 +104,7 @@ a real user reported this: they deleted and re-published blog posts weeks ago, b
 ```
 reconciler (background thread, every 30 min)
      ↓
-fetch 50 docs from turso (oldest verified_at first, NULLs = never checked)
+fetch 400 due docs from turso (reconcile_after, then uri)
      ↓ for each doc
 parse AT-URI → (did, collection, rkey)
      ↓
@@ -112,15 +112,15 @@ resolve DID → PDS endpoint via plc.directory (cached across cycles)
      ↓
 GET {pds}/xrpc/com.atproto.repo.getRecord?repo={did}&collection={collection}&rkey={rkey}
      ↓
-200 → update verified_at          (record still exists)
+200 → update verified_at; schedule next weekly check
        + optional: HEAD the destination URL → mark url_dead on 404
-400/404 → delete from turso + tpuf (record is gone)
-5xx/timeout → skip                 (PDS might be temporarily down)
+400/404 + RecordNotFound → delete vectors, then turso
+other errors / unresolved PDS → defer with 1h–24h backoff
 ```
 
-at ~18k documents, 50 per cycle every 30 minutes, the full index is verified in ~7-8 days. documents older than 7 days are re-verified.
+At 101k documents, 400 per cycle every 30 minutes allows up to 19,200 checks/day before cycle runtime, versus roughly 14,450/day needed for weekly coverage. Concurrency remains eight. Failures retain their last successful `verified_at`; `reconcile_after` and `reconcile_failures` persist retry scheduling across restarts. New records are immediately eligible; successful verification resets the failure count and schedules the next check in seven days.
 
-backed by `idx_documents_verified_at` (migration 015) so the batch fetch is an index range scan, not a full-table scan — see [access-pattern-audit.md](access-pattern-audit.md).
+Backed by `idx_documents_reconcile_after` (migration 023), the batch fetch is an index range scan with no temporary sort — see [access-pattern-audit.md](access-pattern-audit.md).
 
 ## what it fixes
 
@@ -132,7 +132,7 @@ backed by `idx_documents_verified_at` (migration 015) so the batch fetch is an i
 
 | file | role |
 |------|------|
-| `backend/src/ingest/reconciler.zig` | background worker (~250 lines) |
+| `backend/src/ingest/reconciler.zig` | background worker |
 | `backend/src/main.zig` | wires up `ingest.reconciler.start(allocator, io)` after `tpuf.init()` |
 | `backend/src/db/migrations.zig` | `verified_at` column (in migration `001_initial_schema` — see [migrations.md](migrations.md)) |
 | `backend/src/ingest/ingester.zig` | `tpuf.delete()` after `indexer.deleteDocument()` |
@@ -145,7 +145,7 @@ all env vars with sensible defaults — no configuration required for normal ope
 |----------|---------|-------------|
 | `RECONCILE_ENABLED` | `true` | kill switch — set to `false` to disable entirely |
 | `RECONCILE_INTERVAL_SECS` | `1800` | seconds between cycles (30 min) |
-| `RECONCILE_BATCH_SIZE` | `50` | documents checked per cycle |
+| `RECONCILE_BATCH_SIZE` | `400` | documents checked per cycle (clamped to 1–2000) |
 | `RECONCILE_REVERIFY_DAYS` | `7` | re-verify documents older than N days |
 | `RECONCILE_URL_CHECK_ENABLED` | `false` | gate the destination-URL HEAD check (the `url_dead` feature). off by default while a `std.http.Client` redirect panic is worked around — see "url_dead and the http.Client panic" below. PDS verification + soft delete run unconditionally regardless. |
 
@@ -156,12 +156,12 @@ the reconciler is designed to degrade gracefully — it can never break search o
 | scenario | behavior |
 |----------|----------|
 | turso down | `error.NoClient` → logged, exponential backoff |
-| plc.directory down | all PDS lookups return null → entire batch skipped, no deletes |
-| PDS down (5xx/timeout) | `error_skip` → doc not deleted, not verified, retried next cycle |
-| turbopuffer down | `tpuf.delete` errors caught → turso deletes still happen |
+| plc.directory down | lookups deferred with backoff, neither verified nor deleted |
+| PDS down (5xx/timeout) | `error_skip` → doc not deleted or verified; retry delay doubles from 1h up to 24h |
+| turbopuffer down | retain Turso queue rows and defer; delete Turso rows only after vector deletion succeeds |
 | reconciler thread panics | isolated thread — search/indexing/embedding unaffected |
 
-the reconciler never deletes on ambiguity. only a definitive 400 or 404 from the PDS triggers deletion. any error or timeout means "skip and retry later."
+the reconciler never deletes on ambiguity. only a 400/404 carrying the XRPC `RecordNotFound` error triggers deletion. any error or timeout means "skip and retry later."
 
 ## race conditions
 
@@ -171,9 +171,9 @@ the reconciler never deletes on ambiguity. only a definitive 400 or 404 from the
 
 ## observability
 
-- **fly logs:** `reconcile: background worker started` on boot, `reconcile: verified N documents, deleted M` after each cycle with activity
+- **fly logs:** `reconcile: background worker started` on boot, `reconcile: verified N documents, deleted M, deferred D` after each cycle with activity
 - **logfire:** `reconcile.cycle` span covers each full cycle. `reconcile: deleted stale document: {uri}` logged for each deletion.
-- **turso:** `verified_at` column shows when each document was last verified. `NULL` = never checked.
+- **turso:** `verified_at` column shows when each document was last verified. `NULL` = never successfully verified. `reconcile_after` is the next eligible Unix timestamp; `reconcile_failures` tracks consecutive deferred attempts.
 
 ### checking reconciler status
 
@@ -190,11 +190,11 @@ fly logs -a leaflet-search-backend --no-tail | grep reconcile
 
 **why not use tap resync?** tap resync only sends records that exist. it never sends delete events for records that disappeared. even removing and re-adding a repo only backfills current records — it doesn't identify what was deleted since the last sync.
 
-**why check the PDS directly?** the PDS is the authoritative source. `com.atproto.repo.getRecord` returns the record if it exists, or 400/404 if it doesn't. no middleman, no ambiguity.
+**why check the PDS directly?** the PDS is the authoritative source. `com.atproto.repo.getRecord` returns the record if it exists. Only its explicit `RecordNotFound` error is treated as deletion; generic HTTP errors, deactivated repos, and unexpected bodies are retried.
 
-**why cache PDS endpoints?** many documents share the same author (DID). resolving the PDS once per DID and caching it avoids redundant plc.directory lookups. the cache persists for the lifetime of the worker thread.
+**why cache PDS endpoints?** many documents share the same author (DID). resolving the PDS once per DID and caching it avoids redundant plc.directory lookups. the cache is discarded after each cycle so account migrations cannot leave it permanently pointing at an old PDS.
 
-**why 200ms rate limiting?** PDSs are shared infrastructure. we check 50 documents per cycle at most — aggressive polling would be antisocial. 200ms between requests is conservative.
+**why 200ms rate limiting?** PDSs are shared infrastructure. eight workers retain a 200ms pause between checks; increasing the batch does not increase instantaneous concurrency.
 
 **why compute timestamps in zig?** turso's handling of `strftime` with parameterized modifiers is untested in this codebase. computing timestamps in zig (same approach as the embedder) eliminates that risk.
 
@@ -217,10 +217,10 @@ a secondary feature on top of PDS verification: HEAD the destination URL we'd li
 Investigating an Atlas link to a deleted courtdaemon.com record found the legacy
 verifier 207 days behind its 7-day target. The 06:22 UTC cycle selected 200 rows,
 verified 15, and logged repeated PDS timeouts. `.error_skip` leaves `verified_at`
-unchanged, so failing rows remain at the head of the oldest-first queue. A retry
-schedule separate from successful verification time is needed; marking failures
-verified would hide the lag rather than fix it. That scheduling change is not
-part of the Atlas publication-selection fix.
+unchanged, so failing rows remain at the head of the oldest-first queue. Migration
+023 and the reconciler now persist a retry schedule separate from successful
+verification time. Marking failures verified
+would hide the lag rather than fix it.
 
 The reported URI,
 `at://did:plc:vd3vzujxkxsthkswrc2zzupm/site.standard.document/55zbv7f2moqvs`,

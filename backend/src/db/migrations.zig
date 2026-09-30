@@ -397,6 +397,16 @@ pub const migrations = [_]zug.Migration{
         // (newest rkey wins). This is the index that lookup seeks on.
         .sql = "CREATE INDEX IF NOT EXISTS idx_documents_did_path ON documents(did, path) WHERE path IS NOT NULL AND path != ''",
     },
+    .{
+        .id = "023_reconcile_schedule",
+        .name = "persist verification scheduling independently of successful verification",
+        .sql =
+        \\ALTER TABLE documents ADD COLUMN reconcile_after INTEGER NOT NULL DEFAULT 0;
+        \\ALTER TABLE documents ADD COLUMN reconcile_failures INTEGER NOT NULL DEFAULT 0;
+        \\UPDATE documents SET reconcile_after = COALESCE(CAST(strftime('%s', verified_at) AS INTEGER) + 604800, 0);
+        \\CREATE INDEX idx_documents_reconcile_after ON documents(reconcile_after, uri);
+        ,
+    },
 };
 
 // --- tests ---

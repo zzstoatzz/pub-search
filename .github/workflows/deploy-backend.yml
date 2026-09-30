@@ -24,8 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Test operational guards
-        run: python3 -m unittest discover -s scripts/tests -v
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python test dependencies
+        run: python -m pip install pytest httpx openai 'numpy<2.2' scikit-learn hdbscan pydantic-settings
+
+      - name: Test Python checks
+        run: python -m pytest scripts/tests -q
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2

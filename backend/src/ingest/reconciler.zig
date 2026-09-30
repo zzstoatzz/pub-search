@@ -33,12 +33,10 @@ fn getIntervalSecs() u64 {
     return std.fmt.parseInt(u64, val, 10) catch 1800;
 }
 
-/// Documents per cycle. 64k docs / 7-day reverify = ~9,200/day; at 48
-/// cycles/day that needs ~192. Only meaningful because the network phase runs
-/// concurrently — serially, cycle time scaled with this and throughput did not.
+/// 101k documents need >14k checks/day for a weekly sweep, plus retries.
 fn getBatchSize() usize {
-    const val = getenv("RECONCILE_BATCH_SIZE") orelse "200";
-    return std.fmt.parseInt(usize, val, 10) catch 200;
+    const val = getenv("RECONCILE_BATCH_SIZE") orelse "400";
+    return std.math.clamp(std.fmt.parseInt(usize, val, 10) catch 400, 1, 2000);
 }
 
 fn getReverifyDays() u64 {
@@ -118,17 +116,6 @@ fn worker(allocator: Allocator, io: Io) void {
     // wait for db to be ready
     io.sleep(Io.Duration.fromSeconds(10), .awake) catch {};
 
-    // PDS cache: DID → PDS endpoint URL (persists across cycles)
-    var pds_cache = std.StringHashMap([]const u8).init(allocator);
-    defer {
-        var it = pds_cache.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.*);
-        }
-        pds_cache.deinit();
-    }
-
     // Per-host throttle for destination URL HEADs: tracks the last
     // monotonic timestamp (ns) we hit each host. Used to enforce
     // HEAD_HOST_MIN_GAP_MS regardless of batch composition — keeps us from
@@ -144,11 +131,22 @@ fn worker(allocator: Allocator, io: Io) void {
     var consecutive_errors: u32 = 0;
 
     while (true) {
+        // Resolve current PDS locations each cycle, including after migrations.
+        var pds_cache = std.StringHashMap([]const u8).init(allocator);
+        defer {
+            var it = pds_cache.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                allocator.free(entry.value_ptr.*);
+            }
+            pds_cache.deinit();
+        }
+
         const result = runCycle(allocator, &pds_cache, &last_head_ns);
         if (result) |counts| {
             consecutive_errors = 0;
-            if (counts.verified > 0 or counts.deleted > 0) {
-                logfire.info("reconcile: verified {d} documents, deleted {d}", .{ counts.verified, counts.deleted });
+            if (counts.verified > 0 or counts.deleted > 0 or counts.deferred > 0) {
+                logfire.info("reconcile: verified {d} documents, deleted {d}, deferred {d}", .{ counts.verified, counts.deleted, counts.deferred });
             }
             // per-cycle counts look healthy even when the sweep can never
             // catch up; only the lag numbers show that.
@@ -170,6 +168,7 @@ fn worker(allocator: Allocator, io: Io) void {
 const CycleCounts = struct {
     verified: usize,
     deleted: usize,
+    deferred: usize = 0,
 };
 
 /// One row of the verification queue. Hoisted to file scope so the parallel
@@ -182,13 +181,14 @@ const DocInfo = struct {
     platform: []const u8,
     rkey: []const u8,
     has_publication: bool,
+    failures: i64,
 };
 
 /// Decided in the network phase, applied serially afterwards so turso keeps
 /// its single-writer pattern.
 const Outcome = union(enum) {
     skip, // unparseable uri, or never reached
-    no_pds, // DID deactivated / PLC unknown — verify, don't delete
+    no_pds, // unresolved is not verified and is not evidence of deletion
     bridgy, // brid.gy-hosted; mark excluded
     checked: RecordStatus,
 };
@@ -330,32 +330,14 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
 
     const client = db.getClient() orelse return error.NoClient;
     const batch_size = getBatchSize();
-    const reverify_days = getReverifyDays();
-
-    // fetch docs ordered by verified_at (NULLs first = never verified = highest priority)
-    // re-verify docs older than RECONCILE_REVERIFY_DAYS
-    // compute cutoff timestamp in Zig (avoids strftime with parameterized modifiers)
-    var batch_str: [10]u8 = undefined;
-    const batch_str_val = std.fmt.bufPrint(&batch_str, "{d}", .{batch_size}) catch "200";
-
     const io = global_io.?;
-    const now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
-    const cutoff_ts = formatTimestamp(now_s - @as(i64, @intCast(reverify_days * 86400)));
-    const cutoff = cutoff_ts.slice();
 
-    // Also pull URL-construction columns so we can HEAD the destination URL
-    // in the same cycle without a second round-trip per doc.
-    var result = try client.query(
-        \\SELECT uri, did, COALESCE(base_path, '') AS base_path,
-        \\  COALESCE(path, '') AS path, platform, rkey, has_publication
-        \\FROM documents
-        \\WHERE verified_at IS NULL
-        \\   OR verified_at < ?
-        \\ORDER BY verified_at ASC NULLS FIRST
-        \\LIMIT ?
-    ,
-        &.{ cutoff, batch_str_val },
-    );
+    var batch_buf: [20]u8 = undefined;
+    const batch = try std.fmt.bufPrint(&batch_buf, "{d}", .{batch_size});
+    const now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(global_io.?, .real).nanoseconds, std.time.ns_per_s));
+    var now_buf: [20]u8 = undefined;
+    const now = try std.fmt.bufPrint(&now_buf, "{d}", .{now_s});
+    var result = try client.query(QUEUE_SQL, &.{ now, batch });
     defer result.deinit();
 
     if (result.rows.len == 0) return .{ .verified = 0, .deleted = 0 };
@@ -402,11 +384,13 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
             .platform = platform,
             .rkey = rkey,
             .has_publication = row.int(6) != 0,
+            .failures = row.int(7),
         }) catch continue;
     }
 
     var verified: usize = 0;
     var deleted: usize = 0;
+    var deferred: usize = 0;
 
     // collect hashed IDs of stale docs for batch tpuf delete
     var stale_ids: std.ArrayList([32]u8) = .empty;
@@ -456,47 +440,45 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
     // ---- phase 2: database, serial ----
     for (docs.items, outcomes) |doc, outcome| {
         switch (outcome) {
-            .skip => {},
-            // PDS unknown or DID deactivated — verify anyway so these don't
-            // permanently clog the head of the queue.
-            .no_pds => updateVerifiedAt(client, doc.uri),
+            .skip, .no_pds => {
+                try deferVerification(client, doc, now_s);
+                deferred += 1;
+            },
             // brid.gy-hosted: bridged content we exclude from search.
-            .bridgy => markBridgyfed(client, doc.uri),
+            .bridgy => try markBridgyfed(client, doc.uri, now_s),
             .checked => |status| switch (status) {
                 .exists => {
-                // PDS record is good — also check the destination URL we'd
-                // link to. Per-host throttled inside checkDocUrl. 404 →
-                // soft-hide; 2xx → reset url_dead (in case it came back).
-                // Guarded by RECONCILE_URL_CHECK_ENABLED — std.http.Client
-                // currently panics on some redirect chains, see isUrlCheckEnabled.
-                if (isUrlCheckEnabled()) {
-                    const doc_type: []const u8 = if (doc.has_publication) "article" else "looseleaf";
-                    const url = search.buildDocUrl(allocator, doc_type, doc.platform, doc.base_path, doc.path, doc.rkey, doc.did);
-                    defer allocator.free(url);
-                    if (url.len > 0) {
-                        switch (checkDocUrl(allocator, url, last_head_ns)) {
-                            .url_dead => {
-                                updateUrlDead(client, doc.uri, true);
-                                logfire.info("reconcile: marked url_dead: {s} → {s}", .{ doc.uri, url });
-                            },
-                            .url_ok => updateUrlDead(client, doc.uri, false),
-                            .url_skip => {}, // transient / 405 / timeout — leave alone
+                    // PDS record is good — also check the destination URL we'd
+                    // link to. Per-host throttled inside checkDocUrl. 404 →
+                    // soft-hide; 2xx → reset url_dead (in case it came back).
+                    // Guarded by RECONCILE_URL_CHECK_ENABLED — std.http.Client
+                    // currently panics on some redirect chains, see isUrlCheckEnabled.
+                    if (isUrlCheckEnabled()) {
+                        const doc_type: []const u8 = if (doc.has_publication) "article" else "looseleaf";
+                        const url = search.buildDocUrl(allocator, doc_type, doc.platform, doc.base_path, doc.path, doc.rkey, doc.did);
+                        defer allocator.free(url);
+                        if (url.len > 0) {
+                            switch (checkDocUrl(allocator, url, last_head_ns)) {
+                                .url_dead => {
+                                    updateUrlDead(client, doc.uri, true);
+                                    logfire.info("reconcile: marked url_dead: {s} → {s}", .{ doc.uri, url });
+                                },
+                                .url_ok => updateUrlDead(client, doc.uri, false),
+                                .url_skip => {}, // transient / 405 / timeout — leave alone
+                            }
                         }
                     }
-                }
-                    updateVerifiedAt(client, doc.uri);
+                    try updateVerifiedAt(client, doc.uri, now_s);
                     verified += 1;
                 },
                 .deleted => {
-                    // record gone — delete from turso + queue for tpuf batch delete
-                    indexer.deleteDocument(doc.uri);
+                    // Retain the queue row until vector cleanup succeeds.
                     const hashed = tpuf.hashId(doc.uri);
-                    stale_ids.append(allocator, hashed) catch {};
-                    deleted += 1;
-                    logfire.info("reconcile: deleted stale document: {s}", .{doc.uri});
+                    try stale_ids.append(allocator, hashed);
                 },
                 .error_skip => {
-                    // 5xx / timeout / network error — don't update verified_at, retry next cycle
+                    try deferVerification(client, doc, now_s);
+                    deferred += 1;
                 },
             },
         }
@@ -504,57 +486,79 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
         // requests are.
     }
 
-    if (stale_ids.items.len > 0 and tpuf.isEnabled()) {
-        var id_ptrs = allocator.alloc([]const u8, stale_ids.items.len) catch {
-            logfire.warn("reconcile: alloc failed for tpuf delete batch", .{});
-            return .{ .verified = verified, .deleted = deleted };
-        };
-        defer allocator.free(id_ptrs);
-
-        for (stale_ids.items, 0..) |*id, i| {
-            id_ptrs[i] = id;
+    if (stale_ids.items.len > 0) {
+        var vectors_deleted = true;
+        if (tpuf.isEnabled()) {
+            const id_ptrs = try allocator.alloc([]const u8, stale_ids.items.len);
+            defer allocator.free(id_ptrs);
+            for (stale_ids.items, 0..) |*id, i| id_ptrs[i] = id;
+            tpuf.delete(allocator, id_ptrs) catch |err| {
+                vectors_deleted = false;
+                logfire.warn("reconcile: tpuf batch delete failed: {}", .{err});
+            };
         }
-
-        tpuf.delete(allocator, id_ptrs) catch |err| {
-            logfire.warn("reconcile: tpuf batch delete failed: {}", .{err});
-        };
+        for (docs.items, outcomes) |doc, outcome| {
+            if (outcome != .checked or outcome.checked != .deleted) continue;
+            if (vectors_deleted) {
+                indexer.deleteDocument(doc.uri);
+                deleted += 1;
+                logfire.info("reconcile: deleted stale document: {s}", .{doc.uri});
+            } else {
+                try deferVerification(client, doc, now_s);
+                deferred += 1;
+            }
+        }
     }
 
-    return .{ .verified = verified, .deleted = deleted };
+    return .{ .verified = verified, .deleted = deleted, .deferred = deferred };
 }
 
-fn updateVerifiedAt(client: *db.Client, uri: []const u8) void {
-    // exec already spans as db.query, so this is not a hidden cost — the span
-    // is here to attribute turso time to the reconciler specifically rather
-    // than leaving it pooled with every other db.query on the box.
-    const span = logfire.span("reconcile.update_verified", .{});
-    defer span.end();
+const QUEUE_SQL =
+    \\SELECT uri, did, COALESCE(base_path, ''), COALESCE(path, ''),
+    \\  platform, rkey, has_publication, reconcile_failures
+    \\FROM documents
+    \\WHERE reconcile_after <= ?
+    \\ORDER BY reconcile_after, uri
+    \\LIMIT ?
+;
 
-    const ts: i64 = @intCast(@divFloor(Io.Timestamp.now(global_io.?, .real).nanoseconds, std.time.ns_per_s));
-    const now = formatTimestamp(ts);
-    client.exec(
-        "UPDATE documents SET verified_at = ? WHERE uri = ?",
-        &.{ now.slice(), uri },
-    ) catch |err| {
-        logfire.warn("reconcile: failed to update verified_at for {s}: {}", .{ uri, err });
-    };
+const RETRY_SQL =
+    \\UPDATE documents SET reconcile_after = ?,
+    \\  reconcile_failures = MIN(reconcile_failures + 1, 16)
+    \\WHERE uri = ?
+;
+
+const VERIFIED_SQL =
+    \\UPDATE documents SET verified_at = ?, reconcile_after = ?, reconcile_failures = 0
+    \\WHERE uri = ?
+;
+
+fn retryDelay(failures: i64) i64 {
+    const shift: u5 = @intCast(std.math.clamp(failures, 0, 5));
+    return @min(@as(i64, 3600) << shift, 86400);
 }
 
-/// Mark a doc as bridgy-fed (excluded from all search paths) in Turso, the
-/// source of truth. Bumps indexed_at so the next snapshot build excludes it
-/// (the build is watermark-pinned on indexed_at and filters is_bridgyfed), and
-/// stamps verified_at so the doc leaves the reconcile queue. The serving
-/// replica is immutable between snapshot adoptions, so this is NOT visible
-/// in-place — it takes effect when the next snapshot is adopted.
-fn markBridgyfed(client: *db.Client, uri: []const u8) void {
-    const ts: i64 = @intCast(@divFloor(Io.Timestamp.now(global_io.?, .real).nanoseconds, std.time.ns_per_s));
-    const now = formatTimestamp(ts);
-    client.exec(
-        "UPDATE documents SET is_bridgyfed = '1', verified_at = ?, indexed_at = ? WHERE uri = ?",
-        &.{ now.slice(), now.slice(), uri },
-    ) catch |err| {
-        logfire.warn("reconcile: failed to mark bridgyfed for {s}: {}", .{ uri, err });
-    };
+fn deferVerification(client: *db.Client, doc: DocInfo, now: i64) !void {
+    var buf: [20]u8 = undefined;
+    const next = try std.fmt.bufPrint(&buf, "{d}", .{now + retryDelay(doc.failures)});
+    try client.exec(RETRY_SQL, &.{ next, doc.uri });
+}
+
+fn updateVerifiedAt(client: *db.Client, uri: []const u8, now_s: i64) !void {
+    const now = formatTimestamp(now_s);
+    var buf: [20]u8 = undefined;
+    const next = try std.fmt.bufPrint(&buf, "{d}", .{now_s + @as(i64, @intCast(getReverifyDays())) * 86400});
+    try client.exec(VERIFIED_SQL, &.{ now.slice(), next, uri });
+}
+
+fn markBridgyfed(client: *db.Client, uri: []const u8, now_s: i64) !void {
+    const now = formatTimestamp(now_s);
+    var buf: [20]u8 = undefined;
+    const next = try std.fmt.bufPrint(&buf, "{d}", .{now_s + @as(i64, @intCast(getReverifyDays())) * 86400});
+    try client.exec(
+        "UPDATE documents SET is_bridgyfed = '1', reconcile_after = ?, reconcile_failures = 0, indexed_at = ? WHERE uri = ?",
+        &.{ next, now.slice(), uri },
+    );
 }
 
 fn updateUrlDead(client: *db.Client, uri: []const u8, dead: bool) void {
@@ -706,10 +710,17 @@ fn checkRecord(allocator: Allocator, pds: []const u8, did: []const u8, collectio
         return .error_skip;
     };
 
-    const status_int: u10 = @intFromEnum(res.status);
-    if (status_int >= 200 and status_int < 300) return .exists;
-    if (status_int == 400 or status_int == 404) return .deleted;
-    // 5xx, rate limit, or unexpected status — skip
+    return recordStatus(allocator, @intFromEnum(res.status), response_body.written());
+}
+
+fn recordStatus(allocator: Allocator, status: u10, body: []const u8) RecordStatus {
+    if (status >= 200 and status < 300) return .exists;
+    if (status != 400 and status != 404) return .error_skip;
+    const parsed = json.parseFromSlice(json.Value, allocator, body, .{}) catch return .error_skip;
+    defer parsed.deinit();
+    if (parsed.value != .object) return .error_skip;
+    const err = parsed.value.object.get("error") orelse return .error_skip;
+    if (err == .string and mem.eql(u8, err.string, "RecordNotFound")) return .deleted;
     return .error_skip;
 }
 
@@ -745,6 +756,7 @@ fn resolvePdsHttp(allocator: Allocator, did: []const u8) ?[]const u8 {
     defer parsed.deinit();
 
     // look for service[].serviceEndpoint where type == "AtprotoPersonalDataServer"
+    if (parsed.value != .object) return null;
     const services = parsed.value.object.get("service") orelse return null;
     if (services != .array) return null;
 
@@ -806,4 +818,100 @@ test "claimNext stops at the batch end" {
 test "an empty batch claims nothing" {
     var next: std.atomic.Value(usize) = .init(0);
     try std.testing.expectEqual(@as(?usize, null), claimNext(&next, 0));
+}
+
+test "failed oldest records leave room for healthy records and retry state survives reopen" {
+    const zqlite = @import("zqlite");
+    const testing = std.testing;
+    const path = "/tmp/pub-search-reconcile-queue-test.db";
+    _ = std.c.unlink(path);
+    defer _ = std.c.unlink(path);
+    const flags = zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite;
+    const now: i64 = 1_790_726_400;
+    {
+        const c = try zqlite.open(path, flags);
+        defer c.close();
+        try c.exec("CREATE TABLE documents (uri TEXT PRIMARY KEY, did TEXT DEFAULT '', base_path TEXT, path TEXT, platform TEXT DEFAULT 'other', rkey TEXT DEFAULT '', has_publication INTEGER DEFAULT 0, verified_at TEXT)", .{});
+        try c.exec("INSERT INTO documents(uri, verified_at) VALUES ('failed', '2026-03-01T00:00:00'), ('healthy', '2026-04-01T00:00:00'), ('recent', '2026-09-29T00:00:00'), ('unresolved', NULL)", .{});
+        for (@import("../db/migrations.zig").migrations) |migration| {
+            if (!mem.eql(u8, migration.id, "023_reconcile_schedule")) continue;
+            var statements = mem.tokenizeScalar(u8, migration.sql.?, ';');
+            while (statements.next()) |sql| try c.exec(sql, .{});
+        }
+        {
+            const r = (try c.row(QUEUE_SQL, .{ now, 1 })).?;
+            defer r.deinit();
+            try testing.expectEqualStrings("unresolved", r.text(0));
+        }
+        try c.exec(RETRY_SQL, .{ now + retryDelay(0), "unresolved" });
+        {
+            const r = (try c.row(QUEUE_SQL, .{ now, 1 })).?;
+            defer r.deinit();
+            try testing.expectEqualStrings("failed", r.text(0));
+        }
+        try c.exec(RETRY_SQL, .{ now + retryDelay(0), "failed" });
+        {
+            const r = (try c.row(QUEUE_SQL, .{ now, 1 })).?;
+            defer r.deinit();
+            try testing.expectEqualStrings("healthy", r.text(0));
+        }
+        try c.exec(VERIFIED_SQL, .{ "2026-09-30T00:00:00", now + 604800, "healthy" });
+    }
+    {
+        const c = try zqlite.open(path, flags);
+        defer c.close();
+        try testing.expect((try c.row(QUEUE_SQL, .{ now + 3599, 1 })) == null);
+        {
+            const r = (try c.row("SELECT verified_at, reconcile_failures FROM documents WHERE uri = 'failed'", .{})).?;
+            defer r.deinit();
+            try testing.expectEqualStrings("2026-03-01T00:00:00", r.text(0));
+            try testing.expectEqual(@as(i64, 1), r.int(1));
+        }
+        {
+            const r = (try c.row("SELECT COUNT(*) FROM documents WHERE uri = 'unresolved' AND verified_at IS NULL", .{})).?;
+            defer r.deinit();
+            try testing.expectEqual(@as(i64, 1), r.int(0));
+        }
+        {
+            const r = (try c.row(QUEUE_SQL, .{ now + 3600, 1 })).?;
+            defer r.deinit();
+            try testing.expectEqualStrings("failed", r.text(0));
+        }
+        try c.exec(RETRY_SQL, .{ now + 3600 + retryDelay(1), "failed" });
+        try c.exec(VERIFIED_SQL, .{ "2026-09-30T01:00:00", now + 604800, "failed" });
+        {
+            const r = (try c.row("SELECT reconcile_failures FROM documents WHERE uri = 'failed'", .{})).?;
+            defer r.deinit();
+            try testing.expectEqual(@as(i64, 0), r.int(0));
+        }
+        var rows = try c.rows("EXPLAIN QUERY PLAN " ++ QUEUE_SQL, .{ now, 200 });
+        defer rows.deinit();
+        var indexed = false;
+        while (rows.next()) |r| {
+            if (mem.indexOf(u8, r.text(3), "idx_documents_reconcile_after") != null) indexed = true;
+            try testing.expect(mem.indexOf(u8, r.text(3), "TEMP B-TREE") == null);
+        }
+        try testing.expect(indexed);
+    }
+}
+
+test "retry delay increases to a day and is bounded for corrupt counters" {
+    try std.testing.expectEqual(@as(i64, 3600), retryDelay(0));
+    try std.testing.expectEqual(@as(i64, 7200), retryDelay(1));
+    try std.testing.expectEqual(@as(i64, 86400), retryDelay(5));
+    try std.testing.expectEqual(@as(i64, 86400), retryDelay(std.math.maxInt(i64)));
+    try std.testing.expectEqual(@as(i64, 3600), retryDelay(-1));
+}
+
+test "only explicit record absence permits deletion" {
+    const a = std.testing.allocator;
+    try std.testing.expectEqual(RecordStatus.exists, recordStatus(a, 200, "{}"));
+    try std.testing.expectEqual(RecordStatus.deleted, recordStatus(a, 400, "{\"error\":\"RecordNotFound\"}"));
+    try std.testing.expectEqual(RecordStatus.deleted, recordStatus(a, 404, "{\"error\":\"RecordNotFound\"}"));
+    try std.testing.expectEqual(RecordStatus.error_skip, recordStatus(a, 400, "{\"error\":\"RepoDeactivated\"}"));
+    try std.testing.expectEqual(RecordStatus.error_skip, recordStatus(a, 400, "{\"error\":\"InvalidRequest\"}"));
+    try std.testing.expectEqual(RecordStatus.error_skip, recordStatus(a, 404, "<html>Not found</html>"));
+    try std.testing.expectEqual(RecordStatus.error_skip, recordStatus(a, 404, "[]"));
+    try std.testing.expectEqual(RecordStatus.error_skip, recordStatus(a, 429, "{}"));
+    try std.testing.expectEqual(RecordStatus.error_skip, recordStatus(a, 502, "Bad gateway"));
 }
