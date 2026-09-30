@@ -228,3 +228,11 @@ returned `RecordNotFound` from the DID-resolved PDS. Targeted reconciliation
 returned `deleted`, removing it from Turso, the serving overlay, and vectors.
 The Atlas refresh was triggered as flow run
 `1cb10576-54d4-4a19-9a10-ddb9307b6113`.
+
+The production backfill for migration 023 exceeded the client's 180-second
+request timeout and continued server-side. Its automatic retry prolonged write
+contention. Recovery verified the committed backfill, created the remaining
+queue index, checked that no previously verified rows retained the initial zero
+schedule, then cleared the migration's dirty flag. Future large data backfills
+should use bounded batches outside startup migrations; a client timeout does not
+prove the database statement was canceled.
