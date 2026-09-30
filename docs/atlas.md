@@ -276,3 +276,18 @@ python scripts/atlas_history.py /path/to/history.sqlite3 restore SNAPSHOT_ID /tm
 The browser recovery regression is at `/summary-states` on the membership test
 server. It exercises real HTTP failure, unavailable generation, a partial
 successful response, and recovery to a summary with separately labeled context.
+
+### Cloudflare CLI
+
+The installed `cf` CLI can inspect Pages deployments:
+
+```sh
+cf cli search "list Pages project deployments"
+cf pages projects deployments list --project-name leaflet-search --env production --per-page 3
+```
+
+It accepts `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`; use the existing
+Pages deployment credential. In `cf` v1.0.0-beta.5, `cf pages deploy` is a stub
+that explicitly rejects legacy Pages projects and directs them to Wrangler.
+Keep `site/deploy.sh` for this project's uploads and service-worker regeneration.
+`cf deploy` targets Pages on Workers and is not a drop-in replacement here.
