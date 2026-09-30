@@ -1527,38 +1527,16 @@
       });
     }
 
-    // search centroid marker — both paths; not at planet zoom, where the
-    // matches themselves are unmistakable
-    if (searchMatches && searchMatches.size > 0) {
-      if (searchCenter && fadeIn(zoom, CARD_START, CARD_RANGE) < 0.5) {
-        var mx = cx + searchCenter.x * scale, my = cy + searchCenter.y * scale;
-        var accent = dark ? 'rgba(250,200,80,' : 'rgba(200,120,0,';
-        // outer ring — pulsing glow
-        ctx.beginPath();
-        ctx.arc(mx, my, 18, 0, Math.PI * 2);
-        ctx.strokeStyle = accent + '0.25)';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-        // crosshair lines
-        ctx.strokeStyle = accent + '0.8)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(mx - 20, my); ctx.lineTo(mx - 8, my);
-        ctx.moveTo(mx + 8, my); ctx.lineTo(mx + 20, my);
-        ctx.moveTo(mx, my - 20); ctx.lineTo(mx, my - 8);
-        ctx.moveTo(mx, my + 8); ctx.lineTo(mx, my + 20);
-        ctx.stroke();
-        // center dot
-        ctx.beginPath();
-        ctx.arc(mx, my, 3, 0, Math.PI * 2);
-        ctx.fillStyle = accent + '0.9)';
-        ctx.fill();
-        // label with outline
-        ctx.font = '12px monospace';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = accent + '0.9)';
-        drawLabel('"' + searchQuery + '"', mx + 24, my, dark);
+    if (selectedTopic) {
+      var area=data.clusters[selectedTopic.level].find(function(c) { return c.id===selectedTopic.id; });
+      if (area) {
+        var ax=cx+area.cx*scale, ay=cy+area.cy*scale, ar=Math.max(14,area.radius*scale);
+        ctx.save();ctx.strokeStyle=dark?'#b9abed':'#765bb0';ctx.fillStyle=dark?'rgba(185,171,237,.06)':'rgba(118,91,176,.06)';
+        ctx.lineWidth=selectedTopic.level==='coarse'?2:1.5;
+        ctx.setLineDash(selectedTopic.level==='coarse'?[]:[5,5]);
+        ctx.beginPath();ctx.arc(ax,ay,ar,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.restore();
+        ctx.font='12px system-ui';ctx.textAlign='center';
+        drawLabel((selectedTopic.level==='coarse'?'Region':'Topic')+' · '+selectedTopicIndices.length.toLocaleString()+' documents',ax,ay-ar-12,dark);
       }
     }
 
@@ -1940,12 +1918,20 @@
       var x = cx + (pub ? pub.cx : pointsX[selectedIndex]) * scale;
       var y = cy + (pub ? pub.cy : pointsY[selectedIndex]) * scale;
       var radius = pub ? pubRadius(pub,zoom) : documentRadius(selectedIndex,pointR);
-      ctx.globalAlpha = 0.85;
-      ctx.strokeStyle = dark ? '#fff' : '#222';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(x,y,radius+4,0,Math.PI*2);
-      ctx.stroke();
+      ctx.save();ctx.globalAlpha=0.95;ctx.lineWidth=2;
+      ctx.strokeStyle=pub?(dark?'#edc68f':'#92611c'):(dark?'#95cfdb':'#176779');
+      var r=Math.max(12,radius+6);
+      if(pub) {
+        ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.stroke();
+        ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,r+5,0,Math.PI*2);ctx.stroke();
+      } else {
+        var corner=6;ctx.beginPath();
+        [-1,1].forEach(function(dx) {[-1,1].forEach(function(dy) {
+          ctx.moveTo(x+dx*(r-corner),y+dy*r);ctx.lineTo(x+dx*r,y+dy*r);ctx.lineTo(x+dx*r,y+dy*(r-corner));
+        });});ctx.stroke();
+      }
+      ctx.font='12px system-ui';ctx.textAlign='center';
+      drawLabel(pub?'Publication':'Document',x,y-r-13,dark);ctx.restore();
     }
     ctx.globalAlpha = 1;
     trimPubImages();
@@ -1966,6 +1952,9 @@
   }
 
   function animateTo(targetX, targetY, targetZoom) {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      animating=false;view.zoom=targetZoom;view.panX=-targetX;view.panY=-targetY;markDirty();return;
+    }
     animFrom = { zoom: view.zoom, panX: view.panX, panY: view.panY };
     animTo = { zoom: targetZoom, panX: -targetX, panY: -targetY };
     animStart = Date.now();
@@ -2032,6 +2021,7 @@
   var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
   var clusterLabelRects = [];
+  var selectedTopic = null;
   var selectedTopicIndices = [];
   var selectedTopicSet = null;
   var detailClusterIndex = -2;
@@ -2502,7 +2492,9 @@
         document.getElementById('stats').textContent = statsText;
         document.getElementById('loading').classList.add('hidden');
         if (window.AtlasSummaries) AtlasSummaries.init(d,function(topic,focus,indices) {
+          selectedTopic=topic;
           selectedTopicIndices=indices || [];
+          searchMatches=null;searchCenter=null;
           selectedTopicSet=topic ? new Set(selectedTopicIndices) : null;
           rebuildPointState();
           clearSelection();
@@ -2510,15 +2502,33 @@
           if (!topic || !focus) return;
           var cluster=d.clusters[topic.level].find(function(c) { return c.id===topic.id; });
           if (cluster) {
-            var z=topic.level==='coarse'?2:5;
+            var available=W<600?Math.max(160,H-document.getElementById('cluster-summary').offsetHeight-100):Math.min(H-160,W-440);
+            var z=Math.max(view.minZoom,Math.min(8,available/(Math.max(cluster.radius,0.015)*2*Math.min(W,H)*0.42)));
             var sheetHeight=W<600?document.getElementById('cluster-summary').offsetHeight:0;
-            animateTo(cluster.cx,cluster.cy+sheetHeight/(2*Math.min(W,H)*0.42*z),z);
+            var sideWidth=W>=600?document.getElementById('cluster-summary').offsetWidth+32:0;
+            animateTo(cluster.cx+sideWidth/(2*Math.min(W,H)*0.42*z),cluster.cy+(sheetHeight?sheetHeight-80:0)/(2*Math.min(W,H)*0.42*z),z);
           }
         },function(index) {
           selectedIndex=index; selectedPub=-1;
-          animateTo(pointsX[index],pointsY[index],Math.max(12,view.zoom));
+          focusPoint(pointsX[index],pointsY[index]);
           updateSelection(); markDirty();
         },function(point) { return atUriToUrl(point.uri,point.basePath,point.platform,point.path); });
+        if(window.AtlasFinder) AtlasFinder.init(d,function(item) {
+          clearSearch();
+          if(window.AtlasSummaries) AtlasSummaries.close();
+          clearSelection();
+          if(item.kind==='region'||item.kind==='topic') {
+            AtlasSummaries.open(item.id,true,item.kind==='region'?'coarse':'fine');return;
+          }
+          if(item.kind==='publication') {
+            selectedPub=item.id;selectedIndex=-1;
+            focusPoint(pubData[item.id].cx,pubData[item.id].cy);
+          } else {
+            selectedIndex=item.id;selectedPub=-1;
+            focusPoint(pointsX[item.id],pointsY[item.id]);
+          }
+          updateSelection();markDirty();
+        });
         markDirty();
         // jump to specific document by URI (from "view on atlas" links)
         if (pendingUri) {
@@ -2561,13 +2571,6 @@
           var pjy = parseFloat(urlParams.get('y')) || 0;
           animateTo(pjx, pjy, pendingZoom);
         }
-        // apply prefetched search results (fired in parallel with atlas.json)
-        else if (pendingSearchResults) {
-          pendingSearchResults.then(function(resp) {
-            pendingSearchResults = null;
-            if (resp) applySearchResults(resp, searchInput.value);
-          });
-        }
       })
       .catch(function(err) {
         document.getElementById('loading').querySelector('.spinner').textContent = 'error: ' + err.message;
@@ -2578,9 +2581,6 @@
   // --- search ---
   var API_URL = '/api';
   var searchInput = document.getElementById('search-input');
-  var searchForm = document.getElementById('search-form');
-  var searchStatusEl = null;
-  var pendingSearchResults = null; // promise for prefetched search results
   var pendingUri = null; // URI to jump to after data loads (from "view on atlas" links)
   var pendingPub = null; // basePath to jump to (from "view publication on atlas" links)
   var pendingZoom = null; // ?z= zoom override for uri deep-links
@@ -2601,20 +2601,13 @@
     pendingPub = urlPub;
   } else if (urlQ) {
     searchInput.value = urlQ;
-    pendingSearchResults = fetch(API_URL + buildSearchUrl(urlQ))
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .catch(function() { return null; });
+
   }
   loadData();
   scheduleFrame();
 
   function setSearchStatus(msg) {
-    if (!searchStatusEl) {
-      searchStatusEl = document.createElement('span');
-      searchStatusEl.className = 'search-status';
-      searchForm.appendChild(searchStatusEl);
-    }
-    searchStatusEl.textContent = msg;
+    document.getElementById('finder-status').textContent=msg;
   }
 
   function clearSearch() {
@@ -2631,147 +2624,11 @@
     markDirty();
   }
 
-  function applySearchResults(resp, query) {
-    searchQuery = query;
-    var results = (resp && resp.results) || [];
-    if (results.length === 0) {
-      setSearchStatus('no results');
-      searchMatches = null;
-      searchCenter = null;
-      rebuildPointState();
-      markDirty();
-      return;
-    }
-
-    // match result URIs to atlas points
-    var matches = new Set();
-    var weightedX = 0, weightedY = 0, totalWeight = 0;
-    for (var i = 0; i < results.length; i++) {
-      var uri = results[i].uri;
-      if (uriToIndex && uriToIndex.has(uri)) {
-        var idx = uriToIndex.get(uri);
-        matches.add(idx);
-        var w = results.length - i;
-        weightedX += pointsX[idx] * w;
-        weightedY += pointsY[idx] * w;
-        totalWeight += w;
-      }
-    }
-
-    if (matches.size === 0) {
-      setSearchStatus(results.length + ' results, 0 on map');
-      searchMatches = null;
-      searchCenter = null;
-      rebuildPointState();
-      markDirty();
-      return;
-    }
-
-    searchMatches = matches;
-    searchCenter = { x: weightedX / totalWeight, y: weightedY / totalWeight };
-    rebuildPointState();
-    setSearchStatus(matches.size + ' of ' + results.length + ' on map');
-
-    var maxDist = 0;
-    matches.forEach(function(idx) {
-      var dx = pointsX[idx] - searchCenter.x;
-      var dy = pointsY[idx] - searchCenter.y;
-      var d = Math.sqrt(dx * dx + dy * dy);
-      if (d > maxDist) maxDist = d;
-    });
-
-    var targetZoom = maxDist > 0 ? Math.min(view.maxZoom, 0.3 / maxDist) : 6;
-    targetZoom = Math.max(4, Math.min(15, targetZoom));
-    animateTo(searchCenter.x, searchCenter.y, targetZoom);
+  function focusPoint(x,y) {
+    var z=Math.max(view.minZoom,Math.min(8,view.zoom));
+    var offset=W<600?90:0;
+    animateTo(x,y+offset/(Math.min(W,H)*0.42*z),z);
   }
-
-  // mirrors index.html's `@handle.tld` extraction so the syntax is
-  // consistent across pages. unquoted `@handle.tld` or `@did:plc:...`
-  // becomes an `author=` filter; the rest is the q text.
-  function parseSearchQuery(raw) {
-    var unquoted = raw.replace(/"[^"]*"/g, '');
-    var didMatch = unquoted.match(/(?:^|\s)@(did:[a-z]+:[A-Za-z0-9._:-]+)/);
-    var handleMatch = !didMatch && unquoted.match(/(?:^|\s)@([\w.-]+\.\w+)/);
-    var text = raw.trim();
-    var author = null;
-    if (didMatch) {
-      author = didMatch[1];
-      text = raw.replace(new RegExp('\\s*@' + author.replace(/[.:]/g, '\\$&') + '\\s*'), ' ').trim();
-    } else if (handleMatch) {
-      author = handleMatch[1];
-      text = raw.replace(new RegExp('\\s*@' + author.replace(/\./g, '\\.') + '\\s*'), ' ').trim();
-    }
-    return { text: text, author: author };
-  }
-
-  // when filter-only (author set, no text), use keyword mode — semantic
-  // needs a query to embed and would return nothing.
-  function buildSearchUrl(raw) {
-    var parsed = parseSearchQuery(raw);
-    var mode = (parsed.text.length === 0 && parsed.author) ? 'keyword' : 'semantic';
-    var url = '/search?mode=' + mode + '&limit=20&format=v2&q=' + encodeURIComponent(parsed.text);
-    if (parsed.author) url += '&author=' + encodeURIComponent(parsed.author);
-    return url;
-  }
-
-  function doSearch(query, skipPush) {
-    if (!query || !data || !uriToIndex) return;
-    setSearchStatus('searching...');
-    if (!skipPush) {
-      var url = new URL(window.location);
-      url.searchParams.set('q', query);
-      history.replaceState(null, '', url);
-    }
-
-    fetch(API_URL + buildSearchUrl(query))
-      .then(function(r) {
-        if (!r.ok) throw new Error('search failed: ' + r.status);
-        return r.json();
-      })
-      .then(function(resp) { applySearchResults(resp, query); })
-      .catch(function(err) {
-        setSearchStatus('error');
-        console.error(err);
-      });
-  }
-
-  // register typeahead FIRST so its keydown handler intercepts Enter/Escape
-  // before the form submit / clear-search handlers below see them.
-  if (window.LeafletUI) {
-    window.LeafletUI.setupTypeahead(searchInput, {
-      onPick: function() {
-        if (searchForm.requestSubmit) searchForm.requestSubmit();
-        else searchForm.dispatchEvent(new Event('submit', { cancelable: true }));
-      },
-    });
-  }
-
-  searchForm.addEventListener('submit', function(e) {
-    e.preventDefault();
-    var q = searchInput.value.trim();
-    if (q) doSearch(q);
-    else clearSearch();
-  });
-
-  // bare Escape (when typeahead is closed) clears the search. typeahead
-  // intercepts Escape via stopImmediatePropagation when its dropdown is
-  // open, so this only fires in the closed state.
-  searchInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-      searchInput.value = '';
-      searchInput.blur();
-      clearSearch();
-    }
-  });
-
-  // cmd+k / ctrl+k to focus search
-  window.addEventListener('keydown', function(e) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-      e.preventDefault();
-      searchInput.focus();
-      searchInput.select();
-    }
-  });
 
   window.atlas = {
     setDirty: function() {

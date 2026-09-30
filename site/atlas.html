@@ -30,7 +30,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="atlas.css?build=topics-5">
+  <link rel="stylesheet" href="atlas.css?build=finder-1">
   <link rel="stylesheet" href="components.css?v=1782991000">
 </head>
 <body>
@@ -47,14 +47,21 @@
   <div class="header">
     <h1><a href="/" class="title">pub search</a> <span class="dim">/ atlas</span></h1>
     <div class="nav">
-      <form class="search-form" id="search-form">
-        <input type="text" id="search-input" placeholder="search..." aria-label="search the atlas" autocomplete="off" spellcheck="false">
-      </form>
+      <button id="finder-trigger" type="button" disabled aria-haspopup="dialog" aria-controls="atlas-finder"><span aria-hidden="true">⌕</span> Find in Atlas <kbd>⌘ K</kbd></button>
       <a href="/stats">stats</a>
       <button class="lf-settings-btn" id="settings-btn" aria-label="settings" title="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
      
     </div>
   </div>
+
+  <dialog id="atlas-finder" aria-labelledby="finder-title">
+    <header class="finder-heading"><div><h2 id="finder-title">Find your place</h2><p>Topics, publications, and documents in the Atlas</p></div><button id="finder-close" aria-label="Close search" type="button">×</button></header>
+    <div id="finder-trail" aria-label="Search scope"></div>
+    <div class="finder-input-wrap"><span aria-hidden="true">⌕</span><input type="search" id="search-input" aria-label="Find in Atlas" placeholder="Find a topic, publication, or document" autocomplete="off" spellcheck="false" enterkeyhint="search"></div>
+    <nav id="finder-filters" aria-label="Result types"><button type="button" aria-pressed="true">All</button><button type="button" data-kind="region" aria-pressed="false">Regions</button><button type="button" data-kind="topic" aria-pressed="false">Topics</button><button type="button" data-kind="publication" aria-pressed="false">Publications</button><button type="button" data-kind="document" aria-pressed="false">Documents</button></nav>
+    <div id="finder-results"></div>
+    <footer class="finder-footer"><button id="finder-remote" type="button" hidden></button><p id="finder-status" role="status"></p><span class="finder-keys">↑ ↓ to move <kbd>↵</kbd> to show on map</span></footer>
+  </dialog>
 
   <div class="tooltip" id="tooltip">
     <div class="title" id="tooltip-title"></div>
@@ -108,8 +115,9 @@
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
   <script src="atlas-interaction.js"></script>
-  <script src="atlas-summaries.js?build=topics-5"></script>
-  <script src="atlas.js?build=topics-5"></script>
+  <script src="atlas-summaries.js?build=finder-1"></script>
+  <script src="atlas-finder.js?build=finder-1"></script>
+  <script src="atlas.js?build=finder-1"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
       window.LeafletUI.openSettings();

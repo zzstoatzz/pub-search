@@ -13,8 +13,8 @@ module.exports = {
   globIgnores: ['sw.js', 'sw-atlas-refresh.js', 'atlas.html', 'workbox-*.js', 'workbox-config.cjs'],
   importScripts: ['sw-atlas-refresh.js'],
   manifestTransforms: [async entries => ({
-    manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js'].includes(entry.url)
-      ? { ...entry, url: entry.url + '?build=topics-5' } : entry),
+    manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js', 'atlas-finder.js'].includes(entry.url)
+      ? { ...entry, url: entry.url + '?build=finder-1' } : entry),
     warnings: [],
   })],
   swDest: 'sw.js',

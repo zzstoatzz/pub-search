@@ -322,3 +322,22 @@ Pages deployment credential. In `cf` v1.0.0-beta.5, `cf pages deploy` is a stub
 that explicitly rejects legacy Pages projects and directs them to Wrangler.
 Keep `site/deploy.sh` for this project's uploads and service-worker regeneration.
 `cf deploy` targets Pages on Workers and is not a drop-in replacement here.
+
+## Atlas finder
+
+“Find in Atlas” (Cmd/Ctrl+K) searches the loaded snapshot by name, with exact
+region, topic, publication, and document names first. Results identify their
+kind and parent; the chevron browses region → topic → documents or a
+publication’s documents. Category filters and Show more expose the full local
+index. Document text search is an explicit API action, including `@handle`
+author filters; only documents present in the map are selectable. Typing does
+not move the camera.
+
+On narrow screens the finder fills the visual viewport, with a 17px input to
+avoid iOS focus zoom. Selecting an area frames its extent above/beside the
+summary; publication or document selection pans without forced close zoom.
+Areas use violet boundaries (solid regions, dashed topics), publications use
+warm orbital rings, and documents use cyan corner brackets. Camera movement
+respects reduced-motion preferences.
+
+Run `node --test scripts/tests/atlas-finder.mjs` for matching and hierarchy checks.
