@@ -213,7 +213,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
               "generatedAt": datetime.now(timezone.utc).isoformat(), "model": MODEL,
               "requestedLevels": list(levels), "limitPerLevel": limit,
               "prompt": SYSTEM, "contextMinCosine": MIN_COSINE,
-              "sampling": "Up to 10 seed members ranked by membership strength with author diversity, plus up to 3 closely related documents; first 3,000 characters each.",
+              "sampling": "Up to 10 members with author diversity: up to 2 centrally located recommended posts, then membership-strength ranking; plus up to 3 closely related documents, first 3,000 characters each.",
               "clusters": [], "regions": [], "failed": 0, "status": "unavailable"}
     if not api_key or limit == 0 or atlas["meta"].get("membershipVersion") != 1:
         return result

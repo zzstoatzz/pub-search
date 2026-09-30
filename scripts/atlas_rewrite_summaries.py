@@ -68,8 +68,9 @@ def rewrite(atlas_path: Path, source_path: Path, output_path: Path, limit: int |
                 result['clusters' if entry['level'] == 'fine' else 'regions'].append(updated)
                 print(f"{entry['level']} {entry['id']} {entry['label']}: {updated['summary']}", flush=True)
             except Exception as exc:
-                failures.append({'level': entry['level'], 'id': entry['id'], 'error': type(exc).__name__})
-                print(f"FAILED {entry['level']} {entry['id']}: {type(exc).__name__}", flush=True)
+                detail = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                failures.append({'level': entry['level'], 'id': entry['id'], 'error': detail})
+                print(f"FAILED {entry['level']} {entry['id']}: {detail}", flush=True)
             if completed % 25 == 0:
                 save()
     result['generated'] = len(result['clusters']) + len(result['regions'])
