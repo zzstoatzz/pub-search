@@ -1,0 +1,98 @@
+{
+  "provider": "openai",
+  "skipped": [
+    "did:plc:4z33k5fjzw2ew3u373pg7ku5"
+  ],
+  "votes": [
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+      "account": "sksksketch.net",
+      "truth": false,
+      "vote": 0,
+      "verdict": true,
+      "reason": "The content consistently follows a pattern of technical how-to guides for Adobe software, with repetitive titles and structured steps suggesting generation from a dataset of common tasks.",
+      "seconds": 14.514335125684738
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+      "account": "sksksketch.net",
+      "truth": false,
+      "vote": 1,
+      "verdict": true,
+      "reason": "The account's content consists of highly repetitive, task-specific titles and excerpts focused on Adobe software tips and scripts, generated from a dataset of templates and predefined data points.",
+      "seconds": 10.188025125302374
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+      "account": "sksksketch.net",
+      "truth": false,
+      "vote": 2,
+      "verdict": false,
+      "reason": "The account provides original, experience-based tutorials and tips on Adobe software, showing authorial intent and variation in content rather than generating from a fixed dataset.",
+      "seconds": 13.52341050002724
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+      "account": "prideraiser.org",
+      "truth": true,
+      "vote": 0,
+      "verdict": true,
+      "reason": "The documents appear to be generated from a dataset of events or campaigns, with each entry corresponding to a specific record and following a templated structure.",
+      "seconds": 12.20081983320415
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+      "account": "prideraiser.org",
+      "truth": true,
+      "vote": 1,
+      "verdict": true,
+      "reason": "The account's content follows a templated structure with repetitive phrases and generic titles, indicating generation from a dataset rather than original authorship.",
+      "seconds": 9.896549415774643
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+      "account": "prideraiser.org",
+      "truth": true,
+      "vote": 2,
+      "verdict": true,
+      "reason": "The consistent pattern of documents tied to specific prideraiser events and organizations, with templated content varying by event details, indicates generation from a dataset rather than unique authorship.",
+      "seconds": 12.622200290672481
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+      "account": "coryd.dev (942-doc human)",
+      "truth": false,
+      "vote": 0,
+      "verdict": false,
+      "reason": "The content includes original analysis, personal narratives, and varied thoughtfulness, indicating human authorship rather than dataset-driven generation.",
+      "seconds": 11.805819166824222
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+      "account": "coryd.dev (942-doc human)",
+      "truth": false,
+      "vote": 1,
+      "verdict": false,
+      "reason": "The diverse titles and content excerpts show personal analysis and varied topics, not template-based generation from a single dataset.",
+      "seconds": 10.882941166870296
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+      "account": "coryd.dev (942-doc human)",
+      "truth": false,
+      "vote": 2,
+      "verdict": true,
+      "reason": "The account's content is structured like factual reports or generated from templates using data sources, not original personal writing.",
+      "seconds": 12.423136541619897
+    }
+  ]
+}

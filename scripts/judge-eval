@@ -11,19 +11,24 @@ then runs each candidate model over each vote slice for every known account.
 A usable judge must get ALL known cases right on a majority of votes.
 
 Usage:
-  scripts/judge-eval                                   # anthropic, default candidate set
-  scripts/judge-eval claude-haiku-4-5 claude-sonnet-5  # anthropic, named models
+  scripts/judge-eval                                   # OpenAI-compatible endpoint, default candidate set
+  JUDGE_PROVIDER=anthropic scripts/judge-eval claude-haiku-4-5  # named model
   JUDGE_PROVIDER=openai scripts/judge-eval google/gemma-4-12b   # co/core (chat-completions)
   JUDGE_PROVIDER=openai JUDGE_API_URL=https://api.openai.com/v1/chat/completions scripts/judge-eval <model>
+  JUDGE_API_URL=http://127.0.0.1:18081/v1/chat/completions JUDGE_API_KEY='' JUDGE_CONCURRENCY=1 scripts/judge-eval deepseek-local
 
 Needs .env with turso_url/turso_token, and ANTHROPIC_API_KEY (or COCORE_API_KEY
 for the openai provider) in the env or .env. ENV_FILE points at another file.
+JUDGE_API_KEY overrides provider credentials; an empty value sends no auth header.
+JUDGE_OUTPUT writes a JSON report with per-vote reasons, timings, and skipped cases.
 """
 
 import asyncio
 import json
 import os
 import sys
+import time
+from pathlib import Path
 
 import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -88,7 +93,7 @@ Respond with ONLY JSON: {"machine": true|false, "reason": "<one sentence>"}"""
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore", hide_input_in_errors=True
     )
     turso_url: str
     turso_token: str
@@ -198,9 +203,10 @@ async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]
         else:
             body["max_tokens"] = 2000
             body["temperature"] = 0
+        key = os.environ.get("JUDGE_API_KEY", st.openai_api_key if 'openai.com' in OPENAI_COMPAT_URL else st.cocore_api_key)
         r = await client.post(
             OPENAI_COMPAT_URL,
-            headers={"Authorization": f"Bearer {st.openai_api_key if 'openai.com' in OPENAI_COMPAT_URL else st.cocore_api_key}"},
+            headers={"Authorization": f"Bearer {key}"} if key else {},
             json=body,
             timeout=timeout,
         )
@@ -209,6 +215,8 @@ async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]
         content = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
     # the verdict is the LAST json object with a "machine" key — reasoning models
     # emit a thought stream (with stray braces) before it
+    if not isinstance(content, str):
+        return None, "missing text response"
     dec = json.JSONDecoder()
     verdict = None
     i = content.find("{")
@@ -220,9 +228,9 @@ async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]
         except json.JSONDecodeError:
             pass
         i = content.find("{", i + 1)
-    if verdict is None:
+    if verdict is None or type(verdict["machine"]) is not bool:
         return None, f"unparseable: {content[:80]!r}"
-    return bool(verdict["machine"]), str(verdict.get("reason", ""))[:110]
+    return verdict["machine"], str(verdict.get("reason", ""))
 
 
 async def main() -> None:
@@ -241,10 +249,14 @@ async def main() -> None:
         # every (model, account, vote) call is independent, but cocore's
         # decentralized serving drowns under a full burst — bound concurrency
         sem = asyncio.Semaphore(int(os.environ.get("JUDGE_CONCURRENCY", "12")))
+        timings = {}
 
         async def bounded(model, did, v):
             async with sem:
-                return await ask(client, st, model, materials[did][v])
+                started = time.monotonic()
+                result = await ask(client, st, model, materials[did][v])
+                timings[(model, did, v)] = time.monotonic() - started
+                return result
 
         tasks = {
             (model, did, v): asyncio.create_task(bounded(model, did, v))
@@ -253,6 +265,15 @@ async def main() -> None:
             for v in range(VOTES)
         }
         results = {k: await t for k, t in tasks.items()}
+        if output := os.environ.get("JUDGE_OUTPUT"):
+            Path(output).write_text(json.dumps({
+                "provider": PROVIDER,
+                "skipped": [did for did in KNOWN if did not in materials],
+                "votes": [{"model": model, "did": did, "account": KNOWN[did][0],
+                           "truth": KNOWN[did][1], "vote": vote, "verdict": verdict,
+                           "reason": reason, "seconds": timings[(model, did, vote)]}
+                          for (model, did, vote), (verdict, reason) in results.items()],
+            }, indent=2) + "\n")
 
         print(f"{'model':<45} {'account':<30} truth  votes      verdict")
         scores: dict[str, int] = {}
@@ -277,4 +298,5 @@ async def main() -> None:
             print(f"{model}: {s}/{len(materials)}")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

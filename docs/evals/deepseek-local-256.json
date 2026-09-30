@@ -1,0 +1,98 @@
+{
+  "provider": "openai",
+  "skipped": [
+    "did:plc:4z33k5fjzw2ew3u373pg7ku5"
+  ],
+  "votes": [
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+      "account": "sksksketch.net",
+      "truth": false,
+      "vote": 0,
+      "verdict": true,
+      "reason": "The account consistently produces technical tutorials and tips for Adobe software, with titles and content focused on specific features and extensions, indicating systematic generation based on predefined templates and dataset-derived instructions rather than original thought.",
+      "seconds": 8.06677533313632
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+      "account": "sksksketch.net",
+      "truth": false,
+      "vote": 1,
+      "verdict": true,
+      "reason": "The account's content consists of highly repetitive, task-specific Adobe software tips and scripts, generated from a dataset of technical solutions rather than originating from unique authorial intent.",
+      "seconds": 7.498116374947131
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+      "account": "sksksketch.net",
+      "truth": false,
+      "vote": 2,
+      "verdict": true,
+      "reason": "The account's content is systematically generated from a dataset of Adobe software tips and scripts, with titles and excerpts following a templated structure based on predefined categories and instructions.",
+      "seconds": 7.630387708544731
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+      "account": "prideraiser.org",
+      "truth": true,
+      "vote": 0,
+      "verdict": true,
+      "reason": "The documents appear to be generated from a dataset of events or campaigns, with templated titles and content describing the authoring group's background or purpose.",
+      "seconds": 6.79084200039506
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+      "account": "prideraiser.org",
+      "truth": true,
+      "vote": 1,
+      "verdict": true,
+      "reason": "The account's content is generated from a dataset of predefined templates and data points, lacking unique authorial intent or variation in style.",
+      "seconds": 6.601127416826785
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+      "account": "prideraiser.org",
+      "truth": true,
+      "vote": 2,
+      "verdict": true,
+      "reason": "The account's documents consistently reference specific years and organizations, and the content appears to be structured around event details likely sourced from a dataset rather than originating from the author's personal thoughts.",
+      "seconds": 6.824863417074084
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+      "account": "coryd.dev (942-doc human)",
+      "truth": false,
+      "vote": 0,
+      "verdict": false,
+      "reason": "The content demonstrates original thought and narrative depth, inconsistent with dataset-driven generation.",
+      "seconds": 6.48476233240217
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+      "account": "coryd.dev (942-doc human)",
+      "truth": false,
+      "vote": 1,
+      "verdict": false,
+      "reason": "The content demonstrates personal reflection, varied topics, and no evidence of templated generation from a dataset.",
+      "seconds": 6.536910333670676
+    },
+    {
+      "model": "deepseek-local",
+      "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+      "account": "coryd.dev (942-doc human)",
+      "truth": false,
+      "vote": 2,
+      "verdict": true,
+      "reason": "The account's content appears to be generated from structured data sources, such as event schedules, case details, or technical configurations, rather than being created by an author with independent thoughts or ideas.",
+      "seconds": 6.970843083225191
+    }
+  ]
+}
