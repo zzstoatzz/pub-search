@@ -5,6 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="help" href="/llms.txt" type="text/plain" title="API and integration guide for agents" />
         <meta name="theme-color" content="#0d0d0d" />
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
         <title>pub search</title>
@@ -116,12 +117,6 @@
                 font-size: 12px;
                 font-weight: normal;
                 margin-bottom: 1.5rem;
-                /* flex row so the gear can be pushed to the right edge of the
-       * content area instead of floating mid-line. wraps if needed. */
-                display: flex;
-                align-items: center;
-                flex-wrap: wrap;
-                gap: 0.4rem;
             }
 
             h1 a.title {
@@ -130,33 +125,6 @@
 
             h1 a.title:hover {
                 color: var(--text-bright);
-            }
-
-            h1 a.src {
-                font-size: 10px;
-                color: var(--text-muted);
-            }
-
-            h1 a.stats-link {
-                font-size: 10px;
-                color: #553;
-            }
-
-            h1 a.stats-link:hover {
-                color: #d4956a;
-            }
-
-            h1 .by {
-                font-size: 10px;
-                color: var(--text-dim);
-            }
-
-            h1 .by a {
-                color: var(--text-dim);
-            }
-
-            h1 .by a:hover {
-                color: #1b7340;
             }
 
             .search-box {
@@ -1277,6 +1245,25 @@
                     align-items: center;
                 }
             }
+
+            .site-header { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem 0.75rem; margin-bottom: 1.5rem; }
+            .site-header h1 { margin: 0; }
+            .resource-links { display: flex; align-items: center; gap: 0.55rem; }
+            .resource-links a { font-size: 12px; color: var(--text-secondary); padding: 0.65rem 0; text-decoration: none; }
+            .resource-links a:hover { color: var(--text-bright); }
+            .site-header .lf-settings-btn { margin-left: auto; min-width: 44px; min-height: 44px; }
+            .search-box .lf-typeahead-wrap { padding-right: 2.75rem; min-width: 0; }
+            .search-box .syntax-help-btn { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; min-height: 0; margin: 0; padding: 0; border: none; border-radius: 0; font-size: 15px; color: var(--text-secondary); }
+            .site-footer { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 12px; color: var(--text-secondary); }
+            .site-footer nav { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 0.45rem; }
+            .site-footer a { color: var(--text-secondary); padding: 0.35rem 0; text-decoration: none; }
+            .site-footer a:hover { color: var(--text-bright); }
+            #stats:empty { display: none; }
+            .corpus-count { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+            @media (max-width: 480px) {
+                .corpus-count { order: 3; flex-basis: 100%; margin-top: 0.15rem; }
+            }
+            .resource-links a:focus-visible, .site-footer a:focus-visible, .syntax-help-btn:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 3px; }
         </style>
         <link rel="stylesheet" href="components.css?v=1782991000" />
         <script src="platforms.js"></script>
@@ -1287,30 +1274,13 @@
 </head>
     <body>
         <div class="container">
-            <h1>
-                <a href="/" class="title">pub search</a>
-                <span class="by"
-                    >by
-                    <a
-                        href="https://bsky.app/profile/zzstoatzz.io"
-                        target="_blank"
-                        >@zzstoatzz.io</a
-                    ></span
-                >
-                <a
-                    href="https://tangled.sh/@zzstoatzz.io/pub-search"
-                    target="_blank"
-                    class="src"
-                    >[src]</a
-                >
-                <a id="header-stats" class="stats-link"></a>
-                <button
-                    class="syntax-help-btn"
-                    id="syntax-help-btn"
-                    title="what is this? (+ search syntax)"
-                >
-                    ?
-                </button>
+            <header class="site-header">
+                <h1><a href="/" class="title">pub search</a></h1>
+                <nav class="resource-links" aria-label="Project resources">
+                    <a href="https://tangled.sh/@zzstoatzz.io/pub-search" aria-label="Source code" target="_blank" rel="noopener">[src]</a>
+                    <a href="/llms.txt" title="API and integration guide for agents" aria-label="llms.txt — API and integration guide for agents">[llms.txt]</a>
+                </nav>
+                <a class="corpus-count" id="corpus-stats" href="/stats" aria-live="polite"><pub-loading>Reading the collection…</pub-loading></a>
                 <button
                     class="lf-settings-btn"
                     id="settings-btn"
@@ -1332,7 +1302,7 @@
                         ></path>
                     </svg>
                 </button>
-            </h1>
+            </header>
 
             <div class="search-box">
                 <div class="lf-typeahead-wrap">
@@ -1344,6 +1314,9 @@
                         aria-label="search atproto publishing platforms"
                         autofocus
                     />
+                    <button class="syntax-help-btn" id="syntax-help-btn" type="button"
+                        title="About search and search syntax" aria-label="Search help"
+                        aria-controls="syntax-help" aria-expanded="false">?</button>
                 </div>
                 <button id="search-btn">search</button>
             </div>
@@ -1477,13 +1450,19 @@
                             href="https://piccalil.li/blog/publishing-on-the-atmosphere-with-standardsite/"
                             target="_blank"
                             title="a step-by-step guide to publishing your own site on standard.site — found with this search engine"
-                            >your site could be here</a
+                            >put your blog in the atmosphere</a
                         >
                     </p>
                 </div>
             </div>
 
             <div id="stats" class="stats"></div>
+            <footer class="site-footer">
+                <span>by <a href="https://waow.tech/">waow.tech</a></span>
+                <nav aria-label="Explore pub search">
+                    <a href="/stats">stats</a><span aria-hidden="true">·</span><a href="/atlas.html">atlas</a><span aria-hidden="true">·</span><a href="/recommended.html">recommended</a><span aria-hidden="true">·</span><a href="/subscribed.html">subscribed</a>
+                </nav>
+            </footer>
         </div>
 
         <script>
@@ -1517,6 +1496,7 @@
                 e.stopPropagation();
                 syntaxHelp.classList.toggle("open");
                 syntaxHelpBtn.classList.toggle("active");
+                syntaxHelpBtn.setAttribute("aria-expanded", String(syntaxHelp.classList.contains("open")));
             });
             document.addEventListener("click", function (e) {
                 if (
@@ -1525,6 +1505,16 @@
                 ) {
                     syntaxHelp.classList.remove("open");
                     syntaxHelpBtn.classList.remove("active");
+                    syntaxHelpBtn.setAttribute("aria-expanded", "false");
+                }
+            });
+
+            document.addEventListener("keydown", function (event) {
+                if (event.key === "Escape" && syntaxHelp.classList.contains("open")) {
+                    syntaxHelp.classList.remove("open");
+                    syntaxHelpBtn.classList.remove("active");
+                    syntaxHelpBtn.setAttribute("aria-expanded", "false");
+                    syntaxHelpBtn.focus();
                 }
             });
 
@@ -2579,13 +2569,16 @@
             fetch(`${API_URL}/stats`)
                 .then((r) => r.json())
                 .then((data) => {
-                    statsDiv.innerHTML = `<a href="/stats">stats</a> · <a href="/atlas.html">atlas</a> · <a href="/recommended.html">recommended</a> · <a href="/subscribed.html">subscribed</a>`;
-                    const headerStats = document.getElementById("header-stats");
-                    headerStats.href = "/stats";
-                    headerStats.textContent = `[${data.documents.toLocaleString()} docs]`;
+                    const headerStats = document.getElementById("corpus-stats");
+                    if (!Number.isSafeInteger(data.documents) || data.documents < 0) throw new Error("Invalid corpus count");
+                    const exact = data.documents.toLocaleString("en-US");
+                    const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(data.documents).toLowerCase();
+                    headerStats.textContent = `[${compact} docs]`;
+                    headerStats.title = `${exact} documents indexed`;
+                    headerStats.setAttribute("aria-label", `${exact} documents indexed — view stats`);
                 })
                 .catch(() => {
-                    statsDiv.textContent = "connecting...";
+                    document.getElementById("corpus-stats").textContent = "corpus unavailable";
                 });
         </script>
     </body>
