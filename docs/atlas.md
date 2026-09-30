@@ -82,19 +82,18 @@ trigger a rebuild now (against prefect-server.waow.tech, tailnet):
 prefect deployment run 'leaflet-atlas/leaflet-atlas' --watch
 ```
 
-### ⚠️ the flow deploys data, NOT frontend changes
+### deploy consistency
 
-`flows/atlas.py:deploy_to_pages` calls `wrangler pages deploy` **directly** — it does not regenerate the workbox service worker. That's fine for `atlas.json`, which `workbox-config.cjs` serves via a `StaleWhileRevalidate` runtime cache rather than precaching. But `*.js` **is** precached with a content hash baked into `sw.js`, so:
+`flows/atlas.py:deploy_to_pages` installs the site dependencies and regenerates
+Workbox before deploying. Manual frontend releases still use `site/deploy.sh`.
+The main gzipped map uses a network-first cache, with a ten-second timeout and
+an offline fallback; auxiliary datasets retain stale-while-revalidate caching.
+This prevents the usual old-map/new-summary pairing on return visits. If an
+offline fallback or deployment race still produces a mismatch, the panel offers
+**Reload map** instead of claiming generation is in progress.
 
-- changed **`atlas.json` only** → the flow is sufficient
-- changed **`atlas.js` / any `site/*.js`** → you must run `site/deploy.sh` (regenerates `sw.js`), or returning visitors keep the old script forever
-
-`deploy.sh` ships whatever `site/atlas.json` is on disk, and that file is gitignored — so pull the live one down first or you'll overwrite good data with a stale local build:
-
-```bash
-curl -sfo site/atlas.json.gz https://pub-search.waow.tech/atlas.json.gz
-cd site && ./deploy.sh
-```
+Before a manual frontend deployment, fetch the live datasets, including the
+summary sidecar, so the local checkout does not overwrite newer generated data.
 
 ## future work
 
@@ -163,7 +162,7 @@ The six-hour Prefect flow builds the map, then runs `scripts/atlas_summaries.py`
 as a separate step with a one-hour timeout. Summary failure does not block publishing.
 
 Generation covers both coarse regions and fine clusters with at least three distinct readable member documents. Regions use direct coarse membership and coarse membership strength; they never roll up fine clusters.
-Each uses up to 10 actual members, ordered by membership strength with a stable URI
+Each starts with up to 10 actual members, ordered by membership strength with a stable URI
 hash to break ties and at most two per author before filling remaining slots. The
 document API supplies policy-filtered extracted text; the first 3,000 characters per
 document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
@@ -174,8 +173,9 @@ summaries have not undergone independent quality evaluation.
 `atlas-summaries.json` is an optional, gitignored sidecar containing membership
 hashes, source URIs and excerpts, cited sources, model, and generation time. Atlas
 loads it after the map and checks the build timestamp, exact member hashes, counts,
-labels, and source membership. A stale or unavailable sidecar shows a retry message
-inside the panel; the map continues working. It does not download the Atlas twice.
+labels, and source membership. A mismatched sidecar offers a map reload. Missing generation, missing topic
+summaries, and loading failures have distinct messages; retry performs a fresh
+request even after a successful but partial response. In every case, the map continues working. It does not download the Atlas twice.
 
 Generation uses at most six concurrent requests and the dedicated
 `pub-search-atlas-openai-api-key` Prefect Secret, injected as `OPENAI_API_KEY`.
@@ -183,7 +183,7 @@ Document hydration is paced to one request per second, with bounded retries for
 429 and transient gateway failures.
 SOPS holds its canonical value under `prefect.blocks`; `pub_search_atlas.OPENAI_API_KEY`
 references that block. Cached summaries require matching membership, text, label,
-prompt, and model. The sidecar records actual input/output token usage and cache hits.
+prompt, model, and retrieved context. The sidecar records actual input/output token usage and cache hits.
 Failures leave an unavailable or partial sidecar and do not block the map rebuild.
 The sidecar is always rewritten to prevent stale data from surviving a failed run.
 
@@ -198,7 +198,7 @@ Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
 `node --test scripts/tests/atlas-summaries.mjs`, and
 `node scripts/tests/atlas-interaction.cjs`.
 
-Atlas's summary release uses `?build=topics-4` on its CSS and map scripts, with
+Atlas's summary release uses `?build=topics-5` on its CSS and map scripts, with
 matching URLs in the Workbox manifest. When changing those assets, bump the build
 value in both `atlas.html` and `workbox-config.cjs`, then regenerate `sw.js`.
 The previous worker ignores `v` parameters; reusing that parameter can combine
@@ -210,3 +210,69 @@ open `http://127.0.0.1:8794/topics` (also `?desktop=1`). This exercises the real
 Atlas renderer and pointer handlers with a label over documents, no summaries,
 and unassigned neighbors. Checks include label priority, nearby browsing, exact
 highlight membership, stable selection during panning, and document-to-topic links.
+
+
+### introduction and presentation changes
+
+`71aa1b6` introduced an optional standalone preview on September 27, 2026.
+`e258dd1` moved it into the map with concise text and a mobile bottom sheet.
+`0fa89af` added asset-version URLs for service-worker upgrades; `4b15157`
+made topics selectable regardless of summary availability, added nearby browsing
+and document links, and kept source excerpts in a disclosure. `21c05a8` added
+full coverage and caching, `09d8051` retried malformed output, `b8d6692` tightened
+the copy, and `dd679d8` added direct coarse-region summaries.
+
+The prompt now says the topic label appears immediately above the description,
+so the opening should add detail rather than repeat the label. A validation check
+retries openings that reuse a phrase from the heading, with corrective feedback. It asks for a
+pattern shared by members, with citations confined to `sourceIds`.
+
+### supplemental context
+
+`scripts/atlas_context.py` uses the same Turbopuffer namespace and existing
+Voyage document embeddings as search. It normalizes the sampled members' vectors
+and queries their mean direction. Two candidate pools (12 each) cover the general
+index and specifically nate's `notes.zzstoatzz.io` publication. Only documents not already read
+with cosine similarity >= 0.75 are eligible; at most three survive deduplication.
+This is a conservative initial threshold, not a calibrated relevance probability.
+A top-K result alone is never sufficient, and no matches is an expected outcome.
+
+PubSearch's `/document` supplies the excerpts and enforces serving policy.
+The notes repository's Markdown is available through its published standard.site
+records, so retrieval does not require a separate repository index. Discovery
+opt-in, including member hydration, is limited to the notes author's DID and
+notes host; other publications retain normal visibility filtering.
+
+Context is optional: missing vector credentials or failed retrieval leaves a
+member-only summary and records `contextStatus`. The prompt restricts context
+to clarifying ideas already supported by members. Retrieved member documents retain `role: member`; outside
+sources carry `role: context`. Both record `cosineSimilarity`; the panel labels them as related context
+and excludes them from member coverage. At least three member excerpts and a
+member citation are still required. Cache identity includes the retrieved text.
+The sidecar stores the prompt, threshold, excerpts, scores, model, and requested
+levels/limits for analysis.
+
+### snapshot history
+
+`scripts/atlas_history.py` saves immutable map/summary pairs in SQLite. SHA-256
+addresses gzip-compressed objects; repeated archives reuse objects and snapshots.
+The `snapshots` table indexes timestamps, status, counts, and both object hashes.
+Restore checks both hashes before writing to a fresh output directory.
+
+The Prefect flow archives every completed map before publishing, including maps
+with missing or unavailable summaries. Archive failure prevents publication.
+On heavypad the database is
+`/home/stoat/prefect-analytics/pub-search-atlas/history.sqlite3`, outside the
+flow's temporary clone. This is durable host storage, not an off-host backup.
+History starts when the updated flow is released; earlier overwritten sidecars
+cannot be reconstructed from the current site.
+
+```sh
+python scripts/atlas_history.py /path/to/history.sqlite3 save site/atlas.json.gz
+sqlite3 /path/to/history.sqlite3 'select id, atlas_generated_at, status from snapshots order by archived_at desc'
+python scripts/atlas_history.py /path/to/history.sqlite3 restore SNAPSHOT_ID /tmp/atlas-replay
+```
+
+The browser recovery regression is at `/summary-states` on the membership test
+server. It exercises real HTTP failure, unavailable generation, a partial
+successful response, and recovery to a summary with separately labeled context.

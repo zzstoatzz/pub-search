@@ -1,4 +1,6 @@
 import gzip
+import hashlib
+from urllib.parse import parse_qs, urlsplit
 import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -60,12 +62,30 @@ const timer = setInterval(() => {
 
 
 class Handler(SimpleHTTPRequestHandler):
+    summary_attempts = {}
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path == "/topics":
+        if path == "/summary-states":
+            body, kind = (ROOT / "scripts/tests/atlas-summary-states.html").read_bytes(), "text/html"
+        elif path == "/atlas-summaries.json":
+            build = parse_qs(urlsplit(self.path).query).get("build", [""])[0]
+            attempt = self.summary_attempts.get(build, 0) + 1
+            self.summary_attempts[build] = attempt
+            if attempt == 1:
+                self.send_error(503)
+                return
+            uris = [f"at://did:plc:test/site.standard.document/{i}" for i in range(1, 4)]
+            sources = [{"id": i+1, "uri": uri, "title": f"Document {i+1}", "excerpt": "Member evidence."} for i, uri in enumerate(uris)]
+            sources.append({"id": 4, "uri": "at://did:plc:notes/site.standard.document/related", "title": "Related note", "excerpt": "Supplemental evidence.", "role": "context", "cosineSimilarity": 0.85})
+            cluster = {"id": 1, "label": "agent tools", "memberCount": 3,
+                       "membershipHash": hashlib.sha256(json.dumps(uris, separators=(",", ":")).encode()).hexdigest(),
+                       "summary": "Tools inspect files and coordinate changes.", "sources": sources, "sourceIds": [1, 4]}
+            body = json.dumps({"version": 2, "atlasGeneratedAt": build, "status": "unavailable" if attempt == 2 else "ready", "clusters": [cluster] if attempt >= 4 else []}).encode()
+            kind = "application/json"
+        elif path == "/topics":
             body, kind = (ROOT / "scripts/tests/atlas-topics.html").read_bytes(), "text/html"
         elif path == "/site/atlas-summaries.json":
             body, kind = b'{"version":2,"status":"unavailable","clusters":[]}', "application/json"

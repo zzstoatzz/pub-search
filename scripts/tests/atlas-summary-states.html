@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8"><title>Atlas summary recovery checks</title>
+<link rel="stylesheet" href="/site/atlas.css">
+<style>body{overflow:auto;padding:24px;font:14px monospace}#result{white-space:pre-wrap}#cluster-summary{position:relative;inset:auto;margin-top:24px}</style>
+<pre id="result">Running…</pre><div id="fixture"></div>
+<script src="/site/atlas-summaries.js"></script>
+<script type="module">
+const output=document.querySelector('#result');
+const check=(ok,msg)=>{if(!ok)throw Error(msg);output.textContent+='\nPASS '+msg;};
+const wait=async predicate=>{const end=Date.now()+10000;while(!predicate()){if(Date.now()>end)throw Error('state timeout');await new Promise(r=>setTimeout(r,30));}};
+try {
+ const html=new DOMParser().parseFromString(await (await fetch('/site/atlas.html')).text(),'text/html');
+ const fixture=document.querySelector('#fixture');
+ fixture.append(html.querySelector('#cluster-summary-button'),html.querySelector('#cluster-summary'));
+ const data={meta:{generatedAt:'state-check-'+Date.now()},clusters:{fine:[{id:1,label:'agent tools',count:3}],coarse:[]},points:[1,2,3].map(i=>({uri:'at://did:plc:test/site.standard.document/'+i,title:'Document '+i,clusterFine:1,clusterCoarse:-1}))};
+ AtlasSummaries.init(data,()=>{},()=>{},()=> 'https://example.com');
+ AtlasSummaries.open(1,false);
+ const status=document.querySelector('#cluster-summary-status'),retry=document.querySelector('#cluster-summary-retry');
+ await wait(()=>status.textContent.includes('could not be loaded'));
+ check(!retry.hidden,'network failure offers retry');
+ retry.click();
+ await wait(()=>status.textContent.includes('were not generated'));
+ check(!retry.hidden,'unavailable build is distinct from network failure');
+ retry.click();
+ await wait(()=>status.textContent.includes('No summary is available'));
+ check(!retry.hidden,'partial successful load can be retried');
+ retry.click();
+ await wait(()=>!document.querySelector('#cluster-summary-text').hidden);
+ check(document.querySelector('#cluster-summary-text').textContent==='Tools inspect files and coordinate changes.','retry replaces the cached partial response');
+ check(status.hidden && retry.hidden,'success clears the error and retry control');
+ check(document.querySelector('#cluster-summary-coverage').textContent==='3 of 3 documents · 1 related source · AI summary','context does not inflate member coverage');
+ check(document.querySelector('#cluster-summary-sources').textContent.includes('Related context: Related note'),'related sources are identified separately');
+ document.querySelector('#cluster-summary-evidence').open=true;
+ output.textContent+='\nAll summary recovery checks passed';
+} catch(error) {output.textContent+='\nFAIL '+error.stack;}
+</script>

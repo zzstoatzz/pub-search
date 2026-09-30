@@ -1,11 +1,13 @@
 (function(root) {
   'use strict';
   async function validate(data, atlas) {
-    if (data?.version !== 2 || data.status !== 'ready' || data.atlasGeneratedAt !== atlas.meta.generatedAt || !Array.isArray(data.clusters)) throw Error('Summaries are updating. Try again shortly.');
+    if (data?.version !== 2 || !Array.isArray(data.clusters)) throw Error('Summary data could not be verified.');
+    if (data.status !== 'ready') throw Error('Summaries were not generated for this map.');
+    if (data.atlasGeneratedAt !== atlas.meta.generatedAt) throw Object.assign(Error('The map and summaries are out of sync. Reload to refresh them.'), {code:'stale'});
     var result = [];
     for (var level of ['fine','coarse']) {
       var entries=level==='fine' ? data.clusters : (data.regions === undefined ? [] : data.regions);
-      if (!Array.isArray(entries)) throw Error('Summaries are updating. Try again shortly.');
+      if (!Array.isArray(entries)) throw Error('Summary data could not be verified.');
       var members = new Map(), field=level==='fine'?'clusterFine':'clusterCoarse';
       atlas.points.forEach(function(p) {
         if (p[field] < 0) return;
@@ -16,16 +18,23 @@
       var seen = new Set();
       for (var c of entries) {
         var actual = known.get(c.id), uris = members.get(c.id);
-        if (!actual || seen.has(c.id) || c.label !== actual.label || c.memberCount !== uris?.length || typeof c.summary !== 'string' || !c.summary.trim() || !Array.isArray(c.sources) || c.sources.length < 3 || !Array.isArray(c.sourceIds) || !c.sourceIds.length) throw Error('Summaries are updating. Try again shortly.');
+        if (!actual || seen.has(c.id) || c.label !== actual.label || c.memberCount !== uris?.length || typeof c.summary !== 'string' || !c.summary.trim() || !Array.isArray(c.sources) || c.sources.length < 3 || !Array.isArray(c.sourceIds) || !c.sourceIds.length) throw Error('Summary data could not be verified.');
         seen.add(c.id);
         var hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(uris.slice().sort()))))).map(function(n) { return n.toString(16).padStart(2,'0'); }).join('');
-        if (hash !== c.membershipHash) throw Error('Summaries are updating. Try again shortly.');
-        var allowed = new Set(uris), sourceIds = new Set();
+        if (hash !== c.membershipHash) throw Error('Summary data could not be verified.');
+        var allowed = new Set(uris), sourceIds = new Set(), memberIds = new Set();
         for (var source of c.sources) {
-          if (!allowed.has(source.uri) || !Number.isInteger(source.id) || sourceIds.has(source.id) || typeof source.title !== 'string' || typeof source.excerpt !== 'string') throw Error('Summary sources could not be verified.');
+          var isContext=source.role==='context';
+          if (!Number.isInteger(source.id) || source.id<1 || sourceIds.has(source.id) || typeof source.title !== 'string' || typeof source.excerpt !== 'string') throw Error('Summary sources could not be verified.');
+          if (isContext) {
+            if (allowed.has(source.uri) || typeof source.uri!=='string' || !source.uri.startsWith('at://') || !Number.isFinite(source.cosineSimilarity) || source.cosineSimilarity<0.75 || source.cosineSimilarity>1) throw Error('Related sources could not be verified.');
+          } else if (!allowed.has(source.uri) || (source.role!==undefined && source.role!=='member')) {
+            throw Error('Summary sources could not be verified.');
+          }
           sourceIds.add(source.id);
+          if (!isContext) memberIds.add(source.id);
         }
-        if (c.sourceIds.some(function(id) { return !sourceIds.has(id); })) throw Error('Summary sources could not be verified.');
+        if (memberIds.size<3 || !c.sourceIds.some(function(id) { return memberIds.has(id); }) || c.sourceIds.some(function(id) { return !sourceIds.has(id); })) throw Error('Summary sources could not be verified.');
         result.push(Object.assign({}, c, {level:level}));
       }
     }
@@ -50,7 +59,7 @@
   }
   var summaries = new Map(), dataset, loading, panel, status, body, button, list, listView;
   var onSelect, onDocument, toUrl, active=null, topics=new Map(), members=new Map(), visible=[], listLimit=20, documentLimit=20;
-  var viewKey='', viewTimer, loadError='', loaded=false;
+  var viewKey='', viewTimer, loadError=null, loaded=false;
   function key(id,level) { return (level || 'fine')+':'+id; }
   function setOpen(value) {
     panel.hidden=!value;
@@ -70,13 +79,17 @@
     var text=document.getElementById('cluster-summary-text'), evidence=document.getElementById('cluster-summary-evidence');
     text.hidden=!c; evidence.hidden=!c;
     status.hidden=!!c;
-    status.textContent=loadError || (loaded ? 'Summary unavailable.' : 'Loading summary…');
+    status.textContent=loadError?.message || (loaded ? 'No summary is available for this topic. You can still browse its documents.' : 'Loading summary…');
+    var retry=document.getElementById('cluster-summary-retry');
+    retry.hidden=!!c || (!loaded && !loadError);
+    retry.textContent=loadError?.code==='stale' ? 'Reload map' : 'Retry summary';
     if (!c) return;
     text.textContent=c.summary;
-    document.getElementById('cluster-summary-coverage').textContent=c.sources.length+' of '+c.memberCount.toLocaleString()+' documents · AI summary';
+    var contextCount=c.sources.filter(function(s) { return s.role==='context'; }).length;
+    document.getElementById('cluster-summary-coverage').textContent=(c.sources.length-contextCount)+' of '+c.memberCount.toLocaleString()+' documents'+(contextCount ? ' · '+contextCount+' related source'+(contextCount===1 ? '' : 's') : '')+' · AI summary';
     var sources=document.getElementById('cluster-summary-sources'); sources.replaceChildren();
     c.sources.forEach(function(s) {
-      var li=document.createElement('li'), link=document.createElement('a'); link.textContent=s.title || 'Untitled'; safeLink(link,s.url); li.append(link);
+      var li=document.createElement('li'), link=document.createElement('a'); link.textContent=(s.role==='context' ? 'Related context: ' : '')+(s.title || 'Untitled'); safeLink(link,s.url); li.append(link);
       var details=document.createElement('details'), heading=document.createElement('summary'), excerpt=document.createElement('p');
       heading.textContent='Read excerpt'; excerpt.textContent=s.excerpt; details.append(heading,excerpt); li.append(details); sources.append(li);
     });
@@ -112,6 +125,7 @@
   function browse() {
     active=null; onSelect(null); setOpen(true); listView.hidden=false; body.hidden=true; status.hidden=true;
     document.getElementById('cluster-summary-back').hidden=true;
+    document.getElementById('cluster-summary-retry').hidden=true;
     panel.scrollTop=0; renderList(); document.getElementById('cluster-summary-close').focus({preventScroll:true});
   }
   function open(id,focus,level) {
@@ -127,11 +141,14 @@
   }
   function load() {
     if (loading) return loading;
+    if (loaded) return Promise.resolve();
+    loadError=null;
+    renderSummary();
     loading=fetch('atlas-summaries.json?build='+encodeURIComponent(dataset.meta.generatedAt),{cache:'no-store'})
-      .then(function(r) { if (!r.ok) throw Error('Summary unavailable. You can still browse the documents.'); return r.json(); })
+      .then(function(r) { if (!r.ok) throw Error('Summaries could not be loaded. You can still browse the documents.'); return r.json(); })
       .then(function(d) { return validate(d,dataset); })
-      .then(function(clusters) { summaries=new Map(clusters.map(function(c) { return [key(c.id,c.level),c]; })); loaded=true; loadError=''; markSummaries(); })
-      .catch(function(error) { loadError=error.message; loading=null; throw error; });
+      .then(function(clusters) { summaries=new Map(clusters.map(function(c) { return [key(c.id,c.level),c]; })); loaded=true; loadError=null; markSummaries(); })
+      .catch(function(error) { loadError=error instanceof TypeError || error instanceof SyntaxError ? Error('Summaries could not be loaded. You can still browse the documents.') : error; loading=null; renderSummary(); throw error; });
     return loading;
   }
   function updateView(bounds,level,platforms) {
@@ -155,6 +172,12 @@
       data.points.forEach(function(p,i) { var group=members.get(key(level==='fine'?p.clusterFine:p.clusterCoarse,level)); if(group) group.push(i); });
     });
     document.getElementById('cluster-summary-close').onclick=close;
+    document.getElementById('cluster-summary-retry').onclick=function() {
+      if (loadError?.code==='stale') { location.reload(); return; }
+      if (loading && !loaded) return;
+      loaded=false; loading=null;
+      load().then(renderSummary).catch(function() {});
+    };
     document.getElementById('cluster-summary-back').onclick=browse;
     document.getElementById('cluster-nearby-more').onclick=function() { listLimit+=20; renderList(); };
     document.getElementById('cluster-documents-more').onclick=function() { documentLimit+=20; renderDocuments(); };

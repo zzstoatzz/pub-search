@@ -104,7 +104,7 @@ def test_document_reader_recovers_from_real_http_throttling():
         thread.join()
 
 
-@pytest.mark.parametrize('first', ['invalid json', '{"summary":"Topic.","sourceIds":[99]}'])
+@pytest.mark.parametrize('first', ['invalid json', '{"summary":"Topic.","sourceIds":[99]}', '{"summary":"Sample topic repeats the heading.","sourceIds":[1]}'])
 def test_summary_retries_invalid_output_over_http(first):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import threading
@@ -135,7 +135,7 @@ def test_summary_retries_invalid_output_over_http(first):
     thread.start()
     try:
         with OpenAI(api_key='local-test', base_url=f'http://127.0.0.1:{server.server_port}/v1') as client:
-            answer, usage = request_summary(client, 'topic', [{'id': 1, 'text': 'Topic evidence.'}])
+            answer, usage = request_summary(client, 'sample topic', [{'id': 1, 'text': 'Topic evidence.'}])
         assert answer == {'summary': 'Topic.', 'sourceIds': [1]}
         assert usage == {'inputTokens': 20, 'outputTokens': 10}
         assert len(requests) == 2
@@ -165,3 +165,99 @@ def test_cache_keeps_region_and_cluster_evidence_separate():
     assert cache[("fine", "same")] == fine
     assert cache[("coarse", "same")] == coarse
     assert summary_cache({"version": 2, "clusters": [fine]}) == {("fine", "same"): fine}
+
+
+def test_context_gate_drops_weak_duplicate_and_member_matches():
+    from atlas_context import select_context, NOTES_DID, NOTES_HOST
+    rows = [
+        {'uri': 'at://a/x/member', '$dist': 0.01},
+        {'uri': 'at://a/x/weak', '$dist': 0.4},
+        {'uri': 'at://a/x/nan', '$dist': float('nan')},
+        {'uri': 'at://a/x/negative', '$dist': -0.1},
+        {'uri': 'at://a/x/note', '$dist': 0.1, 'did': NOTES_DID, 'base_path': NOTES_HOST},
+        {'uri': 'at://a/x/note', '$dist': 0.2, 'did': NOTES_DID, 'base_path': NOTES_HOST},
+        {'uri': 'at://a/x/other', '$dist': 0.2, 'did': 'other', 'base_path': NOTES_HOST},
+    ]
+    chosen = select_context(rows, {'at://a/x/member'})
+    assert [p['uri'] for p in chosen] == ['at://a/x/note', 'at://a/x/other']
+    assert chosen[0]['cosineSimilarity'] == 0.9
+    assert [p['includeUndiscoverable'] for p in chosen] == [True, False]
+    assert select_context(rows[:4], {'at://a/x/member'}) == []
+
+
+def test_context_retrieval_over_http_uses_member_vectors_and_scoped_notes():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    import httpx
+    from atlas_context import ContextReader, NOTES_DID, NOTES_HOST
+
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            requests.append(body)
+            if body['rank_by'] == ['id', 'asc']:
+                rows = [{'vector': v} for v in [[2, 0], [0, 2], [1, 1]]]
+            elif 'filters' in body:
+                rows = [{'uri': 'at://a/x/note', '$dist': .1, 'did': NOTES_DID, 'base_path': NOTES_HOST}]
+            else:
+                rows = [{'uri': 'at://a/x/member', '$dist': .01}, {'uri': 'at://a/x/weak', '$dist': .6}]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps({'rows': rows}).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with httpx.Client() as http:
+            reader = ContextReader(http, 'local-test', url=f'http://127.0.0.1:{server.server_port}/query')
+            chosen = reader.retrieve([{'uri': f'at://a/x/{i}'} for i in range(3)], {'at://a/x/member'})
+        assert [p['uri'] for p in chosen] == ['at://a/x/note']
+        assert requests[1]['rank_by'][2] == pytest.approx([.5690355937, .5690355937])
+        assert requests[2]['filters'] == ['And', [['did', 'Eq', NOTES_DID], ['base_path', 'Eq', NOTES_HOST]]]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_archive_restores_exact_inputs_and_deduplicates(tmp_path):
+    import sqlite3
+    from atlas_history import archive, restore
+    atlas = tmp_path / 'atlas.json.gz'
+    raw = b'{"meta":{"generatedAt":"today"},"points":[]}'
+    atlas.write_bytes(gzip.compress(raw))
+    summary = tmp_path / 'atlas-summaries.json'
+    summary.write_text('{"status":"ready","clusters":[],"prompt":"original prompt"}')
+    database = tmp_path / 'history.sqlite3'
+    first = archive(atlas, database)
+    assert archive(atlas, database) == first
+    summary.write_text('{"status":"unavailable","clusters":[]}')
+    second = archive(atlas, database)
+    assert second != first
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT count(*) FROM objects').fetchone()[0] == 3
+        assert db.execute('SELECT count(*) FROM snapshots').fetchone()[0] == 2
+    restore(database, first, tmp_path / 'restored')
+    assert gzip.decompress((tmp_path / 'restored/atlas.json.gz').read_bytes()) == raw
+    assert json.loads((tmp_path / 'restored/atlas-summaries.json').read_text())['prompt'] == 'original prompt'
+    with pytest.raises(FileExistsError):
+        restore(database, first, tmp_path / 'restored')
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE objects SET gzip=? WHERE sha256=(SELECT atlas_sha256 FROM snapshots LIMIT 1)", (gzip.compress(b'changed'),))
+    with pytest.raises(ValueError, match='checksum'):
+        restore(database, first, tmp_path / 'corrupt')
+
+
+def test_opening_cannot_echo_the_heading_or_its_shortened_phrase():
+    for label, summary in [('AI coding agents', 'AI coding agents use terminals.'),
+                           ('AI coding agents', 'Coding agents use terminals.'),
+                           ('gardening', 'Gardening takes patience.')]:
+        with pytest.raises(ValueError, match='repeats the displayed label'):
+            validate_answer({'summary': summary, 'sourceIds': [1]}, 3, label)
+    assert validate_answer({'summary': 'Terminal access lets models edit files.', 'sourceIds': [1]}, 3, 'AI coding agents')

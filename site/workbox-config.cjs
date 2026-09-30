@@ -13,7 +13,7 @@ module.exports = {
   globIgnores: ['sw.js', 'workbox-*.js', 'workbox-config.cjs'],
   manifestTransforms: [async entries => ({
     manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js'].includes(entry.url)
-      ? { ...entry, url: entry.url + '?build=topics-4' } : entry),
+      ? { ...entry, url: entry.url + '?build=topics-5' } : entry),
     warnings: [],
   })],
   swDest: 'sw.js',
@@ -25,9 +25,14 @@ module.exports = {
   ignoreURLParametersMatching: [/^v$/],
   runtimeCaching: [
     {
+      urlPattern: /\/atlas\.json\.gz$/,
+      handler: 'NetworkFirst',
+      options: { cacheName: 'atlas-map', networkTimeoutSeconds: 10, expiration: { maxEntries: 2 } },
+    },
+    {
       // atlas datasets are big (atlas.json ~7MB) and rebuilt every 6h — serve
       // cached instantly, refresh in the background
-      urlPattern: /\/atlas(-mini|-avatar-cache|-theme-cache)?\.json(\.gz)?$/,
+      urlPattern: /\/atlas(-mini|-avatar-cache|-theme-cache)\.json(\.gz)?$/,
       handler: 'StaleWhileRevalidate',
       options: {
         cacheName: 'atlas-data',

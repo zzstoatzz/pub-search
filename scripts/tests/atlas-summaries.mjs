@@ -76,3 +76,26 @@ test('regions use their own membership even when a fine cluster has the same id'
   sidecar.regions[0].sources[0].uri=atlas.points[0].uri;
   await assert.rejects(validate(sidecar,map));
 });
+
+test('supplemental context stays separate and cannot replace member evidence', async()=>{
+  const sidecar=structuredClone(data);
+  const context={id:4,uri:'at://did:plc:notes/site.standard.document/context',title:'Related note',excerpt:'Background',role:'context',cosineSimilarity:0.9};
+  sidecar.clusters[0].sources.push(context);
+  sidecar.clusters[0].sourceIds=[1,4];
+  assert.equal((await validate(sidecar,atlas))[0].sources.length,4);
+  sidecar.clusters[0].sourceIds=[4];
+  await assert.rejects(validate(sidecar,atlas));
+  sidecar.clusters[0].sourceIds=[1,4];
+  for (const score of [0.5, NaN, 1.1]) {
+    context.cosineSimilarity=score;
+    await assert.rejects(validate(sidecar,atlas));
+  }
+  context.cosineSimilarity=0.9;
+  delete context.role;
+  await assert.rejects(validate(sidecar,atlas));
+});
+
+test('missing summaries and stale maps produce different recovery messages', async()=>{
+  await assert.rejects(validate({...data,status:'unavailable'},atlas), /were not generated/);
+  await assert.rejects(validate({...data,atlasGeneratedAt:'yesterday'},atlas), error=>error.code==='stale' && /Reload/.test(error.message));
+});
