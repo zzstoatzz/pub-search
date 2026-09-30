@@ -134,11 +134,14 @@ def test_summary_retries_invalid_output_over_http(first):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        usage_log = []
         with OpenAI(api_key='local-test', base_url=f'http://127.0.0.1:{server.server_port}/v1') as client:
-            answer, usage = request_summary(client, 'sample topic', [{'id': 1, 'text': 'Topic evidence.'}])
+            answer, usage = request_summary(client, 'sample topic', [{'id': 1, 'text': 'Topic evidence.'}], usage_log=usage_log)
         assert answer == {'summary': 'Topic.', 'sourceIds': [1]}
         assert usage == {'inputTokens': 20, 'outputTokens': 10}
         assert len(requests) == 2
+        assert len(usage_log) == 2
+        assert sum(r['inputTokens'] for r in usage_log) == 20
     finally:
         server.shutdown()
         server.server_close()

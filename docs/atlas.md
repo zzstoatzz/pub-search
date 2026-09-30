@@ -166,7 +166,8 @@ Each starts with up to 10 actual members, ordered by membership strength with a 
 hash to break ties and at most two per author before filling remaining slots. The
 document API supplies policy-filtered extracted text; the first 3,000 characters per
 document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
-two short sentences (30–45 words, at most 50) in direct language; coverage and AI
+one or two sentences (30–40 words, at most 50) describing the sampled documents and
+concrete examples, without turning authors' claims into general advice; coverage and AI
 attribution appear in the sources disclosure. Both tiers use the same summary panel. These
 summaries have not undergone independent quality evaluation.
 
@@ -183,7 +184,9 @@ Document hydration is paced to one request per second, with bounded retries for
 429 and transient gateway failures.
 SOPS holds its canonical value under `prefect.blocks`; `pub_search_atlas.OPENAI_API_KEY`
 references that block. Cached summaries require matching membership, text, label,
-prompt, model, and retrieved context. The sidecar records actual input/output token usage and cache hits.
+prompt, model, and retrieved context. The sidecar records per-response input/output
+and cached-input tokens, response IDs, and service tier, including rejected model
+outputs. Older snapshots counted only successful summaries and their retries.
 Failures leave an unavailable or partial sidecar and do not block the map rebuild.
 The sidecar is always rewritten to prevent stale data from surviving a failed run.
 
@@ -232,7 +235,21 @@ the copy, and `dd679d8` added direct coarse-region summaries.
 The prompt now says the topic label appears immediately above the description,
 so the opening should add detail rather than repeat the label. A validation check
 retries openings that reuse a phrase from the heading, with corrective feedback. It asks for a
-pattern shared by members, with citations confined to `sourceIds`.
+description of the sampled contents, with citations confined to `sourceIds`.
+
+Prompt-only regeneration can reuse the saved evidence, avoiding another vector
+search and document hydration pass:
+
+```sh
+uv run --script scripts/atlas_rewrite_summaries.py atlas.json.gz atlas-summaries.json rewritten.json --limit 8
+uv run --script scripts/atlas_rewrite_summaries.py atlas.json.gz atlas-summaries.json rewritten.json
+```
+
+Inspect a varied small batch against its excerpts before running the full rewrite.
+The second command resumes matching completed entries. It verifies the Atlas digest
+and membership hashes, checkpoints outputs and usage, and records failed rewrites.
+Validate the completed sidecar with the frontend validator and archive the pair
+before publishing. A limited preview is not a full release.
 
 ### supplemental context
 
