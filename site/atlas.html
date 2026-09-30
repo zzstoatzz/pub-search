@@ -30,7 +30,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="atlas.css?build=finder-1">
+  <link rel="stylesheet" href="atlas.css?build=finder-2">
   <link rel="stylesheet" href="components.css?v=1782991000">
 </head>
 <body>
@@ -55,9 +55,9 @@
   </div>
 
   <dialog id="atlas-finder" aria-labelledby="finder-title">
-    <header class="finder-heading"><div><h2 id="finder-title">Find your place</h2><p>Topics, publications, and documents in the Atlas</p></div><button id="finder-close" aria-label="Close search" type="button">×</button></header>
-    <div id="finder-trail" aria-label="Search scope"></div>
-    <div class="finder-input-wrap"><span aria-hidden="true">⌕</span><input type="search" id="search-input" aria-label="Find in Atlas" placeholder="Find a topic, publication, or document" autocomplete="off" spellcheck="false" enterkeyhint="search"></div>
+    <h2 id="finder-title" class="finder-sr-only">Find in Atlas</h2>
+    <div class="finder-input-wrap"><span aria-hidden="true">⌕</span><input type="search" id="search-input" aria-label="Find in Atlas" placeholder="Topics, publications, documents" autocomplete="off" spellcheck="false" enterkeyhint="search"><button id="finder-close" aria-label="Close search" type="button">×</button></div>
+    <div id="finder-trail" aria-label="Search scope" hidden></div>
     <nav id="finder-filters" aria-label="Result types"><button type="button" aria-pressed="true">All</button><button type="button" data-kind="region" aria-pressed="false">Regions</button><button type="button" data-kind="topic" aria-pressed="false">Topics</button><button type="button" data-kind="publication" aria-pressed="false">Publications</button><button type="button" data-kind="document" aria-pressed="false">Documents</button></nav>
     <div id="finder-results"></div>
     <footer class="finder-footer"><button id="finder-remote" type="button" hidden></button><p id="finder-status" role="status"></p><span class="finder-keys">↑ ↓ to move <kbd>↵</kbd> to show on map</span></footer>
@@ -115,9 +115,9 @@
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
   <script src="atlas-interaction.js"></script>
-  <script src="atlas-summaries.js?build=finder-1"></script>
-  <script src="atlas-finder.js?build=finder-1"></script>
-  <script src="atlas.js?build=finder-1"></script>
+  <script src="atlas-summaries.js?build=finder-2"></script>
+  <script src="atlas-finder.js?build=finder-2"></script>
+  <script src="atlas.js?build=finder-2"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
       window.LeafletUI.openSettings();

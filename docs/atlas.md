@@ -334,7 +334,10 @@ author filters; only documents present in the map are selectable. Typing does
 not move the camera.
 
 On narrow screens the finder fills the visual viewport, with a 17px input to
-avoid iOS focus zoom. Selecting an area frames its extent above/beside the
+avoid iOS focus zoom. Compact density follows `visualViewport.height`, not CSS
+height media queries (iOS keeps the layout viewport tall behind its keyboard).
+The input and close control share one row; the root breadcrumb is hidden, and
+result counts stay accessible without occupying a mobile footer row. Selecting an area frames its extent above/beside the
 summary; publication or document selection pans without forced close zoom.
 Areas use violet boundaries (solid regions, dashed topics), publications use
 warm orbital rings, and documents use cyan corner brackets. Camera movement

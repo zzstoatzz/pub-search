@@ -419,7 +419,7 @@ canvas:active {
 #atlas-finder {
   --finder-accent:#95cfdb; --finder-hover:#232d38;
   position:fixed; inset:9vh auto auto 50%; transform:translateX(-50%); margin:0;
-  width:min(680px,calc(100vw - 40px)); height:min(720px,82dvh); max-height:82dvh;
+  width:min(680px,calc(100vw - 40px)); height:min(560px,82dvh); max-height:82dvh;
   max-width:none; border:1px solid #414956; border-radius:20px;
   background:#15191f; color:#eef3f7; padding:0; box-shadow:0 32px 100px #0008;
   font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
@@ -428,9 +428,6 @@ canvas:active {
 #atlas-finder::backdrop {background:#07101d88;backdrop-filter:blur(7px)}
 #atlas-finder button {font:inherit;color:inherit;cursor:pointer}
 #atlas-finder button:focus-visible,#finder-trigger:focus-visible {outline:2px solid var(--finder-accent,#95cfdb);outline-offset:-3px}
-.finder-heading {display:flex;justify-content:space-between;align-items:flex-start;padding:24px 26px 10px;gap:16px}
-.finder-heading h2 {font-size:24px;letter-spacing:-.7px;font-weight:650}
-.finder-heading p {font-size:13px;color:#a6b0bb;margin-top:4px}
 #finder-close {border:0;background:none;min-width:44px;min-height:44px;font-size:27px!important;border-radius:12px}
 #finder-close:hover {background:var(--finder-hover)}
 #finder-trail {display:flex;align-items:center;gap:8px;margin:4px 26px 12px;font-size:12px;color:#a6b0bb;min-height:24px}
@@ -482,9 +479,6 @@ canvas:active {
   #finder-trigger kbd {display:none}
   .header .nav>a {display:none}
   #atlas-finder {inset:0;transform:none;width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding-top:env(safe-area-inset-top)}
-  .finder-heading {padding:18px 18px 10px}
-  .finder-heading h2 {font-size:26px}
-  .finder-heading p {max-width:26ch}
   #finder-trail {margin-left:18px;margin-right:18px}
   .finder-input-wrap {margin:0 16px}
   #finder-filters {margin-left:16px;margin-right:16px}
@@ -496,11 +490,41 @@ canvas:active {
   .finder-keys {display:none}
 }
 
-@media(max-width:600px) and (max-height:520px) {
-  .finder-heading {padding-top:10px;padding-bottom:4px}
-  .finder-heading h2 {font-size:21px}
-  .finder-heading p {display:none}
-  #finder-trail {margin-top:0;margin-bottom:6px}
-  #finder-filters {margin-top:8px;margin-bottom:0}
-  .finder-footer {padding-top:8px;padding-bottom:8px}
+.finder-sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#atlas-finder {border-radius:12px;border-color:#343d48;box-shadow:0 20px 70px #0006}
+#atlas-finder::backdrop {background:#07101d66;backdrop-filter:blur(4px)}
+.finder-input-wrap {margin:12px 16px 0;padding:0 0 0 10px;border:0;border-bottom:1px solid #343d48;background:transparent;border-radius:0;gap:10px}
+.finder-input-wrap:focus-within {box-shadow:none;border-color:#667681}
+.finder-input-wrap > span {font-size:22px;color:#a6b0bb}
+#atlas-finder #search-input,#atlas-finder #search-input:focus {height:48px}
+#finder-close {font-size:22px!important;border-radius:6px;color:#a6b0bb}
+#finder-trail {margin:8px 26px 0;flex-shrink:0}
+#finder-trail[hidden] {display:none}
+#finder-filters {margin:4px 16px 0;gap:0;padding:0;min-height:44px}
+#finder-filters button {min-height:44px;padding:6px 10px;border:0;border-radius:0;font-size:12px}
+#finder-filters button[aria-pressed=true] {background:none;color:#eef3f7;box-shadow:inset 0 -1px #95cfdb}
+.finder-result {min-height:58px;padding:9px 12px;gap:10px}
+.finder-symbol {font-size:19px;width:22px;opacity:.8}
+.finder-symbol[data-kind=document] {font-size:18px}
+.finder-copy strong {font-weight:500}
+.finder-drill {border-left:0;font-size:20px!important}
+.finder-footer {padding:6px 26px 10px}
+#finder-remote {min-height:36px;padding:6px 0;font-size:12px!important}
+.finder-keys {display:none}
+[data-theme=light] .finder-input-wrap {background:transparent;border-color:#d2dce4}
+[data-theme=light] #finder-filters button[aria-pressed=true] {background:none;color:#17212b;border:0;box-shadow:inset 0 -1px #176779}
+@media(max-width:600px) {
+  #atlas-finder {border-radius:0;padding-top:0}
+  .finder-input-wrap {margin:4px 12px 0}
+  #finder-filters {margin:0 12px}
+  #finder-trail {margin:6px 22px 0}
+  .finder-footer {padding:0 18px max(0px,env(safe-area-inset-bottom))}
+  #finder-remote {min-height:44px}
+  #finder-status[data-state=ready] {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  #finder-status[data-state=error],#finder-status[data-state=loading] {padding:6px 0}
+  .finder-footer:has(#finder-remote[hidden]) {border:0}
+  #atlas-finder.finder-compact #finder-results {padding-bottom:4px}
+  #atlas-finder.finder-compact .finder-result {min-height:52px;padding-top:6px;padding-bottom:6px}
+  #atlas-finder.finder-compact #finder-results section {margin-top:6px}
+  #atlas-finder.finder-compact #finder-results h3 {margin-bottom:2px}
 }
