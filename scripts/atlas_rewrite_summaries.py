@@ -61,7 +61,7 @@ def rewrite(atlas_path: Path, source_path: Path, output_path: Path, limit: int |
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         futures = {pool.submit(build, entry): entry for entry in entries}
-        for future in as_completed(futures):
+        for completed, future in enumerate(as_completed(futures), 1):
             entry = futures[future]
             try:
                 updated = future.result()
@@ -70,7 +70,8 @@ def rewrite(atlas_path: Path, source_path: Path, output_path: Path, limit: int |
             except Exception as exc:
                 failures.append({'level': entry['level'], 'id': entry['id'], 'error': type(exc).__name__})
                 print(f"FAILED {entry['level']} {entry['id']}: {type(exc).__name__}", flush=True)
-            save()
+            if completed % 25 == 0:
+                save()
     result['generated'] = len(result['clusters']) + len(result['regions'])
     result['failed'] = source['failed'] + len(failures)
     result['status'] = 'ready' if result['generated'] else 'unavailable'

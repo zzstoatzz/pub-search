@@ -32,6 +32,7 @@ SAMPLE_SIZE = 10
 TEXT_LIMIT = 3000
 DOCUMENT_API = "https://pub-search.waow.tech/api/document"
 CACHE_URL = "https://pub-search.waow.tech/atlas-summaries.json"
+RECOMMENDATIONS_API = "https://pub-search.waow.tech/api/recommended?since=all&sort=top&limit=250"
 SYSTEM = """Describe the contents of a group of documents on an interactive topic map.
 Write a plain, factual description of what is in the supplied member excerpts.
 Use one or two sentences, usually 30-40 words, with a hard maximum of 50 words.
@@ -68,11 +69,26 @@ def fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def sample_members(members: list[dict], level: str = "fine") -> list[dict]:
-    ordered = sorted(members, key=lambda p: (-p.get("membershipProbabilityCoarse" if level == "coarse" else "membershipProbabilityFine", 0), fingerprint(p["uri"])))
+def sample_members(members: list[dict], level: str = "fine", recommendations: dict | None = None) -> list[dict]:
+    strength = "membershipProbabilityCoarse" if level == "coarse" else "membershipProbabilityFine"
+    ordered = sorted(members, key=lambda p: (-p.get(strength, 0), fingerprint(p["uri"])))
+    recommendations = recommendations or {}
+    central = ordered[len(ordered) // 2].get(strength, 0) if ordered else 0
+    recommended = sorted((p for p in ordered if recommendations.get(p['uri'], 0) > 0 and p.get(strength, 0) >= central),
+                         key=lambda p: (-recommendations[p['uri']], -p.get(strength, 0), fingerprint(p['uri'])))
     selected = []
     authors = defaultdict(int)
+    for point in recommended:
+        author = point['uri'].split('/')[2]
+        if authors[author] == 0:
+            selected.append(point)
+            authors[author] += 1
+        if len(selected) == 2:
+            break
+    preferred = {p['uri'] for p in selected}
     for point in ordered:
+        if point['uri'] in preferred:
+            continue
         author = point["uri"].split("/")[2]
         if authors[author] >= 2:
             continue
@@ -211,6 +227,16 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
         clusters.extend((tier, c) for c in sorted(atlas["clusters"][tier], key=lambda c: (-c["count"], c["id"]))[:limit])
     with httpx.Client(timeout=20) as http:
         reader = DocumentReader(http)
+        recommendations = {}
+        try:
+            response = http.get(RECOMMENDATIONS_API)
+            response.raise_for_status()
+            recommendations = {p['uri']: p['recommendCount'] for p in response.json()
+                               if isinstance(p.get('uri'), str) and type(p.get('recommendCount')) is int and p['recommendCount'] > 0}
+            result['recommendationsStatus'] = 'ready'
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            result['recommendationsStatus'] = 'unavailable'
+        result['recommendationSampling'] = {'pool': 'top 250 all-time', 'maxPreferred': 2, 'minimumMembership': 'cluster median', 'counts': recommendations}
         context_key = os.environ.get("TURBOPUFFER_API_KEY", "")
         context_reader = ContextReader(http, context_key, os.environ.get("TURBOPUFFER_NAMESPACE", "leaflet-search")) if context_key else None
         cache = {}
@@ -234,7 +260,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
             tier, cluster = item
             try:
                 actual = members[(tier, cluster["id"])]
-                selected = sample_members(actual, tier)
+                selected = sample_members(actual, tier, recommendations)
                 docs = {}
                 for opt_in in (False, True):
                     group = [p for p in selected if is_owned_note(p) == opt_in]
@@ -283,6 +309,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
                     print(f"summary {tier} {cluster['id']}: {usage['inputTokens']} input, {usage['outputTokens']} output tokens", flush=True)
                 sources = [{"id": e["id"], "uri": e["uri"], "title": e["title"], "url": docs[e["uri"]].get("url", ""),
                             "excerpt": e["text"], "charactersRead": len(e["text"]),
+                            **({"recommendCount": recommendations[e['uri']]} if e['uri'] in recommendations else {}),
                             **({"role": e["role"], "cosineSimilarity": e["cosineSimilarity"]} if "cosineSimilarity" in e else {"role": "member"})}
                            for e in evidence + context]
                 return {"level": tier, "id": cluster["id"], "label": cluster["label"], "memberCount": len(actual),

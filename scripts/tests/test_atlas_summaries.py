@@ -264,3 +264,15 @@ def test_opening_cannot_echo_the_heading_or_its_shortened_phrase():
         with pytest.raises(ValueError, match='repeats the displayed label'):
             validate_answer({'summary': summary, 'sourceIds': [1]}, 3, label)
     assert validate_answer({'summary': 'Terminal access lets models edit files.', 'sourceIds': [1]}, 3, 'AI coding agents')
+
+def test_recommendations_add_central_members_without_promoting_outliers():
+    points = [{'uri': f'at://did:plc:a{i}/site.standard.document/post',
+               'membershipProbabilityFine': 1 - i / 100} for i in range(30)]
+    counts = {points[12]['uri']: 4, points[14]['uri']: 3, points[28]['uri']: 1000}
+    baseline = sample_members(points)
+    selected = sample_members(points, recommendations=counts)
+    assert points[12] not in baseline and points[14] not in baseline
+    assert selected[:2] == [points[12], points[14]]
+    assert points[28] not in selected
+    assert len(selected) == 10 and len({p['uri'] for p in selected}) == 10
+    assert selected == sample_members(list(reversed(points)), recommendations=counts)

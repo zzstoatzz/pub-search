@@ -164,6 +164,13 @@ as a separate step with a one-hour timeout. Summary failure does not block publi
 Generation covers both coarse regions and fine clusters with at least three distinct readable member documents. Regions use direct coarse membership and coarse membership strength; they never roll up fine clusters.
 Each starts with up to 10 actual members, ordered by membership strength with a stable URI
 hash to break ties and at most two per author before filling remaining slots. The
+top-250 all-time `/recommended` pool can supply up to two preferred members from
+different authors, each at or above the cluster's median membership strength.
+The remaining slots follow the usual membership ranking. Counts are distinct
+recommenders, not proof of accuracy; they select evidence and are not presented to
+the model as authority. A missing leaderboard entry means unknown support, not
+disapproval. Retrieval failure falls back to the original sampler. The pool and
+counts used are saved alongside the summaries for reproducibility. The
 document API supplies policy-filtered extracted text; the first 3,000 characters per
 document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
 one or two sentences (30–40 words, at most 50) describing the sampled documents and
