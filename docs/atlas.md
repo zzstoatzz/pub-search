@@ -204,6 +204,13 @@ value in both `atlas.html` and `workbox-config.cjs`, then regenerate `sw.js`.
 The previous worker ignores `v` parameters; reusing that parameter can combine
 new HTML with old cached code during an update.
 
+Atlas HTML is excluded from precaching and uses network-first navigation with an
+offline fallback. `sw-atlas-refresh.js` refreshes open Atlas tabs when a new worker
+activates, so replacing the controller also replaces the page's old code and map.
+The activation handler starts navigation without awaiting it: awaiting navigation
+inside `activate.waitUntil` deadlocks because that navigation needs activation to
+finish. Verified by upgrading a real worker while its cached old page stayed open.
+
 
 Interaction regression: run `uv run scripts/tests/serve-atlas-membership.py` and
 open `http://127.0.0.1:8794/topics` (also `?desktop=1`). This exercises the real

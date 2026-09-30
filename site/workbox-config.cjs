@@ -10,7 +10,8 @@ module.exports = {
     'manifest.webmanifest',
     'facts.json',
   ],
-  globIgnores: ['sw.js', 'workbox-*.js', 'workbox-config.cjs'],
+  globIgnores: ['sw.js', 'sw-atlas-refresh.js', 'atlas.html', 'workbox-*.js', 'workbox-config.cjs'],
+  importScripts: ['sw-atlas-refresh.js'],
   manifestTransforms: [async entries => ({
     manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js'].includes(entry.url)
       ? { ...entry, url: entry.url + '?build=topics-5' } : entry),
@@ -24,6 +25,11 @@ module.exports = {
   // pages reference css/js with ?v= cache-busters; match them to the precache
   ignoreURLParametersMatching: [/^v$/],
   runtimeCaching: [
+    {
+      urlPattern: ({ request, url }) => request.mode === 'navigate' && /^\/atlas(?:\.html)?\/?$/.test(url.pathname),
+      handler: 'NetworkFirst',
+      options: { cacheName: 'atlas-page', networkTimeoutSeconds: 10, expiration: { maxEntries: 4 } },
+    },
     {
       urlPattern: /\/atlas\.json\.gz$/,
       handler: 'NetworkFirst',
