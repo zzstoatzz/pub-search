@@ -685,29 +685,7 @@
     }
   }
 
-  function buildPointSpacing() {
-    var cs = 0.006, cells = new Map(), n = pointsX.length;
-    pointSpacing = new Float32Array(n);
-    for (var i = 0; i < n; i++) {
-      var key = Math.floor(pointsX[i] / cs) + ',' + Math.floor(pointsY[i] / cs);
-      if (!cells.has(key)) cells.set(key, []);
-      cells.get(key).push(i);
-    }
-    for (var i = 0; i < n; i++) {
-      var gx = Math.floor(pointsX[i] / cs), gy = Math.floor(pointsY[i] / cs), best = cs * cs;
-      for (var x = gx - 1; x <= gx + 1; x++) for (var y = gy - 1; y <= gy + 1; y++) {
-        var cell = cells.get(x + ',' + y);
-        if (!cell) continue;
-        for (var k = 0; k < cell.length; k++) {
-          var j = cell[k];
-          if (j === i) continue;
-          var dx = pointsX[i] - pointsX[j], dy = pointsY[i] - pointsY[j];
-          best = Math.min(best, dx * dx + dy * dy);
-        }
-      }
-      pointSpacing[i] = Math.sqrt(best);
-    }
-  }
+
 
   function documentRadius(i, radius) {
     if (atlasGL) radius = Math.min(radius, atlasGL.pointRadiusLimit(dpr));
@@ -1210,7 +1188,7 @@
 
   // --- rendering ---
   function render() {
-    if (!data || !view.dirty) return;
+    if (!data || !pointSpacing || !view.dirty) return;
     view.dirty = false;
     renderFrame++;
 
@@ -1536,7 +1514,7 @@
         ctx.setLineDash(selectedTopic.level==='coarse'?[]:[5,5]);
         ctx.beginPath();ctx.arc(ax,ay,ar,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.restore();
         ctx.font='12px system-ui';ctx.textAlign='center';
-        drawLabel((selectedTopic.level==='coarse'?'Region':'Topic')+' · '+selectedTopicIndices.length.toLocaleString()+' documents',ax,ay-ar-12,dark);
+        if(ay-ar-12>72) drawLabel((selectedTopic.level==='coarse'?'Region':'Topic')+' · '+selectedTopicIndices.length.toLocaleString()+' documents',ax,ay-ar-12,dark);
       }
     }
 
@@ -2090,7 +2068,7 @@
       if (clusterButton) clusterButton.hidden=!cluster;
       if (clusterButton && cluster) {
         clusterButton.textContent='topic: '+cluster.label+' →';
-        clusterButton.onclick=function() { AtlasSummaries.open(cluster.id,false); };
+        clusterButton.onclick=function() { AtlasSummaries.open(cluster.id,true); };
       }
     }
     detail.hidden = false;
@@ -2121,7 +2099,7 @@
     },
     select: function(x,y,type) {
       var clusterId = window.AtlasSummaries ? AtlasSummaries.hitTest(clusterLabelRects,x,y) : null;
-      if (clusterId !== null) { var topic = clusterId.split(':'); clearSelection(); AtlasSummaries.open(Number(topic[1]),false,topic[0]); return; }
+      if (clusterId !== null) { var topic = clusterId.split(':'); clearSelection(); AtlasSummaries.open(Number(topic[1]),true,topic[0]); return; }
       if (window.AtlasSummaries) AtlasSummaries.close();
       var hit = pickNode(x,y,type);
       selectedPub = hit.pub;
@@ -2323,13 +2301,13 @@
     loadPlatformLogos();
     // atlas.json.gz: the raw json passed cloudflare pages' 25MiB per-file
     // limit, so the build ships it gzipped and we decompress client-side
+    var started = performance.now();
     fetch('atlas.json.gz')
-      .then(function(r) {
-        if (!r.ok) throw new Error('failed to load atlas.json.gz: ' + r.status);
-        var ds = new DecompressionStream('gzip');
-        return new Response(r.body.pipeThrough(ds)).json();
-      })
-      .then(function(d) {
+      .then(function(response) {
+        if(!response.ok) throw new Error('Map download failed ('+response.status+').');
+        return new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).json();
+      }).then(async function(d) {
+        document.querySelector('#loading pub-loading').textContent='Finding room for '+d.points.length.toLocaleString()+' documents…';
         data = d;
         var n = d.points.length;
         pointsX = new Float32Array(n);
@@ -2472,7 +2450,17 @@
         fetchSubscriberCounts();
 
         buildSpatialIndex();
-        buildPointSpacing();
+        pointSpacing=await new Promise(function(resolve,reject) {
+          var worker=new Worker('atlas-spacing-worker.js');
+          worker.onmessage=function(event) {
+            worker.terminate();
+            if(event.data.error) reject(new Error(event.data.error));
+            else resolve(event.data.spacing);
+          };
+          worker.onerror=function() { worker.terminate(); reject(new Error('The map could not be prepared. Please reload to try again.')); };
+          worker.postMessage({x:pointsX,y:pointsY});
+        });
+
         if (atlasGL) {
           // one-time GPU upload: positions + palette index per point
           var colorIdx = new Uint8Array(n);
@@ -2491,6 +2479,7 @@
         if (pubData.length > 0) statsText += ' \u00B7 ' + pubData.length + ' publications';
         document.getElementById('stats').textContent = statsText;
         document.getElementById('loading').classList.add('hidden');
+        console.debug('Atlas ready in '+Math.round(performance.now()-started)+' ms');
         if (window.AtlasSummaries) AtlasSummaries.init(d,function(topic,focus,indices) {
           selectedTopic=topic;
           selectedTopicIndices=indices || [];
@@ -2502,11 +2491,12 @@
           if (!topic || !focus) return;
           var cluster=d.clusters[topic.level].find(function(c) { return c.id===topic.id; });
           if (cluster) {
-            var available=W<600?Math.max(160,H-document.getElementById('cluster-summary').offsetHeight-100):Math.min(H-160,W-440);
-            var z=Math.max(view.minZoom,Math.min(8,available/(Math.max(cluster.radius,0.015)*2*Math.min(W,H)*0.42)));
-            var sheetHeight=W<600?document.getElementById('cluster-summary').offsetHeight:0;
-            var sideWidth=W>=600?document.getElementById('cluster-summary').offsetWidth+32:0;
-            animateTo(cluster.cx+sideWidth/(2*Math.min(W,H)*0.42*z),cluster.cy+(sheetHeight?sheetHeight-80:0)/(2*Math.min(W,H)*0.42*z),z);
+            var panel=document.getElementById('cluster-summary').getBoundingClientRect();
+            var viewport={left:24,top:84,right:W-24,bottom:H-24};
+            if(W<600) viewport.bottom=Math.min(viewport.bottom,panel.top-20);
+            else viewport.right=Math.min(viewport.right,panel.left-24);
+            var target=AtlasInteraction.frameTopic(d.points,selectedTopicIndices,viewport,W,H,view.minZoom,view.maxZoom);
+            if(target) animateTo(target.x,target.y,target.zoom);
           }
         },function(index) {
           selectedIndex=index; selectedPub=-1;
@@ -2575,7 +2565,13 @@
         }
       })
       .catch(function(err) {
-        document.getElementById('loading').querySelector('.spinner').textContent = 'error: ' + err.message;
+        var overlay=document.getElementById('loading');
+        overlay.classList.remove('hidden');
+        overlay.replaceChildren();
+        var message=document.createElement('p'), retry=document.createElement('button');
+        message.textContent='The Atlas could not load. '+err.message;
+        retry.textContent='Try again'; retry.onclick=function() { location.reload(); };
+        overlay.append(message,retry);
         console.error(err);
       });
   }

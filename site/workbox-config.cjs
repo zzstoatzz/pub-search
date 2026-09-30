@@ -14,7 +14,7 @@ module.exports = {
   importScripts: ['sw-atlas-refresh.js'],
   manifestTransforms: [async entries => ({
     manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js', 'atlas-finder.js'].includes(entry.url)
-      ? { ...entry, url: entry.url + '?build=finder-3' } : entry),
+      ? { ...entry, url: entry.url + '?build=loading-1' } : entry),
     warnings: [],
   })],
   swDest: 'sw.js',

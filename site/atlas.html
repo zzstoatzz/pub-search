@@ -30,12 +30,13 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="atlas.css?build=finder-3">
+  <link rel="stylesheet" href="atlas.css?build=loading-1">
   <link rel="stylesheet" href="components.css?v=1782991000">
+  <script src="loading.js" defer></script>
 </head>
 <body>
   <div class="loading-overlay" id="loading">
-    <div class="spinner">loading atlas...</div>
+    <pub-loading size="large">Gathering the Atlas…</pub-loading>
   </div>
 
   <!-- layered rendering: background+nebulae (2D) under the GL scene
@@ -115,9 +116,9 @@
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
   <script src="atlas-interaction.js"></script>
-  <script src="atlas-summaries.js?build=finder-3"></script>
-  <script src="atlas-finder.js?build=finder-3"></script>
-  <script src="atlas.js?build=finder-3"></script>
+  <script src="atlas-summaries.js?build=loading-1"></script>
+  <script src="atlas-finder.js?build=loading-1"></script>
+  <script src="atlas.js?build=loading-1"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
       window.LeafletUI.openSettings();

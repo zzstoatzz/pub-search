@@ -97,3 +97,24 @@ test('primary is per contact sequence, not a reason to reset each move', () => {
   assert.equal(moves.at(-1)[4], 1.5);
   assert.equal(starts(), 2);
 });
+
+test('topic framing fits every member in the uncovered phone and desktop map', () => {
+  const points=[{x:-.4,y:-.1},{x:.25,y:.3},{x:.1,y:-.2}];
+  for(const [width,height,rect] of [[390,844,{left:24,top:84,right:366,bottom:360}], [1280,800,{left:24,top:84,right:864,bottom:776}]]) {
+    const target=globalThis.AtlasInteraction.frameTopic(points,[0,1,2],rect,width,height,.5,500);
+    const scale=Math.min(width,height)*.42*target.zoom;
+    for(const p of points) {
+      const x=width/2+(p.x-target.x)*scale,y=height/2+(p.y-target.y)*scale;
+      assert.ok(x>=rect.left && x<=rect.right && y>=rect.top && y<=rect.bottom,'member is obscured by the summary or page chrome');
+    }
+    const smaller=globalThis.AtlasInteraction.frameTopic(points.map(p=>({x:p.x/10,y:p.y/10})),[0,1,2],rect,width,height,.5,500);
+    assert.ok(smaller.zoom>target.zoom*5,'small cluster should receive a closer view');
+  }
+  assert.equal(globalThis.AtlasInteraction.frameTopic(points,[],{},390,844,.5,500),null);
+});
+test('isolated outliers do not pull the camera away from the cluster core',()=>{
+  const points=Array.from({length:100},(_,i)=>({x:(i%10)*.001,y:Math.floor(i/10)*.001}));
+  points.push({x:2,y:2});
+  const target=globalThis.AtlasInteraction.frameTopic(points,points.map((_,i)=>i),{left:24,top:84,right:366,bottom:360},390,844,.5,500);
+  assert.ok(target.zoom>20);
+});

@@ -117,7 +117,7 @@
     window.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();open();}});
     remote.onclick=function() {
       if(timer)render();
-      clearTimeout(timer);timer=null;cancelRequest();var ticket=revision,query=input.value.trim();request=new AbortController();remote.disabled=true;status.dataset.state='loading';status.textContent='Searching document text…';
+      clearTimeout(timer);timer=null;cancelRequest();var ticket=revision,query=input.value.trim();request=new AbortController();remote.disabled=true;status.dataset.state='loading';status.innerHTML='<pub-loading>Searching document text…</pub-loading>';
       fetch(textUrl(query),{signal:request.signal})
         .then(function(r){if(!r.ok)throw Error('Search unavailable');return r.json();})
         .then(function(d){if(ticket!==revision)return;var matched=(d.results||[]).map(function(r){return byUri.get(r.uri);}).filter(Boolean);draw(matched.map(function(e){return {entry:e,rank:3};}),matched.length+' of '+(d.results||[]).length+' text results in this map');})

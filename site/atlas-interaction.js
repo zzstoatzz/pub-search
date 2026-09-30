@@ -1,4 +1,24 @@
 (function(root) {
+  function frameTopic(points, indices, viewport, width, height, minZoom, maxZoom) {
+    if(!indices.length) return null;
+    if(indices.length>=20) {
+      var xs=indices.map(i=>points[i].x).sort((a,b)=>a-b), ys=indices.map(i=>points[i].y).sort((a,b)=>a-b);
+      var mx=xs[Math.floor(xs.length/2)], my=ys[Math.floor(ys.length/2)];
+      var distance=i=>(points[i].x-mx)**2+(points[i].y-my)**2;
+      indices=indices.slice().sort((a,b)=>distance(a)-distance(b)).slice(0,Math.ceil(indices.length*.95));
+    }
+    var left=Infinity, right=-Infinity, top=Infinity, bottom=-Infinity;
+    indices.forEach(function(i) {
+      var p=points[i];
+      left=Math.min(left,p.x);right=Math.max(right,p.x);
+      top=Math.min(top,p.y);bottom=Math.max(bottom,p.y);
+    });
+    var base=Math.min(width,height)*0.42;
+    var roomX=Math.max(1,viewport.right-viewport.left), roomY=Math.max(1,viewport.bottom-viewport.top);
+    var zoom=Math.max(minZoom,Math.min(maxZoom,roomX/(Math.max(.015,right-left)*base)*.85,roomY/(Math.max(.015,bottom-top)*base)*.85));
+    return {zoom:zoom,x:(left+right)/2+(width/2-(viewport.left+viewport.right)/2)/(base*zoom),
+      y:(top+bottom)/2+(height/2-(viewport.top+viewport.bottom)/2)/(base*zoom)};
+  }
   function reach(type) { return type === 'mouse' ? 14 : 24; }
   function pick(nodes, x, y, type) {
     var best = null, score = Infinity;
@@ -68,5 +88,5 @@
     canvas.addEventListener('lostpointercapture',state.abort);
     canvas.addEventListener('pointerleave',state.leave);
   }
-  root.AtlasInteraction = {attach:attach,gesture:gesture,pick:pick,reach:reach};
+  root.AtlasInteraction = {frameTopic:frameTopic,attach:attach,gesture:gesture,pick:pick,reach:reach};
 })(typeof window === 'undefined' ? globalThis : window);

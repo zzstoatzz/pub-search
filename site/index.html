@@ -1283,7 +1283,8 @@
         <script src="clients.js"></script>
         <script src="identity.js"></script>
         <script src="ui.js"></script>
-    </head>
+      <script src="loading.js" defer></script>
+</head>
     <body>
         <div class="container">
             <h1>
@@ -1623,7 +1624,7 @@
 
                 if (!append) {
                     searchBtn.disabled = true;
-                    resultsDiv.innerHTML = `<div class="status">searching...</div>`;
+                    resultsDiv.innerHTML = `<div class="status"><pub-loading>Searching…</pub-loading></div>`;
                     currentOffset = 0;
                     updateDocTitle(query, tag, platform);
                 }
@@ -2522,7 +2523,7 @@
                 // show loading state
                 const loadingEl = document.createElement("div");
                 loadingEl.className = "related-loading";
-                loadingEl.textContent = "finding related...";
+                loadingEl.innerHTML = "<pub-loading>Finding related documents…</pub-loading>";
                 resultsDiv.appendChild(loadingEl);
 
                 try {

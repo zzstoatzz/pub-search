@@ -428,6 +428,7 @@
       .who-avatar { width: 48px; height: 48px; }
     }
   </style>
+  <script src="loading.js" defer></script>
 </head>
 <body>
   <canvas id="ambient" aria-hidden="true"></canvas>
@@ -856,7 +857,7 @@
       // placeholder for the sea of actual subscribers (filled by fetchSubscribers)
       var sea = p.totalSubscribers > 0
         ? '<div class="card-section" id="pub-sea"><span class="sec-label">who subscribes</span>' +
-          '<div class="sec-loading">gathering…</div></div>'
+          '<div class="sec-loading"><pub-loading>Gathering…</pub-loading></div></div>'
         : '';
       return '<div class="card">' + head +
         '<div class="metric"><span class="num" data-count="' + p.totalSubscribers + '">0</span>' +
@@ -881,7 +882,7 @@
       var sub = bits.length ? '<div class="card-sub">' + bits.join(' · ') + '</div>' : '';
       // placeholder for the actual docs this curator recommended
       var reco = '<div class="card-section" id="cur-reco"><span class="sec-label">recommended</span>' +
-        '<div class="sec-loading">gathering…</div></div>';
+        '<div class="sec-loading"><pub-loading>Gathering…</pub-loading></div></div>';
       return '<div class="card">' + head +
         '<div class="metric"><span class="num" data-count="' + c.totalRecommends + '">0</span>' +
         '<span class="unit">recommend' + (c.totalRecommends === 1 ? '' : 's') + '</span></div>' +
@@ -1144,12 +1145,12 @@
               ' aria-selected="' + (t.sort === active) + '">' + t.label + '</button>';
           }).join('') +
         '</div>' +
-        '<div class="reco-list-wrap"><div class="sec-loading">loading…</div></div>';
+        '<div class="reco-list-wrap"><div class="sec-loading"><pub-loading>Loading…</pub-loading></div></div>';
 
       var wrap = box.querySelector('.reco-list-wrap');
 
       function load(sort) {
-        wrap.innerHTML = '<div class="sec-loading">loading…</div>';
+        wrap.innerHTML = '<div class="sec-loading"><pub-loading>Loading…</pub-loading></div>';
         fetch(API_BASE + '/recommended?curator=' + encodeURIComponent(did) + '&sort=' + sort + '&limit=8')
           .then(function(r) { return r.json(); })
           .then(function(docs) {

@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8"><title>Atlas loading and framing checks</title>
+<script src="/site/loading.js"></script>
+<style>body{margin:24px;background:#111;color:#bbb;font:14px system-ui;--bg:#111}button{padding:10px;margin:8px}#sample{display:flex;min-height:190px;align-items:center;justify-content:center;border:1px solid #444}iframe{border:1px solid #555}pre{white-space:pre-wrap}body.light{background:#faf9f6;color:#333;--bg:#faf9f6}</style>
+<button id="theme">Toggle theme</button><button id="run">Check startup and framing</button>
+<div id="sample"><pub-loading size="large">Gathering the Atlas…</pub-loading></div>
+<p><pub-loading>Finding related documents…</pub-loading></p>
+<pre id="result">Ready</pre><iframe title="Atlas under test" width="390" height="844"></iframe>
+<script>
+document.querySelector('#theme').onclick=()=>document.body.classList.toggle('light');
+document.querySelector('#run').onclick=async()=>{
+ const output=document.querySelector('#result'),frame=document.querySelector('iframe');output.textContent='';
+ const wait=ms=>new Promise(r=>setTimeout(r,ms));
+ const log=s=>output.textContent+=s+'\n';
+ const check=(v,s)=>{if(!v)throw Error(s);log('PASS '+s);};
+ try {
+ for(const mode of ['site']) {
+  let maxGap=0,last=performance.now(),start=last;
+  const timer=setInterval(()=>{let now=performance.now();maxGap=Math.max(maxGap,now-last);last=now;},16);
+  frame.src='/'+mode+'/atlas.html';
+  await new Promise(r=>frame.onload=r);
+  const win=frame.contentWindow;
+  while(!win.atlas || !win.document.querySelector('#loading').classList.contains('hidden')) {if(performance.now()-start>45000)throw Error('Atlas timeout');await wait(30);}
+  clearInterval(timer);log(mode+': ready '+Math.round(performance.now()-start)+'ms; longest main-thread gap '+Math.round(maxGap)+'ms');
+ }
+ const win=frame.contentWindow,doc=win.document;
+ const response=await fetch('/site/atlas.json.gz'),data=await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).json();
+ for(const [width,height] of [[390,844],[1280,800]]) {
+  frame.width=width;frame.height=height;await wait(100);
+  for(const cluster of [data.clusters.fine[0],data.clusters.fine[Math.floor(data.clusters.fine.length/2)]]) {
+   win.AtlasSummaries.open(cluster.id,true,'fine');
+   while(win.atlas._debug().animating)await wait(30);
+   const state=win.atlas._debug(),panel=doc.querySelector('#cluster-summary').getBoundingClientRect();
+   const scale=Math.min(width,height)*.42*state.zoom;
+   check(state.selectedTopicIndices.length>0,'selected cluster has members at '+width+'px');
+   check(state.selectedTopicIndices.filter(i=>{const p=data.points[i],x=width/2+(p.x+state.panX)*scale,y=height/2+(p.y+state.panY)*scale;return x>=0&&y>=70&&x<=(width<600?width:panel.left)&&y<=(width<600?panel.top:height);}).length>=Math.ceil(state.selectedTopicIndices.length*.95), 'cluster core fits clear of the summary at '+width+'px');
+  }
+ }
+ log('All checks passed');
+ }catch(error){log('FAIL '+error.stack);}
+};
+</script>

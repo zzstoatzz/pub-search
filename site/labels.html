@@ -63,6 +63,7 @@
     .empty { color: var(--text-dim); font-size: 0.8rem; padding: 1rem 0; }
     .foot { color: var(--text-muted); font-size: 0.7rem; line-height: 1.7; margin-top: 2.2rem; border-top: 1px solid var(--row-border); padding-top: 0.8rem; }
   </style>
+  <script src="loading.js" defer></script>
 </head>
 <body>
   <div class="container">
@@ -97,7 +98,7 @@
       </div>
     </div>
 
-    <div id="list"><div class="empty">loading…</div></div>
+    <div id="list"><div class="empty"><pub-loading>Loading…</pub-loading></div></div>
     <div id="cleared-wrap"></div>
 
     <p class="foot">

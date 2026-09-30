@@ -80,6 +80,7 @@
     text.hidden=!c; evidence.hidden=!c;
     status.hidden=!!c;
     status.textContent=loadError?.message || (loaded ? 'No summary is available for this topic. You can still browse its documents.' : 'Loading summary…');
+    if(!c && !loaded && !loadError) status.innerHTML='<pub-loading>Reading the topic…</pub-loading>';
     var retry=document.getElementById('cluster-summary-retry');
     retry.hidden=!!c || (!loaded && !loadError);
     retry.textContent=loadError?.code==='stale' ? 'Reload map' : 'Retry summary';
