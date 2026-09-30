@@ -89,11 +89,11 @@ Typical sequence:
 Create actions alone opt into classifier observation. Re-verifying existing rows
 does not inflate author document counts or accidentally trigger bulk-author labels.
 
-the firehose is our only way to learn about ATProto record deletions. it's ephemeral — if the tap is down when a delete event comes through, the record becomes a ghost in turso (and turbopuffer) forever. the reconciler fixes this by periodically verifying documents still exist at their source PDS.
+Jetstream archive recovery covers ingestion gaps, but historical missed deletions or indexing failures can still leave stale records in Turso and turbopuffer. The reconciler independently checks whether documents still exist at their source PDS.
 
 ## the problem
 
-tap's resync only re-sends records that *exist* — it never emits delete events for records that disappeared. even forcing a full repo re-crawl (remove + re-add) only adds current records; it doesn't clean up ghosts. we confirmed this by reading indigo/tap source (`resyncer.go`, `firehose.go`).
+The retired Tap ingester's resync only re-sent records that *exist* — it never emits delete events for records that disappeared. even forcing a full repo re-crawl (remove + re-add) only adds current records; it doesn't clean up ghosts. we confirmed this by reading indigo/tap source (`resyncer.go`, `firehose.go`).
 
 additionally, `deleteDocument()` in indexer.zig only cleaned turso — it never deleted the corresponding turbopuffer vector. so even when deletes *were* processed via the firehose, vectors accumulated forever.
 
@@ -124,7 +124,7 @@ Backed by `idx_documents_reconcile_after` (migration 023), the batch fetch is an
 
 ## what it fixes
 
-**historical drift (the main problem):** documents deleted while the tap was down are detected and cleaned up. this is the only mechanism that catches these — tap resync can't.
+**historical drift (the main problem):** documents whose deletion was missed by ingestion are detected and cleaned up. source verification catches stale rows even when no deletion event is replayed.
 
 **forward-looking vector leak:** the ingester.zig delete handler now also calls `tpuf.delete()`, so future firehose deletes clean both turso and turbopuffer.
 
@@ -151,7 +151,7 @@ all env vars with sensible defaults — no configuration required for normal ope
 
 ## failure modes
 
-the reconciler is designed to degrade gracefully — it can never break search or indexing.
+The reconciler defers ambiguous failures. Its worker process is separate from HTTP serving, although both depend on shared external services.
 
 | scenario | behavior |
 |----------|----------|
@@ -159,15 +159,15 @@ the reconciler is designed to degrade gracefully — it can never break search o
 | plc.directory down | lookups deferred with backoff, neither verified nor deleted |
 | PDS down (5xx/timeout) | `error_skip` → doc not deleted or verified; retry delay doubles from 1h up to 24h |
 | turbopuffer down | retain Turso queue rows and defer; delete Turso rows only after vector deletion succeeds |
-| reconciler thread panics | isolated thread — search/indexing/embedding unaffected |
+| reconciler panics | can terminate the worker process, interrupting embedding too; HTTP and ingestion run in the separate app process |
 
 the reconciler never deletes on ambiguity. only a 400/404 carrying the XRPC `RecordNotFound` error triggers deletion. any error or timeout means "skip and retry later."
 
 ## race conditions
 
-**tap creates doc while reconciler deletes it:** safe. `insertDocument`'s `ON CONFLICT` handles re-creation — the document comes right back on the next tap event.
+**ingestion creates a document while reconciler deletes it:** safe. `insertDocument`'s `ON CONFLICT` handles re-creation — the document comes right back on the next ingest event.
 
-**reconciler and tap both delete the same doc:** safe. `deleteDocument` and `tpuf.delete` are both idempotent.
+**reconciler and ingestion both delete the same document:** safe. `deleteDocument` and `tpuf.delete` are both idempotent.
 
 ## observability
 
@@ -202,7 +202,7 @@ fly logs -a leaflet-search-backend --no-tail | grep reconcile
 
 a secondary feature on top of PDS verification: HEAD the destination URL we'd link to. on a 404, set `documents.url_dead = 1` so search excludes the doc without deleting it (delete-on-404 would flap — tap re-inserts on the next resync, since `insertDocument` doesn't consult tombstones).
 
-**status: opt-in via `RECONCILE_URL_CHECK_ENABLED=true`.** the implementation calls `std.http.Client.fetch` with `.method = .HEAD`, and zig 0.16's stdlib mishandles certain redirect chains — `attempt to use null value` at `std/http/Client.zig:1826`. reproduced locally against `blog.karashiiro.moe`'s auth-callback bounce (cross-domain → back-to-origin → relative, exactly 3 hops at the default `redirect_behavior=3` limit). the panic bypasses our `catch return .url_skip` and kills the worker thread; in production this crash-looped the reconciler for 5+ hours before we noticed, blocking PDS verification entirely.
+**status: opt-in via `RECONCILE_URL_CHECK_ENABLED=true`.** the implementation calls `std.http.Client.fetch` with `.method = .HEAD`, and zig 0.16's stdlib mishandles certain redirect chains — `attempt to use null value` at `std/http/Client.zig:1826`. reproduced locally against `blog.karashiiro.moe`'s auth-callback bounce (cross-domain → back-to-origin → relative, exactly 3 hops at the default `redirect_behavior=3` limit). the panic bypasses our `catch return .url_skip` and can terminate the worker process; in production this crash-looped the reconciler for 5+ hours before we noticed, blocking PDS verification entirely.
 
 **workaround.** the kill switch keeps the secondary feature off by default until the stdlib bug is worked around. options for a real fix:
 

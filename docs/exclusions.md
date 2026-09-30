@@ -52,7 +52,7 @@ cleanup after a ban (the stores that don't self-heal):
 |---|---|---|
 | turbopuffer vectors | `scripts/purge-bridgyfed-vectors` (handles the banned set) | do this FIRST — semantic pollution is live until vectors die |
 | turso history | `scripts/purge-banned-turso` | paced + canary-gated; not urgent (builder filters every build) but keyword's turso fallback during restarts reads it |
-| atlas | trigger `rebuild-atlas` prefect flow (or wait ≤6h) | rebuilt from tpuf, so purge vectors first |
+| atlas | trigger `leaflet-atlas/leaflet-atlas` prefect deployment (or wait ≤6h) | rebuilt from tpuf, so purge vectors first |
 | keyword replica | nothing — next hourly build + adopt is clean | |
 
 **operational steps for a new ban** (see also

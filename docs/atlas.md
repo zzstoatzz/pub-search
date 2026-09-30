@@ -21,13 +21,13 @@
 
    > **why 10D and not the 2D coords** — clustering in the display projection turns UMAP's own artifacts (tearing, crowding) into cluster boundaries. Scored against PCA-50 cosine space, which neither projection was fit in, the old 2D clustering gave silhouette **+0.004 coarse / −0.067 fine** — the fine tier was structured *worse than chance*. The 10D space gives **+0.033 / +0.017**. `cluster_selection_method="leaf"` and a corpus-scaled `min_cluster_size` were tested at the same time and both made it worse at our thresholds; neither was adopted.
 6. **labels** — c-TF-IDF over assigned document titles per cluster → 3-term keyword seed, then refined into 2-4 word topic names by `claude-haiku-4-5`. Unassigned titles never contribute. Empty-title groups keep a generic keyword fallback. Requires `ANTHROPIC_API_KEY`; without it the c-TF-IDF keywords ship as-is.
-7. **publication centroids** — documents grouped by `basePath` (2+ docs), enriched from turso with name/coverImage, plus author avatars and leaflet theme colors. Both use on-disk caches in `site/` (`atlas-avatar-cache.json`, `atlas-theme-cache.json`) that deploy alongside `atlas.json` — the prefect flow clones fresh each run, so the deployed copy is what it reads on cold start.
+7. **publication centroids** — documents grouped by `basePath` (2+ docs), enriched from turso with name/coverImage, plus author avatars and leaflet theme colors. Both use on-disk caches in `site/` (`atlas-avatar-cache.json`, `atlas-theme-cache.json`) that deploy alongside `atlas.json.gz` — the prefect flow clones fresh each run, so the deployed copy is what it reads on cold start.
 8. **outputs** `site/atlas.json.gz` (gzipped since 2026-08-25; the raw json crossed cloudflare pages' 25 MiB per-file limit at ~83k docs. `atlas.js` decompresses via `DecompressionStream`)
 
 dependencies: `umap-learn`, `hdbscan`, `scikit-learn`, `httpx`, `numpy`, `pydantic-settings`, `anthropic`. Pinned to `numpy<2.2` and python `>=3.12,<3.14` — umap's transitive numba/llvmlite have no wheels outside that window.
 
 ```bash
-./scripts/build-atlas              # writes site/atlas.json
+./scripts/build-atlas              # writes site/atlas.json.gz
 ./scripts/build-atlas -o out.json  # custom output path
 ```
 
@@ -40,8 +40,42 @@ dependencies: `umap-learn`, `hdbscan`, `scikit-learn`, `httpx`, `numpy`, `pydant
 - **semantic zoom**: coarse labels → fine labels → document titles as you zoom in
 - **cluster nebulae as lanterns**: one smooth-falloff glow per fine cluster at the weighted center of its members, sized by RMS spread with a bounded peak opacity — wide, translucent, and smooth at every zoom (coarse regions use the same sprite, fading out by ~2.8×)
 - **label economy**: all text competes in one collision pass, placed in priority order — cluster labels (bold landmarks), then document titles ranked by real recommend counts (`/recommended` boost on `popScore`), then publication names with whatever room is left; per-layer caps live in `ATLAS_TUNE.labels`
-- **hover/selection card** with title, publication, platform; **click** opens the document
+- **selection card** with title and publication; its read link opens the document
 - **theme support**: dark (default), light, system — synced with the rest of the site
+
+### finding and framing
+
+The finder searches regions, topics, publications, and document metadata, with
+exact names ranked first and results grouped by kind. Document-text search is
+an explicit API action. Mobile layout follows the visual viewport so results
+remain visible above the keyboard. Publication selection uses stable `basePath`
+identity rather than positions in a sorted array.
+
+Selecting a topic label or a document's topic opens its summary and frames the
+members in the available map area. The camera accounts for the header and the
+mobile bottom sheet or desktop side panel. For groups with at least 20 members,
+framing uses the nearest 95% to the median position to avoid distant outliers;
+highlighting still includes every assigned member. Small groups use all members.
+Manual pan or zoom cancels the camera animation.
+
+### startup and loading
+
+The shared [loading component](frontend.md) appears immediately and reports
+whether the Atlas is downloading or calculating point spacing. Spacing runs in
+`atlas-spacing-worker.js`, passing typed coordinate arrays and returning a
+transferred buffer. Fetching, gzip decompression, and JSON parsing remain on the
+main thread. Summary loading is deferred until after map initialization and does
+not gate first render. A failed map request offers a retry.
+
+On September 30, the live map contained 81,881 points: 7,674,602 compressed bytes
+and 30,520,141 decompressed bytes. That payload remains a substantial mobile
+startup cost. Local timing varied with cache and browser state; it does not
+establish a production speedup or diagnose a particular phone's delay. The
+geometry/metadata split below remains proposed, not implemented.
+
+Serve the repository root and open `/scripts/tests/atlas-loading.html` for the
+real-dataset loading and framing checks at phone and desktop sizes. Click
+**Run checks**; timings depend on the local browser and network.
 
 ### gesture recovery and visible planet work
 
@@ -68,13 +102,13 @@ compared with a full scan and brute-force nearest-neighbor spacing. Existing
 arbitration still needs a physical-device check.
 
 [Jaz's Atlas](https://atlas.jazco.dev/) uses MapLibre vector tiles and zoom-gated
-layers. The larger next step here is the geometry/metadata split below. Label
-summaries are a separate design question: decide what evidence supports each
-summary and where to reveal it without crowding the map or blocking interaction.
+layers. The larger next step here is the geometry/metadata split below. Topic
+summaries are available in the selection panel, with their evidence disclosed
+separately from the map.
 
 ## recomputing
 
-automated: the `leaflet-atlas` prefect deployment (`my-prefect-server/flows/atlas.py:rebuild_atlas`) runs **every 6 hours** on heavypad — clones the repo, runs `build-atlas`, runs `build-facts` (best-effort; a failure deploys the committed `facts.json` rather than blocking), and deploys `site/` to Cloudflare Pages. Pinned to python 3.13 and single-threaded BLAS/numba, since the build OOM'd the pod as the corpus grew.
+automated: the `leaflet-atlas` prefect deployment (`my-prefect-server/flows/atlas.py:rebuild_atlas`) runs **every 6 hours** on heavypad — clones the repo, runs `build-atlas`, runs `build-facts` (best-effort; a failure deploys the committed `facts.json` rather than blocking), generates the optional summary sidecar, archives the map/summary pair, and deploys `site/` to Cloudflare Pages. Pinned to python 3.13 and single-threaded BLAS/numba, since the build OOM'd the pod as the corpus grew.
 
 trigger a rebuild now (against prefect-server.waow.tech, tailnet):
 
@@ -94,12 +128,15 @@ offline fallback or deployment race still produces a mismatch, the panel offers
 
 Before a manual frontend deployment, fetch the live datasets, including the
 summary sidecar, so the local checkout does not overwrite newer generated data.
+Follow the download and validation steps in [frontend.md](frontend.md).
 
-## future work
+## membership
 
 - **membership contract**: `clusterCoarse` and `clusterFine` are actual HDBSCAN assignments, with `-1` meaning unassigned independently at each tier. `membershipProbabilityCoarse/Fine` preserve HDBSCAN's membership strength (not calibrated semantic correctness). `meta.membershipVersion=1` distinguishes this from older snapped datasets. Counts, centroids, glows, and connection lines exclude unassigned documents; those documents retain their positions, platform colors, searchability, and click targets. Fine-cluster `parent` is an association, not a guarantee that all members belong to that region.
 - **why snapping was removed**: the initial April 2 implementation (`9c33eea`) assigned noise to the nearest centroid. The July 31 investigation (`e8075c0`) documented the purpose as coloring every point and measured weaker cluster separation after snapping; it fixed labels but left display and counts using artificial membership. The September correction removes that assignment entirely. Historical noise rates (~40%) should not be mistaken for measurements of the current build; current tier totals are emitted in `meta.nUnassignedCoarse/Fine`.
 - **verification**: `uv run --script scripts/tests/test_atlas_membership.py` exercises real clustering, all-noise inputs, label evidence, and nullable parent associations. `uv run scripts/tests/serve-atlas-membership.py` serves a small dataset through the actual frontend; open its printed URL to verify unassigned points stay visible and receive no cluster connection lines.
+## future work
+
 - **exemplar-seeded labels**: feed the LLM the N documents nearest each centroid instead of c-TF-IDF keywords (sembleverse does this) — untested here
 - **hierarchical clustering**: replace the two-strata (coarse/fine) approach with a proper hierarchy (Ward linkage on HDBSCAN centroids + `cut_tree` at multiple levels) for smooth fractal zoom
 - **event-driven rebuild**: trigger off significant index changes instead of the fixed 6h cron
@@ -208,7 +245,7 @@ Checks: `uv run --script scripts/tests/test_atlas_summaries.py`,
 `node --test scripts/tests/atlas-summaries.mjs`, and
 `node scripts/tests/atlas-interaction.cjs`.
 
-Atlas's summary release uses `?build=topics-5` on its CSS and map scripts, with
+Atlas's summary release uses versioned `?build=` URLs on its CSS and map scripts, with
 matching URLs in the Workbox manifest. When changing those assets, bump the build
 value in both `atlas.html` and `workbox-config.cjs`, then regenerate `sw.js`.
 The previous worker ignores `v` parameters; reusing that parameter can combine

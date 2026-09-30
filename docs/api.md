@@ -89,9 +89,9 @@ with `format=v2`:
 endpoints may return an exact integer `total` when they already hold a complete
 bounded result array.
 
-Hybrid fusion uses a fixed 200-result source depth so its ranking cannot shift
-between page requests; hybrid pages are therefore limited to that top-200
-window. Keyword and semantic search accept offsets through 1000.
+Hybrid fusion uses a fixed 75-result source depth, keeping candidate depth independent of
+page size. Hybrid pages are limited to that top-75 window; live index updates
+and approximate semantic retrieval can still change results between requests. Keyword and semantic search accept offsets through 1000.
 
 hybrid mode adds `source` and `score` fields:
 ```json

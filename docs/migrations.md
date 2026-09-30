@@ -63,7 +63,7 @@ A test asserts `BOOTSTRAP_BASELINE_COUNT <= migrations.len`, so accidentally shr
 
 All migrations are `transactional: false`. The Turso HTTP client closes the connection at the end of each pipeline request, so `BEGIN` / `COMMIT` cannot span multiple `conn.exec` calls — wrapping in a transaction would not work.
 
-If a migration fails partway through its statement list, zug marks the row `dirty=1` and refuses to run anything else until repaired. Repair: fix the underlying issue (often a manual SQL cleanup), then `UPDATE zug_migrations SET dirty = 0 WHERE id = '...'` to unblock.
+If a migration fails partway through its statement list, zug marks the row `dirty=1` and refuses to run anything else until repaired. Repair: fix the underlying issue and complete and verify every statement in the migration manually, then `UPDATE zug_migrations SET dirty = 0 WHERE id = '...'` to unblock.
 
 ## the adapter (`zug_conn.zig`)
 
@@ -88,9 +88,9 @@ The Hrana protocol's value shape requires per-arg type tags (`text`, `integer`, 
 turso db shell leaf "SELECT id, checksum, dirty, applied_at FROM zug_migrations ORDER BY id"
 
 # Repair a dirty migration:
-#   1. fix the root cause manually (check zug's diagnostics in the boot log)
+#   1. fix the root cause and verify every migration statement completed
 #   2. UPDATE zug_migrations SET dirty = 0 WHERE id = 'XXX_offending_migration'
-#   3. redeploy — zug re-runs the migration body
+#   3. redeploy — zug treats the repaired migration as applied; it does not rerun it
 
 # Force a re-bootstrap (DANGER — only after verifying schema is intact):
 #   DROP TABLE zug_migrations;

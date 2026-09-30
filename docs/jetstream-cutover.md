@@ -1,8 +1,7 @@
 # jetstream ingest cutover
 
-Replace the `leaflet-search-ingester` fly app (relay firehose → verify →
-`/channel` websocket) with direct Jetstream V2 consumption in the backend,
-at functional parity, then delete the app.
+The backend consumes verified Jetstream V2 events directly. This replaced the
+`leaflet-search-ingester` Fly app, which was deleted on August 17, 2026.
 
 ## why this preserves verification
 
@@ -24,21 +23,23 @@ add one as a fallback host.
 
 ## how it works (`backend/src/ingest/jetstream.zig`)
 
-- Subscribes `/subscribe` with `wantedCollections` for our 9 collections;
-  events normalize into the same `dispatchRecord` path as /channel frames,
-  so both sources index identically by construction.
-- At-least-once: synchronous processing on the read loop; the durable cursor
-  (`/data/jetstream-cursor`, `time_us`) is persisted only after dispatch,
-  rewound 5s on every reconnect; redelivery is absorbed by idempotent
-  upserts. First boot with no cursor file seeds from wall clock − 60s so the
-  deploy gap replays. No ack protocol, no outbox, no shedding.
+- The zat.dev/jetstream unified client sweeps the archive from `after_seq`,
+  then performs a sequence-deduplicated cutover to the live event stream.
+  Expired cursors re-enter archive recovery. Events enter `dispatchRecord`.
+- At-least-once: synchronous dispatch completes before the durable sequence
+  cursor at `/data/jetstream-cursor` is persisted, with a two-second time gate.
+  Restarts resume from that sequence; idempotent upserts absorb redelivery.
+  Legacy `time_us` cursors are converted through archive metadata on startup.
 - Policy parity in-process: banned DIDs via `policy.isBanned`; bridgy fed
   via a cached DID→PDS check (`ingester.resolvePds` + `isBridgyPds`).
   Resolution failure admits the event (bridgy repos are did:plc and resolve
   reliably; the reconciler re-checks PDS hosting later).
 - Staleness watchdog at 15 min (`JETSTREAM_STALE_SECS`) — our collections
   are quiet, a firehose-style 90s watchdog would false-trigger.
-- Env: `JETSTREAM_HOSTS` (csv override), `JETSTREAM_CURSOR_PATH`.
+- Env: `JETSTREAM_HOSTS` (CSV override), `JETSTREAM_CURSOR_PATH`, and
+  `JETSTREAM_API_KEY`. Without the key, archive recovery is unavailable and
+  recovery degrades to the live replay window. Only stream.waow.tech is enabled
+  by default; adding a host requires deliberate verification and credential setup.
 
 ## rollout (completed)
 

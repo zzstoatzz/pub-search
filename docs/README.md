@@ -1,28 +1,32 @@
 # how pub search works
 
-a search engine for content published on the [AT Protocol](https://atproto.com) — the open network behind [Bluesky](https://bsky.app). it indexes posts from publishing platforms like [leaflet](https://leaflet.pub), [pckt](https://pckt.blog), [offprint](https://offprint.app), [greengale](https://greengale.app), and [whitewind](https://whtwnd.com), all of which use the [standard.site](https://standard.site) schema.
+a search engine for content published on the [AT Protocol](https://atproto.com) — the open network behind [Bluesky](https://bsky.app). it indexes posts from publishing platforms like [leaflet](https://leaflet.pub), [pckt](https://pckt.blog), [offprint](https://offprint.app), [greengale](https://greengale.app), and [whitewind](https://whtwnd.com), using standard.site, legacy Leaflet collections, or WhiteWind's own collection.
 
 **live at [pub-search.waow.tech](https://pub-search.waow.tech)**
 
 ## the big picture
 
 ```
-ATProto firehose (every post, everywhere)
-     ↓ filtered by collection, cryptographically verified
-ingester (our own firehose consumer — signature + MST diff verification)
-     ↓ documents + publications over a websocket channel
-backend (zig)
-     ├── turso (cloud sqlite — source of truth)
-     ├── local sqlite replica (fast keyword search via FTS5)
-     │      ↑ refreshed by the snapshot builder: offline build from turso
-     │        → sha256 manifest → R2 → verified adoption (scaling-plan.md)
-     ├── voyage AI embeddings → turbopuffer (semantic search)
-     └── HTTP API
-           ↓
-static frontend (cloudflare pages)
+verified Jetstream events (stream.waow.tech)
+     ↓ archive recovery + live subscription through zat
+backend (Zig)
+     ├── Turso (source of truth)
+     ├── local SQLite snapshot + live overlay (FTS5)
+     │      ↑ offline builder → R2 manifest → verified adoption
+     ├── Voyage embeddings → turbopuffer (semantic search)
+     └── HTTP API → Cloudflare Pages proxy → frontend / MCP
 ```
 
-content flows in one direction: the firehose broadcasts every AT Protocol event in real-time, the [ingester](../ingester/) filters for publishing-related records and verifies each commit cryptographically (it replaced bluesky's indigo tap on 2026-06-09 — non-canonical repos like bridgy fed mirrors are dropped at the door), and the backend indexes them into turso. the serving replica is rebuilt offline and adopted atomically rather than synced in place — bulk data movement never touches the serving box. a [reconciler](reconciliation.md) periodically verifies documents still exist at their source, catching missed deletions.
+[Ingestion](jetstream-cutover.md) extracts publishing records and applies account
+policy before indexing. The serving replica is built off-host and adopted rather
+than synced in place; an [overlay](overlay-serving.md) supplies live changes.
+A [reconciler](reconciliation.md) checks source records and schedules bounded
+retries so unavailable sources cannot monopolize verification.
+
+The [Atlas](atlas.md) projects the vector index into an interactive map. Its
+summaries use sampled documents with optional related context; map/summary pairs
+are archived for later analysis. See [frontend.md](frontend.md) for loading,
+preview, and release checks.
 
 ## how searching works
 
@@ -34,7 +38,7 @@ uses [SQLite FTS5](https://www.sqlite.org/fts5.html) — a built-in full-text se
 
 this is not something custom — FTS5 is a well-established tool built into SQLite. the custom part is building the index (deciding what to index, how to tokenize, how to rank) and the query syntax (OR between terms for recall, prefix matching on the last word for a type-ahead feel).
 
-keyword search runs against a **local SQLite replica** on the same machine as the backend, not over the network to the database. this keeps latency around ~9ms.
+keyword search merges the **local SQLite snapshot and live overlay**. broad unfiltered queries use a bounded candidate pass so common terms do not require full-corpus document probes.
 
 ### semantic search
 
@@ -64,7 +68,7 @@ the backend handles all of this in the [content extraction](content-extraction.m
 |-----------|---------------|--------|
 | full-text matching | SQLite FTS5 (BM25 ranking, inverted index) | query construction, tokenization rules, recency scoring |
 | vector similarity | Voyage AI (embeddings), turbopuffer (ANN search) | hybrid fusion, result merging, snippet extraction |
-| firehose sync | [zat](https://tangled.sh/@zzstoatzz.io/zat) (AT Protocol crypto: signatures, MST diff verification) | the entire ingester (relay subscription, verification policy, channel protocol), content extraction per platform, deduplication |
+| event ingestion | [zat](https://tangled.sh/@zzstoatzz.io/zat) Jetstream SDK; upstream Sync 1.1 verification | durable cursor, corpus policy, content extraction per platform |
 | data storage | Turso (cloud SQLite), local SQLite replica, R2 (snapshot artifacts) | schema design, snapshot builder + manifest gates, replica adoption |
 | schema migrations | [zug](https://tangled.sh/@zzstoatzz.io/zug) (Zig 0.16 SQLite migration runner) | migration list, bootstrap path for the existing turso DB, `MigrationConn` adapter to zug's connection trait |
 | frontend | Cloudflare Pages (hosting) | the entire UI and search experience |

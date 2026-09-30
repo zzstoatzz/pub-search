@@ -127,7 +127,7 @@ raw HTTP when:
   MCP client.
 - you need behavior the MCP tools deliberately don't expose (`limit` beyond
   the tool caps, pagination metadata, or the raw v1 response shape). The MCP
-  `search` tool does expose `offset` for straightforward page traversal.
+  `search` tool deliberately omits `offset`; narrow the query instead.
 - you're building your own composition and want the primitives, not the
   curated layer.
 
@@ -176,16 +176,16 @@ project is yet.
   codes, you will "succeed" against a page of HTML.
 - **at least one of `q`, `tag`, or `author` is required.** an empty query is
   rejected by design; the MCP `search` tool returns `[]` rather than erroring.
-- **filters vary by mode.** `tag` and `since` apply to keyword only;
-  `platform` and `author` work everywhere. hybrid applies each filter to the
-  half that supports it. don't assume a filtered semantic search did what you
-  asked — check the [matrix in api.md](api.md).
+- **REST filters vary by mode.** `since`, `platform`, and `author` bind in
+  all modes; the index applies `tag` to keyword results only. The MCP tool
+  additionally filters semantic neighbors by tag. Check the [API matrix](api.md)
+  when using HTTP directly.
 - **`author` accepts handles or DIDs**; handles resolve server-side.
   `search("", author="someone.com")` is the supported way to browse an
   author's everything.
-- **freshness is bounded, not real-time.** ingestion from the firehose is
-  continuous, but the keyword-serving replica is refreshed by snapshot swap.
-  expect minutes-to-hours of lag, not seconds. the `pub-search://stats`
+- **freshness is bounded, not real-time.** ingestion is continuous and the live overlay supplies keyword updates
+  between snapshot swaps. Embedding and Atlas rebuilds have separate schedules;
+  edge caches can also delay visibility. the `pub-search://stats`
   resource / `/api/dashboard` show current counts if staleness matters to you.
 - **`get_document` (MCP) reaches out to the author's PDS per call.** latency
   and availability depend on that PDS, not on pub-search. fine for reading a
