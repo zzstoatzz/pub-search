@@ -110,3 +110,11 @@ test('the lite sidecar verifies membership without source excerpts', async()=>{
     await assert.rejects(validate(changed,atlas,true));
   }
 });
+
+test('cover thumbnails come only from well-formed documents that have one', ()=>{
+  const {parseCovers}=globalThis.AtlasSummaries;
+  const found=parseCovers({documents:[{uri:'at://a/1',did:'did:plc:a',coverImage:'bafkcover'},{uri:'at://a/2',did:'did:plc:a',coverImage:''},{uri:'at://a/3',coverImage:'bafk'},null]});
+  assert.deepEqual([...found],[['at://a/1','https://cdn.bsky.app/img/feed_thumbnail/plain/did%3Aplc%3Aa/bafkcover@jpeg']]);
+  assert.equal(parseCovers({error:'replica not ready'}).size,0);
+  assert.equal(parseCovers(null).size,0);
+});

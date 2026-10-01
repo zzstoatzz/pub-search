@@ -30,7 +30,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="atlas.css?build=polish-4">
+  <link rel="stylesheet" href="atlas.css?build=polish-5">
   <link rel="stylesheet" href="components.css?v=1783000000">
   <script src="loading.js" defer></script>
 </head>
@@ -72,9 +72,14 @@
 
   <section id="node-detail" aria-label="Selected node" hidden>
     <button id="node-detail-close" aria-label="Close details">×</button>
-    <div id="node-detail-title" aria-live="polite"></div>
-    <div id="node-detail-meta"></div>
-    <button id="node-detail-cluster" type="button" hidden></button>
+    <div class="node-detail-head">
+      <div>
+        <div id="node-detail-title" aria-live="polite"></div>
+        <div id="node-detail-meta"></div>
+        <button id="node-detail-cluster" type="button" hidden></button>
+      </div>
+      <img id="node-detail-cover" alt="" hidden>
+    </div>
     <a id="node-detail-link" target="_blank" rel="noopener"></a>
   </section>
 
@@ -116,9 +121,9 @@
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
   <script src="atlas-interaction.js"></script>
-  <script src="atlas-summaries.js?build=polish-4"></script>
-  <script src="atlas-finder.js?build=polish-4"></script>
-  <script src="atlas.js?build=polish-4"></script>
+  <script src="atlas-summaries.js?build=polish-5"></script>
+  <script src="atlas-finder.js?build=polish-5"></script>
+  <script src="atlas.js?build=polish-5"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
       window.LeafletUI.openSettings();

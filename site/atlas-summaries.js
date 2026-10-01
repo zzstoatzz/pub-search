@@ -105,15 +105,46 @@
       heading.textContent='Read excerpt'; excerpt.textContent=s.excerpt; details.append(heading,excerpt); li.append(details); sources.append(li);
     });
   }
+  // uri -> thumbnail url, '' when the document has no cover or the lookup failed
+  var coverUrls=new Map();
+  function parseCovers(body) {
+    var found=new Map();
+    if (!body || !Array.isArray(body.documents)) return found;
+    body.documents.forEach(function(doc) {
+      if (typeof doc?.uri!=='string' || typeof doc.did!=='string' || typeof doc.coverImage!=='string' || !doc.coverImage) return;
+      found.set(doc.uri,'https://cdn.bsky.app/img/feed_thumbnail/plain/'+encodeURIComponent(doc.did)+'/'+encodeURIComponent(doc.coverImage)+'@jpeg');
+    });
+    return found;
+  }
+  function covers(uris) {
+    var wanted=uris.filter(function(uri) { return !coverUrls.has(uri); }), requests=[];
+    wanted.forEach(function(uri) { coverUrls.set(uri,''); });
+    // /api/document takes at most 25 uris per request
+    for (var i=0;i<wanted.length;i+=25) requests.push(fetch('/api/document?uri='+encodeURIComponent(wanted.slice(i,i+25).join(',')))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(body) { parseCovers(body).forEach(function(url,uri) { coverUrls.set(uri,url); }); })
+      .catch(function() {}));
+    return Promise.all(requests).then(function() { return coverUrls; });
+  }
+  function showCovers(target) {
+    target.querySelectorAll('li[data-uri]').forEach(function(li) {
+      var url=coverUrls.get(li.dataset.uri);
+      if (!url || li.querySelector('img')) return;
+      var img=document.createElement('img'); img.alt=''; img.loading='lazy'; img.onerror=function() { img.remove(); }; img.src=url;
+      li.insertBefore(img,li.lastChild);
+    });
+  }
   function renderDocuments() {
     var items=members.get(key(active.id,active.level)) || [], target=document.getElementById('cluster-documents'); target.replaceChildren();
     document.getElementById('cluster-document-count').textContent=items.length.toLocaleString()+' documents';
     items.slice(0,documentLimit).forEach(function(index) {
       var p=dataset.points[index], li=document.createElement('li'), link=document.createElement('a'), locate=document.createElement('button');
-      link.textContent=p.title || 'Untitled'; safeLink(link,toUrl(p)); li.append(link);
+      link.textContent=p.title || 'Untitled'; safeLink(link,toUrl(p)); li.dataset.uri=p.uri; li.append(link);
       locate.innerHTML=LOCATE_ICON; locate.title='Show on map'; locate.setAttribute('aria-label','Show '+(p.title || 'document')+' on map'); locate.onclick=function() { close(); onDocument(index); }; li.append(locate); target.append(li);
     });
     document.getElementById('cluster-documents-more').hidden=items.length<=documentLimit;
+    showCovers(target);
+    covers(items.slice(0,documentLimit).map(function(index) { return dataset.points[index].uri; })).then(function() { showCovers(target); });
   }
   function markSummaries() {
     list.querySelectorAll('small[data-topic-id]').forEach(function(meta) {
@@ -137,7 +168,7 @@
     active=null; onSelect(null); setOpen(true); listView.hidden=false; body.hidden=true; status.hidden=true;
     document.getElementById('cluster-summary-back').hidden=true; document.getElementById('cluster-summary-heading').hidden=false;
     document.getElementById('cluster-summary-retry').hidden=true;
-    panel.scrollTop=0; renderList(); document.getElementById('cluster-summary-close').focus({preventScroll:true});
+    panel.scrollTop=0; renderList(); panel.focus({preventScroll:true});
   }
   function open(id,focus,level) {
     level=level || 'fine';
@@ -146,7 +177,7 @@
     document.getElementById('cluster-summary-back').hidden=false; document.getElementById('cluster-summary-heading').hidden=true;
     document.getElementById('cluster-summary-title').textContent=c.label;
     document.getElementById('cluster-summary-evidence').open=false;
-    renderSummary(); renderDocuments(); panel.scrollTop=0; document.getElementById('cluster-summary-back').focus({preventScroll:true});
+    renderSummary(); renderDocuments(); panel.scrollTop=0; panel.focus({preventScroll:true});
     onSelect(active,focus,members.get(key(id,level)) || []);
     load().then(renderSummary).catch(function() { renderSummary(); });
   }
@@ -188,6 +219,8 @@
     panel=document.getElementById('cluster-summary'); button=document.getElementById('cluster-summary-button');
     if (!panel || !button || !document.getElementById('cluster-nearby')) return;
     dataset=data; onSelect=select; onDocument=documentSelect; toUrl=url;
+    // focus lands on the panel, not a button, so opening it by pointer does not draw a focus ring on a control
+    panel.tabIndex=-1;
     status=document.getElementById('cluster-summary-status'); body=document.getElementById('cluster-summary-body');
     list=document.getElementById('cluster-nearby'); listView=document.getElementById('cluster-nearby-view');
     ['fine','coarse'].forEach(function(level) {
@@ -210,5 +243,5 @@
     load().then(renderSummary).catch(function() {});
     if (new URLSearchParams(location.search).has('topics')) browse();
   }
-  root.AtlasSummaries={init:init,open:open,close:close,updateView:updateView,nearby:nearby,hitTest:hitTest,validate:validate};
+  root.AtlasSummaries={init:init,open:open,close:close,updateView:updateView,nearby:nearby,hitTest:hitTest,validate:validate,covers:covers,parseCovers:parseCovers};
 })(globalThis);

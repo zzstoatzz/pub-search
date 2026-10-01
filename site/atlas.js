@@ -2067,9 +2067,18 @@
       var cluster=!pub && data.clusters.fine.find(function(c) { return c.id===node.clusterFine; });
       if (clusterButton) clusterButton.hidden=!cluster;
       if (clusterButton && cluster) {
-        clusterButton.textContent='topic: '+cluster.label+' →';
+        clusterButton.textContent='in '+cluster.label+' ›';
+        clusterButton.setAttribute('aria-label','Open topic '+cluster.label);
         clusterButton.onclick=function() { AtlasSummaries.open(cluster.id,true); };
       }
+      var cover=document.getElementById('node-detail-cover'), coverFor=selectedIndex;
+      cover.hidden=true; cover.removeAttribute('src');
+      if (!pub && window.AtlasSummaries) AtlasSummaries.covers([node.uri]).then(function(urls) {
+        var src=urls.get(node.uri);
+        if (!src || detailClusterIndex!==coverFor) return;
+        cover.onload=function() { cover.hidden=false; };
+        cover.src=src;
+      });
     }
     detail.hidden = false;
     if (W >= 600) {
