@@ -64,7 +64,8 @@ pub fn fetch(alloc: Allocator, uris: []const []const u8, include_undiscoverable:
     try jw.beginArray();
 
     for (uris) |uri| {
-        var rows = local.query(if (include_content) DOC_SQL else DOC_META_SQL, .{uri}) catch {
+        // LocalDb.query takes its sql at comptime, so the two statements need two call sites
+        var rows = (if (include_content) local.query(DOC_SQL, .{uri}) else local.query(DOC_META_SQL, .{uri})) catch {
             try missing.append(alloc, uri);
             continue;
         };
