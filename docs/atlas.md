@@ -216,8 +216,12 @@ attribution appear in the sources disclosure. Both tiers use the same summary pa
 summaries have not undergone independent quality evaluation.
 
 `atlas-summaries.json` is an optional, gitignored sidecar containing membership
-hashes, source URIs and excerpts, cited sources, model, and generation time. Atlas
-loads it after the map and checks the build timestamp, exact member hashes, counts,
+hashes, source URIs and excerpts, cited sources, model, and generation time. The
+excerpts are nearly all of its ~20 MB, so the generator also writes
+`atlas-summaries-lite.json`: the same entries with source counts in place of the
+sources. Atlas loads the lite file after the map, and fetches the full one only when
+a reader opens a topic's sources (or when the lite file is missing or does not
+verify). Either way it checks the build timestamp, exact member hashes, counts,
 labels, and source membership. A mismatched sidecar offers a map reload. Missing generation, missing topic
 summaries, and loading failures have distinct messages; retry performs a fresh
 request even after a successful but partial response. In every case, the map continues working. It does not download the Atlas twice.

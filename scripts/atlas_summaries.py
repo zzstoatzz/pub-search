@@ -334,6 +334,17 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
     return result
 
 
+def lite(result: dict) -> dict:
+    """The summaries without their source excerpts, which are ~99% of the sidecar's bytes."""
+    def slim(entry: dict) -> dict:
+        context = sum(source.get("role") == "context" for source in entry["sources"])
+        return {**{name: entry[name] for name in ("id", "label", "memberCount", "membershipHash", "summary", "sourceIds")},
+                "memberSourceCount": len(entry["sources"]) - context, "contextSourceCount": context}
+    return {**{name: result[name] for name in ("version", "status", "atlasGeneratedAt", "generatedAt") if name in result},
+            "clusters": [slim(entry) for entry in result.get("clusters", [])],
+            "regions": [slim(entry) for entry in result.get("regions", [])]}
+
+
 def write_preview(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both") -> None:
     output = atlas_path.with_name("atlas-summaries.json")
     try:
@@ -342,6 +353,7 @@ def write_preview(atlas_path: Path, api_key: str, limit: int | None = None, leve
         print(f"summary preview unavailable ({type(exc).__name__})", flush=True)
         result = {"version": VERSION, "status": "unavailable", "clusters": []}
     output.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    output.with_name("atlas-summaries-lite.json").write_text(json.dumps(lite(result), ensure_ascii=False, separators=(",", ":")))
     print(f"summaries: {len(result['clusters'])} clusters, {len(result.get('regions', []))} regions", flush=True)
 
 

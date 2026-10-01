@@ -99,3 +99,14 @@ test('missing summaries and stale maps produce different recovery messages', asy
   await assert.rejects(validate({...data,status:'unavailable'},atlas), /were not generated/);
   await assert.rejects(validate({...data,atlasGeneratedAt:'yesterday'},atlas), error=>error.code==='stale' && /Reload/.test(error.message));
 });
+
+test('the lite sidecar verifies membership without source excerpts', async()=>{
+  const {sources,...entry}=data.clusters[0];
+  const slim={...data,clusters:[{...entry,memberSourceCount:3,contextSourceCount:0}]};
+  assert.deepEqual(await validate(slim,atlas,true),slim.clusters.map(c=>({...c,level:'fine'})));
+  await assert.rejects(validate(slim,atlas), 'a lite entry is not accepted as a full one');
+  for (const [field,value] of [['membershipHash','changed'],['memberSourceCount',2],['contextSourceCount',-1],['label','changed']]) {
+    const changed=structuredClone(slim); changed.clusters[0][field]=value;
+    await assert.rejects(validate(changed,atlas,true));
+  }
+});

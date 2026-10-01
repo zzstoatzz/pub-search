@@ -9,7 +9,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from atlas_summaries import generate, prepare_evidence, sample_members, validate_answer, write_preview
+from atlas_summaries import generate, lite, prepare_evidence, sample_members, validate_answer, write_preview
 
 
 def test_crossposts_do_not_count_as_independent_evidence():
@@ -57,6 +57,22 @@ def test_missing_key_and_legacy_dataset_preserve_atlas(tmp_path):
     write_preview(path, '')
     assert path.read_bytes() == raw
     assert json.loads((tmp_path / 'atlas-summaries.json').read_text())['status'] == 'unavailable'
+    assert json.loads((tmp_path / 'atlas-summaries-lite.json').read_text())['status'] == 'unavailable'
+
+
+def test_lite_sidecar_keeps_verification_fields_and_drops_excerpts():
+    sources = [{'id': i, 'uri': f'at://a/{i}', 'title': 't', 'excerpt': 'x' * 3000, 'role': 'member'} for i in (1, 2, 3)]
+    sources.append({'id': 4, 'uri': 'at://b/4', 'title': 't', 'excerpt': 'y' * 3000, 'role': 'context', 'cosineSimilarity': 0.9})
+    entry = {'level': 'fine', 'id': 7, 'label': 'agents', 'memberCount': 3, 'membershipHash': 'h', 'evidenceHash': 'e',
+             'summary': 'Posts about agents.', 'sourceIds': [1, 4], 'sources': sources, 'usage': {}, 'cached': True}
+    full = {'version': 2, 'status': 'ready', 'atlasGeneratedAt': 'today', 'generatedAt': 'now', 'prompt': 'p',
+            'clusters': [entry], 'regions': [{**entry, 'level': 'coarse'}]}
+    slim = lite(full)
+    assert slim['clusters'] == slim['regions'] == [{'id': 7, 'label': 'agents', 'memberCount': 3, 'membershipHash': 'h',
+                                                    'summary': 'Posts about agents.', 'sourceIds': [1, 4],
+                                                    'memberSourceCount': 3, 'contextSourceCount': 1}]
+    assert {k: slim[k] for k in ('version', 'status', 'atlasGeneratedAt', 'generatedAt')} == {k: full[k] for k in ('version', 'status', 'atlasGeneratedAt', 'generatedAt')}
+    assert 'prompt' not in slim
 
 
 def test_failure_removes_stale_preview(tmp_path):

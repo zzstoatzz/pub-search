@@ -1,6 +1,7 @@
 (function(root) {
   'use strict';
-  async function validate(data, atlas) {
+  // lite: the summaries-only sidecar, whose entries carry source counts in place of the excerpts
+  async function validate(data, atlas, lite) {
     if (data?.version !== 2 || !Array.isArray(data.clusters)) throw Error('Summary data could not be verified.');
     if (data.status !== 'ready') throw Error('Summaries were not generated for this map.');
     if (data.atlasGeneratedAt !== atlas.meta.generatedAt) throw Object.assign(Error('The map and summaries are out of sync. Reload to refresh them.'), {code:'stale'});
@@ -18,10 +19,11 @@
       var seen = new Set();
       for (var c of entries) {
         var actual = known.get(c.id), uris = members.get(c.id);
-        if (!actual || seen.has(c.id) || c.label !== actual.label || c.memberCount !== uris?.length || typeof c.summary !== 'string' || !c.summary.trim() || !Array.isArray(c.sources) || c.sources.length < 3 || !Array.isArray(c.sourceIds) || !c.sourceIds.length) throw Error('Summary data could not be verified.');
+        if (!actual || seen.has(c.id) || c.label !== actual.label || c.memberCount !== uris?.length || typeof c.summary !== 'string' || !c.summary.trim() || (lite ? !Number.isInteger(c.memberSourceCount) || c.memberSourceCount < 3 || !Number.isInteger(c.contextSourceCount) || c.contextSourceCount < 0 : !Array.isArray(c.sources) || c.sources.length < 3) || !Array.isArray(c.sourceIds) || !c.sourceIds.length) throw Error('Summary data could not be verified.');
         seen.add(c.id);
         var hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(uris.slice().sort()))))).map(function(n) { return n.toString(16).padStart(2,'0'); }).join('');
         if (hash !== c.membershipHash) throw Error('Summary data could not be verified.');
+        if (lite) { result.push(Object.assign({}, c, {level:level})); continue; }
         var allowed = new Set(uris), sourceIds = new Set(), memberIds = new Set();
         for (var source of c.sources) {
           var isContext=source.role==='context';
@@ -59,7 +61,8 @@
   }
   var summaries = new Map(), dataset, loading, panel, status, body, button, list, listView;
   var onSelect, onDocument, toUrl, active=null, topics=new Map(), members=new Map(), visible=[], listLimit=20, documentLimit=20;
-  var viewKey='', viewTimer, loadError=null, loaded=false;
+  var viewKey='', viewTimer, loadError=null, loaded=false, sourcesLoading=null, sourcesError=false;
+  var LOCATE_ICON='<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3"/></svg>';
   function key(id,level) { return (level || 'fine')+':'+id; }
   function setOpen(value) {
     panel.hidden=!value;
@@ -80,15 +83,22 @@
     text.hidden=!c; evidence.hidden=!c;
     status.hidden=!!c;
     status.textContent=loadError?.message || (loaded ? 'No summary is available for this topic. You can still browse its documents.' : 'Loading summary…');
-    if(!c && !loaded && !loadError) status.innerHTML='<pub-loading>Reading the topic…</pub-loading>';
+    if(!c && !loaded && !loadError) status.innerHTML='<pub-loading>Loading summary…</pub-loading>';
     var retry=document.getElementById('cluster-summary-retry');
     retry.hidden=!!c || (!loaded && !loadError);
     retry.textContent=loadError?.code==='stale' ? 'Reload map' : 'Retry summary';
     if (!c) return;
     text.textContent=c.summary;
-    var contextCount=c.sources.filter(function(s) { return s.role==='context'; }).length;
-    document.getElementById('cluster-summary-coverage').textContent=(c.sources.length-contextCount)+' of '+c.memberCount.toLocaleString()+' documents'+(contextCount ? ' · '+contextCount+' related source'+(contextCount===1 ? '' : 's') : '')+' · AI summary';
+    var contextCount=c.sources ? c.sources.filter(function(s) { return s.role==='context'; }).length : c.contextSourceCount;
+    document.getElementById('cluster-summary-coverage').textContent=(c.sources ? c.sources.length-contextCount : c.memberSourceCount)+' of '+c.memberCount.toLocaleString()+' documents'+(contextCount ? ' · '+contextCount+' related source'+(contextCount===1 ? '' : 's') : '')+' · AI summary';
     var sources=document.getElementById('cluster-summary-sources'); sources.replaceChildren();
+    if (!c.sources) {
+      if (!evidence.open) return;
+      var note=document.createElement('li');
+      if (sourcesError) note.textContent='Sources could not be loaded. Close and reopen to try again.';
+      else { note.innerHTML='<pub-loading>Gathering sources…</pub-loading>'; loadSources(); }
+      sources.append(note); return;
+    }
     c.sources.forEach(function(s) {
       var li=document.createElement('li'), link=document.createElement('a'); link.textContent=(s.role==='context' ? 'Related context: ' : '')+(s.title || 'Untitled'); safeLink(link,s.url); li.append(link);
       var details=document.createElement('details'), heading=document.createElement('summary'), excerpt=document.createElement('p');
@@ -101,7 +111,7 @@
     items.slice(0,documentLimit).forEach(function(index) {
       var p=dataset.points[index], li=document.createElement('li'), link=document.createElement('a'), locate=document.createElement('button');
       link.textContent=p.title || 'Untitled'; safeLink(link,toUrl(p)); li.append(link);
-      locate.textContent='show on map'; locate.setAttribute('aria-label','Show '+(p.title || 'document')+' on map'); locate.onclick=function() { close(); onDocument(index); }; li.append(locate); target.append(li);
+      locate.innerHTML=LOCATE_ICON; locate.title='Show on map'; locate.setAttribute('aria-label','Show '+(p.title || 'document')+' on map'); locate.onclick=function() { close(); onDocument(index); }; li.append(locate); target.append(li);
     });
     document.getElementById('cluster-documents-more').hidden=items.length<=documentLimit;
   }
@@ -140,14 +150,26 @@
     onSelect(active,focus,members.get(key(id,level)) || []);
     load().then(renderSummary).catch(function() { renderSummary(); });
   }
+  function fetchSidecar(name) {
+    return fetch(name+'?build='+encodeURIComponent(dataset.meta.generatedAt))
+      .then(function(r) { if (!r.ok) throw Error('Summaries could not be loaded. You can still browse the documents.'); return r.json(); });
+  }
+  function loadSources() {
+    if (sourcesLoading) return;
+    sourcesLoading=fetchSidecar('atlas-summaries.json').then(function(d) { return validate(d,dataset); })
+      .then(function(clusters) { clusters.forEach(function(c) { summaries.set(key(c.id,c.level),c); }); })
+      .catch(function() { sourcesError=true; sourcesLoading=null; })
+      .then(renderSummary);
+  }
   function load() {
     if (loading) return loading;
     if (loaded) return Promise.resolve();
     loadError=null;
     renderSummary();
-    loading=fetch('atlas-summaries.json?build='+encodeURIComponent(dataset.meta.generatedAt),{cache:'no-store'})
-      .then(function(r) { if (!r.ok) throw Error('Summaries could not be loaded. You can still browse the documents.'); return r.json(); })
-      .then(function(d) { return validate(d,dataset); })
+    // the full sidecar is mostly source excerpts; summaries come from the
+    // small one, and a deploy that predates it falls back to the full file
+    loading=fetchSidecar('atlas-summaries-lite.json').then(function(d) { return validate(d,dataset,true); })
+      .catch(function() { return fetchSidecar('atlas-summaries.json').then(function(d) { return validate(d,dataset); }); })
       .then(function(clusters) { summaries=new Map(clusters.map(function(c) { return [key(c.id,c.level),c]; })); loaded=true; loadError=null; markSummaries(); })
       .catch(function(error) { loadError=error instanceof TypeError || error instanceof SyntaxError ? Error('Summaries could not be loaded. You can still browse the documents.') : error; loading=null; renderSummary(); throw error; });
     return loading;
@@ -176,10 +198,11 @@
     document.getElementById('cluster-summary-retry').onclick=function() {
       if (loadError?.code==='stale') { location.reload(); return; }
       if (loading && !loaded) return;
-      loaded=false; loading=null;
+      loaded=false; loading=null; sourcesLoading=null; sourcesError=false;
       load().then(renderSummary).catch(function() {});
     };
     document.getElementById('cluster-summary-back').onclick=browse;
+    document.getElementById('cluster-summary-evidence').addEventListener('toggle',function(e) { if (e.target.open) { sourcesError=false; renderSummary(); } });
     document.getElementById('cluster-nearby-more').onclick=function() { listLimit+=20; renderList(); };
     document.getElementById('cluster-documents-more').onclick=function() { documentLimit+=20; renderDocuments(); };
     button.onclick=function() { if(panel.hidden) browse(); else close(); };

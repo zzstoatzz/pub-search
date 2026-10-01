@@ -59,7 +59,7 @@ Never deploy the frontend by calling Wrangler directly.
 Before a manual UI release, download the current generated files into `site/`:
 
 ```sh
-for f in atlas.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json; do
+for f in atlas.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json atlas-summaries-lite.json; do
   curl --fail --silent --show-error --output "site/$f" "https://pub-search.waow.tech/$f" || break
 done
 ```
