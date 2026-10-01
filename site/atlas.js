@@ -370,10 +370,9 @@
 
   // --- animation state ---
   var animating = false;
-  var animFrom = null;
-  var animTo = null;
-  var animStart = 0;
-  var ANIM_DURATION = 600; // ms
+  var animPath = null; // AtlasInteraction.flight between the two views
+  var animStart = null; // rAF time of the first drawn frame; null until then
+  var animDuration = 0; // ms, from the path's length
 
   // --- canvases: three stacked layers ---
   // bg (2D): background fill + nebulae. gl: points, lines, planets. top
@@ -735,6 +734,16 @@
   // strips sample up to ~6% of the wrap width past their u origin.
   var PLANET_TEX_W = 512, PLANET_TEX_BLEED = 128, PLANET_TEX_H = 256;
   var planetTex = new Map(); // point index -> {canvas, theme, speed, phase}
+
+  // Building a planet texture is a canvas, a page of 2D drawing and a
+  // mipmapped GPU upload. A camera flight passes dozens of documents it will
+  // not stop at, so new textures are rationed per frame; a document without
+  // one yet simply shows as its plain point until its turn.
+  var planetTexBudget = 0;
+  function planetTextureReady(i) {
+    var e = planetTex.get(i);
+    return !!e && e.theme === (frameDark ? 'dark' : 'light');
+  }
 
   function getPlanetTexture(i) {
     var theme = frameDark ? 'dark' : 'light';
@@ -1564,11 +1573,13 @@
       var tSec = performance.now() / 1000;
       // nearest-to-viewport-center docs win the planet slots
       var cands = getPlanetCandidates(xMin, yMin, xMax, yMax, pointR, small ? 48 : 80);
+      planetTexBudget = animating ? 1 : 6;
       if (atlasGL) {
         atlasGL.beginPlanets(W, H, dpr, dark);
         var texSpan = PLANET_TEX_W / (PLANET_TEX_W + PLANET_TEX_BLEED);
         for (var c = 0; c < cands.length; c++) {
           var pcI = cands[c].i;
+          if (!planetTextureReady(pcI) && planetTexBudget-- <= 0) continue;
           var pcT = getPlanetTexture(pcI);
           var pcRot = (tSec * pcT.speed + pcT.phase) % (Math.PI * 2);
           atlasGL.drawPlanet(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, pcRot, {
@@ -1584,6 +1595,7 @@
         }
       } else {
         for (var c = 0; c < cands.length; c++) {
+          if (!planetTextureReady(cands[c].i) && planetTexBudget-- <= 0) continue;
           drawPlanet(cands[c].i, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, tSec);
         }
       }
@@ -1917,14 +1929,25 @@
 
   // --- animation loop ---
   function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  // leaves from rest (zero initial speed) but is a third of the way within a
+  // fifth of the time, then settles: a symmetric ease-in-out sat still for
+  // the first ~130ms and read as lag
+  function easeFlight(t) { return 1 - Math.pow(1 - Math.pow(t, 1.4), 3); }
 
-  function tickAnimation() {
+  // visible width in data units, the flight path's notion of zoom
+  var VIEW_SPAN = 1 / 0.42;
+
+  function tickAnimation(now) {
     if (!animating) return;
-    var t = Math.min(1, (Date.now() - animStart) / ANIM_DURATION);
-    var e = easeOutCubic(t);
-    view.zoom = animFrom.zoom + (animTo.zoom - animFrom.zoom) * e;
-    view.panX = animFrom.panX + (animTo.panX - animFrom.panX) * e;
-    view.panY = animFrom.panY + (animTo.panY - animFrom.panY) * e;
+    // the clock starts on the first frame that draws, not at the click: the
+    // click's own work (dimming 80k points, building the panel) would
+    // otherwise be spent out of the flight and the first frame would jump
+    if (animStart === null) animStart = now;
+    var t = Math.min(1, (now - animStart) / animDuration);
+    var at = animPath.at(easeFlight(t));
+    view.zoom = VIEW_SPAN / at.w;
+    view.panX = -at.x;
+    view.panY = -at.y;
     view.dirty = true;
     if (t >= 1) animating = false;
   }
@@ -1933,16 +1956,19 @@
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       animating=false;view.zoom=targetZoom;view.panX=-targetX;view.panY=-targetY;markDirty();return;
     }
-    animFrom = { zoom: view.zoom, panX: view.panX, panY: view.panY };
-    animTo = { zoom: targetZoom, panX: -targetX, panY: -targetY };
-    animStart = Date.now();
+    animPath = AtlasInteraction.flight(
+      { x: -view.panX, y: -view.panY, w: VIEW_SPAN / view.zoom },
+      { x: targetX, y: targetY, w: VIEW_SPAN / targetZoom });
+    // short hops stay quick; a long zoom-and-pan gets time to read as travel
+    animDuration = Math.max(300, Math.min(850, 240 + 180 * animPath.length));
+    animStart = null;
     animating = true;
     scheduleFrame();
   }
 
-  function loop() {
+  function loop(now) {
     frameRequested = false;
-    tickAnimation();
+    tickAnimation(now);
     render();
     updateSelection();
 
@@ -2551,7 +2577,7 @@
               selectedIndex = idx;
               if (targetZ < CARD_START) showTooltip(idx, sx, sy);
               else markDirty();
-            }, ANIM_DURATION + 50);
+            }, animDuration + 50);
           }
           pendingUri = null;
         }

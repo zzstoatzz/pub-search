@@ -19,6 +19,29 @@
     return {zoom:zoom,x:(left+right)/2+(width/2-(viewport.left+viewport.right)/2)/(base*zoom),
       y:(top+bottom)/2+(height/2-(viewport.top+viewport.bottom)/2)/(base*zoom)};
   }
+  // Smooth zoom-and-pan between two views (van Wijk & Nuij 2003, the path
+  // d3.interpolateZoom uses). A view is {x, y, w}: centre and visible width
+  // in data units. Interpolating centre and zoom independently makes the
+  // destination sweep off screen mid-flight when the zoom changes a lot;
+  // this path pulls back before a long pan and keeps apparent speed even.
+  // Returns {length, at(t)} — length is the perceptual distance, for timing.
+  function flight(from, to) {
+    var rho=Math.SQRT2, rho2=2, rho4=4;
+    var dx=to.x-from.x, dy=to.y-from.y, d2=dx*dx+dy*dy, w0=from.w, w1=to.w;
+    if (d2 < 1e-12) {
+      var zoomOnly=Math.log(w1/w0)/rho;
+      return {length:Math.abs(zoomOnly), at:function(t) { return {x:from.x+t*dx, y:from.y+t*dy, w:w0*Math.exp(rho*t*zoomOnly)}; }};
+    }
+    var d1=Math.sqrt(d2);
+    var b0=(w1*w1-w0*w0+rho4*d2)/(2*w0*rho2*d1), b1=(w1*w1-w0*w0-rho4*d2)/(2*w1*rho2*d1);
+    var r0=Math.log(Math.sqrt(b0*b0+1)-b0), r1=Math.log(Math.sqrt(b1*b1+1)-b1);
+    var S=(r1-r0)/rho, coshr0=Math.cosh(r0), sinhr0=Math.sinh(r0);
+    return {length:Math.abs(S), at:function(t) {
+      if (t >= 1) return {x:to.x, y:to.y, w:w1};
+      var s=t*S, u=w0/(rho2*d1)*(coshr0*Math.tanh(rho*s+r0)-sinhr0);
+      return {x:from.x+u*dx, y:from.y+u*dy, w:w0*coshr0/Math.cosh(rho*s+r0)};
+    }};
+  }
   function reach(type) { return type === 'mouse' ? 14 : 24; }
   function pick(nodes, x, y, type) {
     var best = null, score = Infinity;
@@ -88,5 +111,5 @@
     canvas.addEventListener('lostpointercapture',state.abort);
     canvas.addEventListener('pointerleave',state.leave);
   }
-  root.AtlasInteraction = {frameTopic:frameTopic,attach:attach,gesture:gesture,pick:pick,reach:reach};
+  root.AtlasInteraction = {frameTopic:frameTopic,flight:flight,attach:attach,gesture:gesture,pick:pick,reach:reach};
 })(typeof window === 'undefined' ? globalThis : window);

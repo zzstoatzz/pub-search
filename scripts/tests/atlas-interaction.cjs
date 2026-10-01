@@ -118,3 +118,29 @@ test('isolated outliers do not pull the camera away from the cluster core',()=>{
   const target=globalThis.AtlasInteraction.frameTopic(points,points.map((_,i)=>i),{left:24,top:84,right:366,bottom:360},390,844,.5,500);
   assert.ok(target.zoom>20);
 });
+
+test('camera flight keeps its destination on screen and pulls back for long pans', () => {
+  const {flight}=globalThis.AtlasInteraction;
+  const offset=(view,to)=>Math.hypot(to.x-view.x,to.y-view.y)/view.w;
+  // overview to a nearby cluster, 27x zoom: the old independent lerp sent the cluster ~6x further off-centre mid-flight
+  const from={x:0,y:0,w:2.38}, to={x:0.3,y:0.2,w:0.087};
+  const path=flight(from,to);
+  assert.deepEqual(path.at(0),from);
+  assert.deepEqual(path.at(1),to);
+  let peak=0, previous=from.w;
+  for (let i=0;i<=100;i++) {
+    const view=path.at(i/100);
+    peak=Math.max(peak,offset(view,to));
+    assert.ok(view.w<=previous+1e-9,'zooming in never backs out');
+    previous=view.w;
+  }
+  assert.ok(peak<0.6,'destination stays inside the view: peak offset '+peak+' view widths');
+  // two tight views far apart: zoom out to travel, then back in
+  const far=flight({x:0,y:0,w:0.05},{x:1,y:0,w:0.05});
+  assert.ok(far.at(0.5).w>0.5,'long pan pulls back');
+  assert.ok(far.length>path.length,'longer journeys report a longer length');
+  // zoom with no pan
+  const still=flight({x:1,y:1,w:1},{x:1,y:1,w:0.25});
+  assert.deepEqual(still.at(1),{x:1,y:1,w:0.25});
+  assert.ok(Math.abs(still.at(0.5).w-0.5)<1e-9,'zoom interpolates geometrically');
+});
