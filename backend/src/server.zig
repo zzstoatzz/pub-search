@@ -1465,7 +1465,12 @@ fn handleDocument(request: *http.Server.Request, target: []const u8) !void {
         return;
     }
 
-    const body = documents.fetch(alloc, uris, doc_include_undiscoverable) catch {
+    // content=false: metadata only (cover image, url, title) — what a list of
+    // documents needs, without the article bodies
+    const content_pref = parseQueryParam(alloc, target, "content") catch null;
+    const include_content = content_pref == null or !mem.eql(u8, content_pref.?, "false");
+
+    const body = documents.fetch(alloc, uris, doc_include_undiscoverable, include_content) catch {
         try request.respond("{\"error\":\"replica not ready, retry shortly\"}", .{ .status = .service_unavailable, .extra_headers = json_hdr });
         return;
     };

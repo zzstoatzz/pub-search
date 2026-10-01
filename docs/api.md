@@ -124,6 +124,7 @@ search.
 | param | type | required | description |
 |-------|------|----------|-------------|
 | `uri` | string | yes | comma-separated AT-URIs, max 25 per request |
+| `content` | string | no | `false` omits each document's `content` and skips reading it — for callers that only need metadata such as `coverImage` or `url` |
 
 **response:**
 ```json

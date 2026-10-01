@@ -17,17 +17,26 @@ const visibility = @import("../visibility.zig");
 
 pub const MAX_URIS = 25;
 
-const DOC_SQL =
+/// `body` is the column expression for the document text. Metadata-only
+/// requests pass `''` so SQLite never reads the body: it is the last and by
+/// far the largest column, and a list of 20 thumbnails does not need 20 articles.
+fn docSql(comptime body: []const u8) []const u8 {
+    return
     \\SELECT d.uri, d.did, d.rkey, d.title, COALESCE(d.created_at, ''),
     \\  d.platform, COALESCE(NULLIF(d.base_path, ''), p.base_path, ''),
     \\  COALESCE(d.path, ''), d.has_publication, COALESCE(p.name, ''),
-    \\  COALESCE(d.cover_image, ''), d.content,
+    \\  COALESCE(d.cover_image, ''),
+    ++ " " ++ body ++ ",\n" ++
     \\  COALESCE(d.publication_uri, '')
     \\FROM documents d LEFT JOIN publications p ON d.publication_uri = p.uri
     \\WHERE d.uri = ?
     \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
     \\AND (d.url_dead IS NULL OR d.url_dead = 0)
-;
+    ;
+}
+
+const DOC_SQL = docSql("d.content");
+const DOC_META_SQL = docSql("''");
 
 /// Same visibility rule as search results: labeled (bulk-generated) authors
 /// are excluded unless explicitly kept — a direct fetch must not resurface
@@ -39,8 +48,9 @@ fn visible(did: []const u8) bool {
 
 /// Render the response body for a list of AT-URIs. Found documents land in
 /// `documents` (in request order); anything unknown, policy-excluded, or
-/// malformed lands in `missing`.
-pub fn fetch(alloc: Allocator, uris: []const []const u8, include_undiscoverable: bool) ![]const u8 {
+/// malformed lands in `missing`. With `include_content` false the `content`
+/// field is omitted and the body column is not read.
+pub fn fetch(alloc: Allocator, uris: []const []const u8, include_undiscoverable: bool, include_content: bool) ![]const u8 {
     const local = db.getLocalDb() orelse return error.LocalNotReady;
 
     var output: std.Io.Writer.Allocating = .init(alloc);
@@ -54,7 +64,7 @@ pub fn fetch(alloc: Allocator, uris: []const []const u8, include_undiscoverable:
     try jw.beginArray();
 
     for (uris) |uri| {
-        var rows = local.query(DOC_SQL, .{uri}) catch {
+        var rows = local.query(if (include_content) DOC_SQL else DOC_META_SQL, .{uri}) catch {
             try missing.append(alloc, uri);
             continue;
         };
@@ -123,8 +133,10 @@ pub fn fetch(alloc: Allocator, uris: []const []const u8, include_undiscoverable:
         }
         try jw.endArray();
 
-        try jw.objectField("content");
-        try jw.write(row.text(11));
+        if (include_content) {
+            try jw.objectField("content");
+            try jw.write(row.text(11));
+        }
         try jw.endObject();
     }
 
@@ -151,6 +163,13 @@ pub fn splitUris(alloc: Allocator, raw: []const u8) ![]const []const u8 {
         try list.append(alloc, trimmed);
     }
     return list.items;
+}
+
+test "metadata query keeps the column order and never reads the body" {
+    const t = std.testing;
+    try t.expect(std.mem.indexOf(u8, DOC_SQL, "d.content,") != null);
+    try t.expect(std.mem.indexOf(u8, DOC_META_SQL, "content") == null);
+    try t.expectEqual(std.mem.count(u8, DOC_SQL, ","), std.mem.count(u8, DOC_META_SQL, ","));
 }
 
 test "splitUris trims, drops empties, caps at MAX_URIS" {

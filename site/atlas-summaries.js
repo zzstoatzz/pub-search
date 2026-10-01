@@ -120,7 +120,7 @@
     var wanted=uris.filter(function(uri) { return !coverUrls.has(uri); }), requests=[];
     wanted.forEach(function(uri) { coverUrls.set(uri,''); });
     // /api/document takes at most 25 uris per request
-    for (var i=0;i<wanted.length;i+=25) requests.push(fetch('/api/document?uri='+encodeURIComponent(wanted.slice(i,i+25).join(',')))
+    for (var i=0;i<wanted.length;i+=25) requests.push(fetch('/api/document?content=false&uri='+encodeURIComponent(wanted.slice(i,i+25).join(',')))
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(body) { parseCovers(body).forEach(function(url,uri) { coverUrls.set(uri,url); }); })
       .catch(function() {}));
