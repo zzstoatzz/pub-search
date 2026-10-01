@@ -386,7 +386,7 @@ canvas:active {
 #cluster-summary-back { padding:0 10px; margin-left:-10px; }
 #cluster-summary-close { width:var(--ctl); font-size:20px; line-height:1; }
 #cluster-summary-back:hover, #cluster-summary-close:hover { background:var(--bg-subtle); color:var(--text-bright); }
-#cluster-summary-back:focus-visible, #cluster-summary-close:focus-visible { outline:2px solid var(--tooltip-border); outline-offset:-2px; }
+#cluster-summary-back:focus-visible, #cluster-summary-close:focus-visible { outline:1px solid var(--tooltip-border); outline-offset:-1px; }
 #cluster-summary-title { font:600 16px/1.4 monospace; margin:16px 0 8px; color:var(--text-bright); }
 #cluster-summary-text { font:15px/1.65 monospace; margin-bottom:18px; }
 #cluster-summary-status { padding:12px 0; line-height:1.5; }
