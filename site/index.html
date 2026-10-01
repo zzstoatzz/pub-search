@@ -1261,7 +1261,12 @@
             #stats:empty { display: none; }
             .corpus-count { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
             @media (max-width: 480px) {
-                .corpus-count { order: 3; flex-basis: 100%; margin-top: 0.15rem; }
+                .site-header { gap: 0.25rem; }
+                .resource-links { gap: 0.25rem; }
+                .resource-links a, .corpus-count { font-size: 10px; }
+            }
+            @media (max-width: 360px) {
+                .site-header h1 { font-size: 10px; }
             }
             .resource-links a:focus-visible, .site-footer a:focus-visible, .syntax-help-btn:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 3px; }
         </style>
@@ -1280,7 +1285,7 @@
                     <a href="https://tangled.sh/@zzstoatzz.io/pub-search" aria-label="Source code" target="_blank" rel="noopener">[src]</a>
                     <a href="/llms.txt" title="API and integration guide for agents" aria-label="llms.txt — API and integration guide for agents">[llms.txt]</a>
                 </nav>
-                <a class="corpus-count" id="corpus-stats" href="/stats" aria-live="polite"><pub-loading>Reading the collection…</pub-loading></a>
+                <a class="corpus-count" id="corpus-stats" href="/stats" aria-live="polite" aria-label="Collection statistics">[stats]</a>
                 <button
                     class="lf-settings-btn"
                     id="settings-btn"
@@ -2578,7 +2583,7 @@
                     headerStats.setAttribute("aria-label", `${exact} documents indexed — view stats`);
                 })
                 .catch(() => {
-                    document.getElementById("corpus-stats").textContent = "corpus unavailable";
+                    document.getElementById("corpus-stats").title = "Document count unavailable — view stats";
                 });
         </script>
     </body>
