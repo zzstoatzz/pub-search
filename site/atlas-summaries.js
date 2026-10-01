@@ -207,7 +207,7 @@
     document.getElementById('cluster-documents-more').onclick=function() { documentLimit+=20; renderDocuments(); };
     button.onclick=function() { if(panel.hidden) browse(); else close(); };
     document.addEventListener('keydown',function(e) { if(e.key==='Escape' && !panel.hidden) close(); });
-    setTimeout(function() { load().then(renderSummary).catch(function() {}); },1500);
+    load().then(renderSummary).catch(function() {});
     if (new URLSearchParams(location.search).has('topics')) browse();
   }
   root.AtlasSummaries={init:init,open:open,close:close,updateView:updateView,nearby:nearby,hitTest:hitTest,validate:validate};
