@@ -95,22 +95,24 @@ canvas:active {
 }
 
 .header .nav {
-  font-size: 11px;
+  --ctl: 36px;
+  font-size: 12px;
   display: flex;
-  gap: 12px;
+  gap: 4px;
   align-items: center;
 }
 
 .header .nav a {
-  color: var(--text-dim);
+  color: var(--text-secondary);
   text-decoration: none;
-  min-height: 44px;
+  min-height: var(--ctl);
+  padding: 0 10px;
   display: flex;
   align-items: center;
 }
 
 .header .nav a:hover {
-  color: var(--text-secondary);
+  color: var(--text-bright);
 }
 
 .theme-toggle {
@@ -301,7 +303,7 @@ canvas:active {
 @media (max-width: 600px) {
   .header { padding: 8px 10px; }
   .header h1 { font-size: 11px; }
-  .header .nav { gap: 4px; font-size: 10px; }
+  .header .nav { --ctl: 44px; gap: 2px; }
   #search-input { width: 80px; font-size: 10px; padding: 4px 6px; }
   #search-input:focus { width: 120px; }
   .bottom-bar { padding: 4px 8px 6px; gap: 2px; }
@@ -377,9 +379,15 @@ canvas:active {
 #cluster-summary-button { font:inherit; color:var(--text-secondary); background:none; border:0; cursor:pointer; min-height:44px; padding:0 5px; }
 #cluster-summary { position:fixed; z-index:35; top:72px; right:16px; width:360px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; touch-action:pan-y; padding:0 18px 18px; background:var(--tooltip-bg); color:var(--text); border:1px solid var(--tooltip-border); border-radius:16px; backdrop-filter:blur(16px); }
 #cluster-summary[hidden], #cluster-summary [hidden] { display:none; }
-.cluster-summary-header { position:sticky; top:0; z-index:1; background:var(--bg); margin:0 -18px 8px; padding:0 10px 0 18px; display:flex; justify-content:space-between; align-items:center; min-height:48px; color:var(--text-secondary); }
-#cluster-summary-close { color:var(--text); background:none; border:0; width:44px; height:44px; font-size:24px; cursor:pointer; }
-#cluster-summary-title { font:600 16px/1.5 monospace; margin:18px 0 10px; color:var(--text-bright); }
+.cluster-summary-header { --ctl:36px; position:sticky; top:0; z-index:1; background:var(--bg); margin:0 -18px; padding:6px 6px 6px 18px; display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid var(--tooltip-border); font-size:12px; color:var(--text-secondary); }
+#cluster-summary-heading { line-height:var(--ctl); }
+#cluster-summary-back, #cluster-summary-close { font:inherit; height:var(--ctl); background:none; border:0; border-radius:8px; color:var(--text-secondary); cursor:pointer; }
+/* negative margin puts the label, not the hit area, on the panel's text edge */
+#cluster-summary-back { padding:0 10px; margin-left:-10px; }
+#cluster-summary-close { width:var(--ctl); font-size:20px; line-height:1; }
+#cluster-summary-back:hover, #cluster-summary-close:hover { background:var(--bg-subtle); color:var(--text-bright); }
+#cluster-summary-back:focus-visible, #cluster-summary-close:focus-visible { outline:2px solid var(--tooltip-border); outline-offset:-2px; }
+#cluster-summary-title { font:600 16px/1.4 monospace; margin:16px 0 8px; color:var(--text-bright); }
 #cluster-summary-text { font:15px/1.65 monospace; margin-bottom:18px; }
 #cluster-summary-status { padding:12px 0; line-height:1.5; }
 #cluster-summary-evidence { border-top:1px solid var(--tooltip-border); padding-top:6px; }
@@ -391,10 +399,10 @@ canvas:active {
 #cluster-summary-sources a { color:var(--text-bright); display:block; padding:6px 0; }
 #cluster-summary-sources details { color:var(--text-secondary); font-size:12px; }
 #cluster-summary-sources p { white-space:pre-wrap; line-height:1.6; }
-@media(max-width:599px) { #cluster-summary { top:auto; bottom:0; left:0; right:0; width:100%; max-width:none; max-height:55dvh; padding-bottom:max(18px,env(safe-area-inset-bottom)); border-radius:16px 16px 0 0; } #cluster-summary-text { font-size:14px; } }
+@media(max-width:599px) { #cluster-summary { top:auto; bottom:0; left:0; right:0; width:100%; max-width:none; max-height:55dvh; padding-bottom:max(18px,env(safe-area-inset-bottom)); border-radius:16px 16px 0 0; } .cluster-summary-header { --ctl:44px; padding:4px 4px 4px 18px; } #cluster-summary-button { min-height:44px; padding:0 16px; } #cluster-summary-text { font-size:14px; } }
 
-#cluster-summary-button { pointer-events:auto; min-height:44px; padding:0 16px; border:1px solid var(--tooltip-border); border-radius:24px; background:var(--tooltip-bg); color:var(--text-bright); box-shadow:0 2px 12px #0003; }
-#cluster-summary-back, #cluster-summary-retry, #cluster-nearby-more, #cluster-documents-more, #node-detail-cluster { font:inherit; color:var(--text); background:var(--bg-subtle); border:1px solid var(--tooltip-border); border-radius:8px; padding:10px 12px; min-height:44px; cursor:pointer; }
+#cluster-summary-button { pointer-events:auto; min-height:36px; padding:0 14px; font-size:12px; border:1px solid var(--tooltip-border); border-radius:24px; background:var(--tooltip-bg); color:var(--text-bright); box-shadow:0 2px 12px #0003; }
+#cluster-summary-retry, #cluster-nearby-more, #cluster-documents-more, #node-detail-cluster { font:inherit; color:var(--text); background:var(--bg-subtle); border:1px solid var(--tooltip-border); border-radius:8px; padding:10px 12px; min-height:44px; cursor:pointer; }
 #node-detail-cluster { display:block; margin:10px 0; text-align:left; }
 #node-detail-cluster[hidden] { display:none; }
 #cluster-nearby, #cluster-documents { list-style:none; }
@@ -402,19 +410,19 @@ canvas:active {
 #cluster-nearby button span, #cluster-nearby button small { display:block; }
 #cluster-nearby button small { color:var(--text-secondary); margin-top:6px; }
 #cluster-nearby button:hover { background:var(--bg-subtle); }
-.cluster-help, #cluster-nearby-empty { margin:12px 0; line-height:1.6; color:var(--text-secondary); }
+.cluster-help, #cluster-nearby-empty { margin:14px 0 6px; line-height:1.6; color:var(--text-secondary); }
 #cluster-document-count { font:inherit; margin:18px 0 4px; color:var(--text-secondary); }
 #cluster-documents li { padding:10px 0; border-top:1px solid var(--tooltip-border); }
 #cluster-documents a { display:block; color:var(--text); line-height:1.6; overflow-wrap:anywhere; padding:6px 0; }
 #cluster-documents button { background:none; color:var(--text-secondary); border:0; font:inherit; min-height:44px; cursor:pointer; text-decoration:underline; }
 
 #finder-trigger {
-  display:flex; align-items:center; gap:10px; min-height:44px; padding:0 15px;
+  display:flex; align-items:center; gap:8px; min-height:var(--ctl); padding:0 14px; margin-right:4px;
   border:1px solid var(--tooltip-border); border-radius:24px; background:var(--tooltip-bg);
-  color:var(--text-bright); font:500 13px monospace; cursor:pointer; backdrop-filter:blur(16px);
+  color:var(--text-bright); font:inherit; cursor:pointer; backdrop-filter:blur(16px);
 }
-#finder-trigger > span {font-size:27px;line-height:1;color:#95cfdb}
-#finder-trigger kbd {font:11px monospace;color:var(--text-secondary);padding-left:16px}
+#finder-trigger > span {font-size:18px;line-height:1;color:#95cfdb}
+#finder-trigger kbd {font:11px monospace;color:var(--text-secondary);padding-left:8px}
 #finder-trigger:disabled {opacity:.5;cursor:wait}
 #atlas-finder {
   --finder-accent:#95cfdb; --finder-hover:#232d38;
@@ -475,7 +483,7 @@ canvas:active {
 [data-theme=light] .finder-symbol[data-kind=publication] {color:#92611c}
 [data-theme=light] .finder-symbol[data-kind=document] {color:#176779}
 @media(max-width:600px) {
-  #finder-trigger {padding:0 12px;gap:7px;font-size:13px;min-height:44px}
+  #finder-trigger {margin-right:0}
   #finder-trigger kbd {display:none}
   .header .nav>a {display:none}
   #atlas-finder {inset:0;transform:none;width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding-top:env(safe-area-inset-top)}
@@ -532,3 +540,4 @@ canvas:active {
 .loading-overlay.hidden pub-loading { display:none; }
 .loading-overlay p { max-width:32rem; padding:0 24px; text-align:center; line-height:1.6; }
 .loading-overlay button { font:inherit; padding:12px 20px; border:1px solid var(--text-dim); border-radius:24px; background:var(--bg); color:var(--text); cursor:pointer; }
+[data-theme=light] #finder-trigger > span {color:#176779}

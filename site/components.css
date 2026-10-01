@@ -413,13 +413,17 @@ h1 .lf-settings-btn {
 
 /* atlas page sits in .header .nav with its own 44pt tap-target conventions */
 .header .nav .lf-settings-btn {
-  padding: 11px;
+  padding: 0;
   margin-left: 0;
-  min-width: 44px;
-  min-height: 44px;
+  width: var(--ctl, 44px);
+  height: var(--ctl, 44px);
 }
 
-.header .nav .lf-settings-btn svg { width: 20px; height: 20px; }
+.header .nav .lf-settings-btn svg { width: 16px; height: 16px; }
+
+@media (max-width: 600px) {
+  .header .nav .lf-settings-btn svg { width: 18px; height: 18px; }
+}
 
 /* ---------- row overflow "⋯" button (inline at end of meta line) ---------- */
 
