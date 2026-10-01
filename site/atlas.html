@@ -30,7 +30,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="atlas.css?build=loading-1">
+  <link rel="stylesheet" href="atlas.css?build=heading-1">
   <link rel="stylesheet" href="components.css?v=1782991000">
   <script src="loading.js" defer></script>
 </head>
@@ -85,7 +85,7 @@
   </div>
 
   <section id="cluster-summary" aria-label="Cluster summary" hidden>
-    <header class="cluster-summary-header"><span>topics</span><button id="cluster-summary-back" hidden>‹ topics in view</button><button id="cluster-summary-close" aria-label="Close summary">×</button></header>
+    <header class="cluster-summary-header"><span id="cluster-summary-heading">topics in view</span><button id="cluster-summary-back" hidden>‹ topics in view</button><button id="cluster-summary-close" aria-label="Close summary">×</button></header>
     <div id="cluster-nearby-view">
       <p class="cluster-help">Choose a topic to see its documents.</p>
       <p id="cluster-nearby-empty">No topics here. Pan or zoom out to find more.</p>
@@ -116,9 +116,9 @@
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
   <script src="atlas-interaction.js"></script>
-  <script src="atlas-summaries.js?build=loading-1"></script>
-  <script src="atlas-finder.js?build=loading-1"></script>
-  <script src="atlas.js?build=loading-1"></script>
+  <script src="atlas-summaries.js?build=heading-1"></script>
+  <script src="atlas-finder.js?build=heading-1"></script>
+  <script src="atlas.js?build=heading-1"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
       window.LeafletUI.openSettings();

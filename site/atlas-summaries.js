@@ -125,7 +125,7 @@
   }
   function browse() {
     active=null; onSelect(null); setOpen(true); listView.hidden=false; body.hidden=true; status.hidden=true;
-    document.getElementById('cluster-summary-back').hidden=true;
+    document.getElementById('cluster-summary-back').hidden=true; document.getElementById('cluster-summary-heading').hidden=false;
     document.getElementById('cluster-summary-retry').hidden=true;
     panel.scrollTop=0; renderList(); document.getElementById('cluster-summary-close').focus({preventScroll:true});
   }
@@ -133,7 +133,7 @@
     level=level || 'fine';
     var c=topics.get(key(id,level)); if (!panel || !c) return;
     active={id:id,level:level}; documentLimit=20; setOpen(true); listView.hidden=true; body.hidden=false;
-    document.getElementById('cluster-summary-back').hidden=false;
+    document.getElementById('cluster-summary-back').hidden=false; document.getElementById('cluster-summary-heading').hidden=true;
     document.getElementById('cluster-summary-title').textContent=c.label;
     document.getElementById('cluster-summary-evidence').open=false;
     renderSummary(); renderDocuments(); panel.scrollTop=0; document.getElementById('cluster-summary-back').focus({preventScroll:true});
