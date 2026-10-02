@@ -2,7 +2,12 @@
   'use strict';
   var names={region:'Regions',topic:'Topics',publication:'Publications',document:'Documents'};
   var glyphs={region:'◎',topic:'◌',publication:'▤',document:'▧'};
-  function normalize(s) { return (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim(); }
+  function normalize(s) {
+    s = s || '';
+    // most titles are plain ASCII, where the unicode passes are identity
+    if (!/[^\x00-\x7f]/.test(s)) return s.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+    return s.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+  }
   function rank(title,q) {
     if (!q) return 3;
     if (title===q) return 0;
@@ -17,7 +22,7 @@
       entries.push({kind:level==='fine'?'topic':'region',id:c.id,title:c.label,text:normalize(c.label),count:c.count,parent:c.parent,breadcrumb:level==='fine'?(regions.get(c.parent)||'Atlas'):'Atlas'});
     }); });
     (data.publications||[]).forEach(function(p,i) { entries.push({kind:'publication',id:p.basePath,title:p.name||p.basePath,text:normalize((p.name||'')+' '+p.basePath),exact:normalize(p.name||p.basePath),count:p.count,basePath:p.basePath,breadcrumb:p.basePath}); });
-    data.points.forEach(function(p,i) { entries.push({kind:'document',id:i,title:p.title||'Untitled document',text:normalize(p.title),topic:p.clusterFine,region:p.clusterCoarse,basePath:p.basePath,uri:p.uri,breadcrumb:[topics.get(p.clusterFine),p.basePath].filter(Boolean).join(' / ')}); });
+    data.points.forEach(function(p,i) { entries.push({kind:'document',id:i,title:p.title||'Untitled document',raw:p.title,topic:p.clusterFine,region:p.clusterCoarse,basePath:p.basePath,uri:p.uri,breadcrumb:[topics.get(p.clusterFine),p.basePath].filter(Boolean).join(' / ')}); });
     return entries;
   }
   function search(entries,query,scope,kind) {
@@ -28,7 +33,11 @@
       if (scope.kind==='region') return e.kind==='topic' && e.parent===scope.id;
       if (scope.kind==='topic') return e.kind==='document' && e.topic===scope.id;
       return e.kind==='document' && e.basePath===scope.basePath;
-    }).map(function(e) { return {entry:e,rank:rank(e.exact===q?q:e.text,q)}; })
+    }).map(function(e) {
+      // document titles are normalized on the first query that reaches them, not at load
+      if (q && e.text===undefined) e.text=normalize(e.raw);
+      return {entry:e,rank:rank(e.exact===q?q:e.text,q)};
+    })
       .filter(function(r) { return r.rank>=0; })
       .sort(function(a,b) { return a.rank-b.rank || (b.entry.count||0)-(a.entry.count||0) || a.entry.title.localeCompare(b.entry.title); });
   }
@@ -38,7 +47,14 @@
     return '/api/search?mode='+(author&&!q?'keyword':'hybrid')+'&format=v2&limit=30&q='+encodeURIComponent(q)+(author?'&author='+encodeURIComponent(author):'');
   }
   function init(data,onSelect) {
-    var entries=index(data), byUri=new Map(entries.filter(function(e) { return e.uri; }).map(function(e) { return [e.uri,e]; }));
+    var entries=null, byUri=null;
+    // indexing every title is the largest avoidable cost at load, so it waits for idle time or the first open
+    function build() {
+      if(entries) return;
+      entries=index(data);
+      byUri=new Map(entries.filter(function(e) { return e.uri; }).map(function(e) { return [e.uri,e]; }));
+    }
+    if(window.requestIdleCallback) requestIdleCallback(build,{timeout:8000}); else setTimeout(build,3000);
     var dialog=document.getElementById('atlas-finder'), input=document.getElementById('search-input');
     var results=document.getElementById('finder-results'), status=document.getElementById('finder-status');
     var trail=document.getElementById('finder-trail'), filters=document.getElementById('finder-filters');
@@ -78,6 +94,7 @@
       results.scrollTop=0;
     }
     function render() {
+      build();
       clearTimeout(timer);timer=null;
       cancelRequest();trail.replaceChildren();trail.hidden=!scope;
       var home=text('button','Atlas');home.onclick=function(){scope=null;scopeStack=[];kind=null;input.value='';render();input.focus();};trail.append(home);

@@ -90,8 +90,17 @@ is lost. Manual input stops automatic camera animation.
 
 Planet candidates come from visible cells of the spatial index. Their positions,
 radii, and opacity weights are retained while planets rotate, then recomputed
-when the camera, viewport, geometry, or filters change. Other scene layers still
-redraw during rotation; this is not a full renderer rewrite.
+when the camera, viewport, geometry, or filters change.
+
+While the camera is still, the only thing that changes is the globes'
+rotation. Those frames replay the last frame's GL scene (points, lines, planets)
+and leave the 2D layers untouched: nebulae are not recomposited and labels are
+not re-measured. Any `markDirty()`, a theme change, or an unfinished card unfurl
+forces a full frame. `atlas._debug()` reports `fullFrames` and `spinFrames`.
+
+At load, the finder builds its index in idle time (or on first open) and
+normalizes document titles on the first query that reaches them; connection
+lines are built in idle time, since they only show from zoom 2.5.
 
 Run gesture regressions with `node scripts/tests/atlas-interaction.cjs`.
 Serve the repository root with `python3 -m http.server 8789`, then open

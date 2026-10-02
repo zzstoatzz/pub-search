@@ -1154,6 +1154,72 @@
   var planetLayout = null;
   var planetLayoutBuilds = 0;
 
+  // what the last full frame drew in GL. While the camera is still, the only
+  // thing that changes is the globes' rotation, so spin frames replay this and
+  // leave the 2D layers (nebulae, labels, cards) as they are.
+  var glScene = null;
+  var spinPending = false;
+  var spinFrames = 0;
+
+  function drawDocPlanets(cands, tSec) {
+    atlasGL.beginPlanets(W, H, dpr, frameDark);
+    var texSpan = PLANET_TEX_W / (PLANET_TEX_W + PLANET_TEX_BLEED);
+    for (var c = 0; c < cands.length; c++) {
+      var pcI = cands[c].i;
+      if (!planetTextureReady(pcI) && planetTexBudget-- <= 0) continue;
+      var pcT = getPlanetTexture(pcI);
+      var pcRot = (tSec * pcT.speed + pcT.phase) % (Math.PI * 2);
+      atlasGL.drawPlanet(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, pcRot, {
+        surfaceOnly: true,
+        core: pcT.coreRGB,
+        base: pcT.baseRGB,
+        accent: pcT.accentRGB,
+        seed: (pcI % 97) * 1.3,
+        texSpan: texSpan,
+        hover: pcI === hoveredIndex || pcI === selectedIndex,
+        dpr: dpr,
+      });
+    }
+  }
+
+  function drawPubPlanets(cands, tSec) {
+    atlasGL.beginPlanets(W, H, dpr, frameDark);
+    for (var pc = 0; pc < cands.length; pc++) {
+      var pcand = cands[pc];
+      var pTex = pcand.texture;
+      var pRot = (tSec * pTex.speed + pTex.phase) % (Math.PI * 2);
+      try {
+        atlasGL.drawPlanet(pTex.canvas, pcand.sx, pcand.sy, pcand.r, 1, pRot, {
+          base: pTex.baseRGB,
+          accent: pTex.accentRGB,
+          avatar: true,
+          hover: false,
+          dpr: dpr,
+        });
+      } catch (texErr) {
+        // tainted avatar canvas — evict and never retry the image
+        pubPlanetTex.delete(pcand.pub.basePath);
+        pubFailed[pcand.pub.basePath] = true;
+        delete pubImages[pcand.pub.basePath];
+        markDirty();
+      }
+    }
+  }
+
+  function canSpin() {
+    return !view.dirty && glScene && glScene.settled &&
+      frameDark === (document.documentElement.getAttribute('data-theme') !== 'light');
+  }
+
+  function spinGlobes() {
+    var tSec = performance.now() / 1000;
+    spinFrames++;
+    atlasGL.frame(glScene.frame);
+    planetTexBudget = 6;
+    if (glScene.docs) drawDocPlanets(glScene.docs, tSec);
+    if (glScene.pubs) drawPubPlanets(glScene.pubs, tSec);
+  }
+
   function getPlanetCandidates(xMin, yMin, xMax, yMax, radius, limit) {
     if (planetLayout && planetLayout.scale === scale && planetLayout.cx === cx &&
         planetLayout.cy === cy && planetLayout.width === W && planetLayout.height === H &&
@@ -1200,6 +1266,7 @@
     if (!data || !pointSpacing || !view.dirty) return;
     view.dirty = false;
     renderFrame++;
+    glScene = null;
 
     // cache theme + colors once per frame
     cacheFrameColors();
@@ -1443,7 +1510,7 @@
       // rebuildPointState(). Pan/zoom is pure uniform updates.
       var searching = searchMatches && searchMatches.size > 0;
       var connAlphas = dark ? [0.18, 0.10, 0.05] : [0.14, 0.08, 0.03];
-      atlasGL.frame({
+      glScene = { settled: true, docs: null, pubs: null, frame: {
         W: W, H: H, dpr: dpr, dark: dark,
         scale: scale, cx: cx, cy: cy,
         radius: pointR,
@@ -1453,7 +1520,8 @@
         lineFade: connAlphaFactor,
         lineAlphas: connAlphas,
         hoverIdx: hoveredIndex,
-      });
+      } };
+      atlasGL.frame(glScene.frame);
     } else {
       // --- 2D fallback: sprite-stamped points ---
       ctx.globalAlpha = 1;
@@ -1575,24 +1643,8 @@
       var cands = getPlanetCandidates(xMin, yMin, xMax, yMax, pointR, small ? 48 : 80);
       planetTexBudget = animating ? 1 : 6;
       if (atlasGL) {
-        atlasGL.beginPlanets(W, H, dpr, dark);
-        var texSpan = PLANET_TEX_W / (PLANET_TEX_W + PLANET_TEX_BLEED);
-        for (var c = 0; c < cands.length; c++) {
-          var pcI = cands[c].i;
-          if (!planetTextureReady(pcI) && planetTexBudget-- <= 0) continue;
-          var pcT = getPlanetTexture(pcI);
-          var pcRot = (tSec * pcT.speed + pcT.phase) % (Math.PI * 2);
-          atlasGL.drawPlanet(pcT.canvas, cands[c].sx, cands[c].sy, cands[c].r, cands[c].alpha, pcRot, {
-            surfaceOnly: true,
-            core: pcT.coreRGB,
-            base: pcT.baseRGB,
-            accent: pcT.accentRGB,
-            seed: (pcI % 97) * 1.3,
-            texSpan: texSpan,
-            hover: pcI === hoveredIndex || pcI === selectedIndex,
-            dpr: dpr,
-          });
-        }
+        glScene.docs = cands;
+        drawDocPlanets(cands, tSec);
       } else {
         for (var c = 0; c < cands.length; c++) {
           if (!planetTextureReady(cands[c].i) && planetTexBudget-- <= 0) continue;
@@ -1604,27 +1656,8 @@
 
     // --- publication planets: drawn ABOVE the point field ---
     if (atlasGL && pubPlanetCands.length > 0) {
-      var pubTSec = performance.now() / 1000;
-      atlasGL.beginPlanets(W, H, dpr, dark);
-      for (var pc = 0; pc < pubPlanetCands.length; pc++) {
-        var pcand = pubPlanetCands[pc];
-        var pTex = pcand.texture;
-        var pRot = (pubTSec * pTex.speed + pTex.phase) % (Math.PI * 2);
-        try {
-          atlasGL.drawPlanet(pTex.canvas, pcand.sx, pcand.sy, pcand.r, 1, pRot, {
-            base: pTex.baseRGB,
-            accent: pTex.accentRGB,
-            avatar: true,
-            hover: false,
-            dpr: dpr,
-          });
-        } catch (texErr) {
-          // tainted avatar canvas — evict and never retry the image
-          pubPlanetTex.delete(pcand.pub.basePath);
-          pubFailed[pcand.pub.basePath] = true;
-          delete pubImages[pcand.pub.basePath];
-        }
-      }
+      glScene.pubs = pubPlanetCands;
+      drawPubPlanets(pubPlanetCands, performance.now() / 1000);
       planetsActive = true; // keep frames coming so the globes rotate
     }
 
@@ -1635,6 +1668,7 @@
       cardHitRects = [];
       if (focusIdx !== unfurlFor) { unfurlFor = focusIdx; unfurlStart = performance.now(); }
       var unfurl = planetsActive ? easeOutCubic(clamp01((performance.now() - unfurlStart) / 180)) : 1;
+      if (unfurl < 1 && glScene) glScene.settled = false;
       // growth factor: cards upsize from the moment they're fully formed
       // (CARD_START+CARD_RANGE) until CARD_FULL
       var g = clamp01((zoom - (CARD_START + CARD_RANGE)) / (CARD_FULL - CARD_START - CARD_RANGE));
@@ -1969,14 +2003,20 @@
   function loop(now) {
     frameRequested = false;
     tickAnimation(now);
-    render();
-    updateSelection();
+    if (spinPending && canSpin()) {
+      spinGlobes();
+    } else {
+      if (spinPending) view.dirty = true;
+      render();
+      updateSelection();
+    }
+    spinPending = false;
 
     // keep looping while animating, or while rotating planets are on screen
     if (animating) {
       scheduleFrame();
     } else if (planetsActive) {
-      view.dirty = true;
+      spinPending = true;
       scheduleFrame();
     }
   }
@@ -2504,8 +2544,10 @@
           }
           atlasGL.uploadPoints(n, pointsX, pointsY, colorIdx, pointSpacing);
           // connection-pair search is a load-time cost now, not a per-frame
-          // one — defer it so the first paint isn't blocked
-          setTimeout(buildConnectionLines, 0);
+          // one. Lines only show from zoom 2.5, so it waits for idle time
+          // rather than competing with the first interactions
+          if (window.requestIdleCallback) requestIdleCallback(buildConnectionLines, { timeout: 2000 });
+          else setTimeout(buildConnectionLines, 0);
         }
         renderLegend();
         var statsText = n.toLocaleString() + ' documents \u00B7 ' +
@@ -2685,6 +2727,7 @@
         hovered: hoveredIndex, selected: selectedIndex,
         selectedTopicIndices: selectedTopicIndices.slice(),
         planetLayoutBuilds: planetLayoutBuilds,
+        fullFrames: renderFrame, spinFrames: spinFrames,
         planetPointsVisited: planetLayout ? planetLayout.visited : 0,
         planetIndices: planetLayout ? planetLayout.points.map(function(p) { return p.i; }) : [],
       };

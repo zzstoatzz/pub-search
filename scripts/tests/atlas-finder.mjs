@@ -37,3 +37,10 @@ test('publication identity survives subscriber-driven reordering after indexing'
  assert.equal(picked.id,'journal.example');
  assert.equal(snapshot.publications.find(p=>p.basePath===picked.id).name,'Agent Memory Journal');
 });
+
+test('the ASCII fast path normalizes exactly like the unicode path',()=>{
+ const {normalize}=globalThis.AtlasFinder;
+ const slow=s=>(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ for(const s of ['','  Agent  Memory!! ','snake_case-and.dots/2026','TAB\tand\nnewline','Café computing','日本語 のタイトル','naïve — “quoted”','ǅ ﬁ Ⅳ',null,undefined]) assert.equal(normalize(s),slow(s),JSON.stringify(s));
+ assert.equal(normalize('Café'),'cafe');
+});

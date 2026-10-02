@@ -96,6 +96,19 @@ document.querySelector('#run').onclick = async () => {
         assert(before.planetPointsVisited < points.length / 5, 'query visits most points');
         log(`  Visited ${before.planetPointsVisited}/${points.length} points; 12 frames reused layout.`);
       });
+      await test('a still camera redraws only the globes', async () => {
+        wheelTo(80); await settle();
+        await until(() => state().planetsActive);
+        for (let i=0;i<4;i++) await nextFrame();
+        const before = state();
+        for (let i=0;i<12;i++) await nextFrame();
+        const rest = state();
+        assert(rest.fullFrames === before.fullFrames, `${rest.fullFrames - before.fullFrames} full redraws while still`);
+        assert(rest.spinFrames >= before.spinFrames + 10, 'globes stopped turning');
+        wheelTo(81); await settle();
+        assert(state().fullFrames > rest.fullFrames, 'camera move did not redraw');
+        log(`  12 still frames: ${rest.spinFrames - before.spinFrames} globe-only, 0 full.`);
+      });
       await test('platform changes invalidate selection', async () => {
         const item = win.document.querySelector('[data-platform="leaflet"]');
         item.click(); await settle();

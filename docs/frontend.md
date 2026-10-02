@@ -39,7 +39,7 @@ same-origin `/api/*`, use a Pages development server or a deployed origin. Gener
 Browser harnesses under `/scripts/tests/` use the actual frontend:
 
 - `atlas-loading.html`: startup timing and topic framing at phone/desktop sizes.
-- `atlas-performance.html`: spatial selection and visible-planet caching.
+- `atlas-performance.html`: spatial selection, visible-planet caching, and globe-only frames while the camera is still.
 - `atlas-gl.html`: GPU rendering checks.
 
 ```sh
