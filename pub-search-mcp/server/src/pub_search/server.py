@@ -507,9 +507,6 @@ async def discover_focal_post(
     so newer posts with steady velocity surface over older posts with cumulative
     counts). use `sort="top"` for "what mattered most" by raw count in the window.
 
-    pair with `describe_cluster(focal.uri)` to get the network-position context
-    around a focal item — the conversation it sits inside, not just the post itself.
-
     args:
         window: day | week | month | year | all (default week)
         sort: top | trending (default trending)
