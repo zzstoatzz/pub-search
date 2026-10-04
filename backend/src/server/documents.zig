@@ -27,11 +27,11 @@ fn docSql(comptime body: []const u8) []const u8 {
     \\  COALESCE(d.path, ''), d.has_publication, COALESCE(p.name, ''),
     \\  COALESCE(d.cover_image, ''),
     ++ " " ++ body ++ ",\n" ++
-    \\  COALESCE(d.publication_uri, '')
-    \\FROM documents d LEFT JOIN publications p ON d.publication_uri = p.uri
-    \\WHERE d.uri = ?
-    \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
-    \\AND (d.url_dead IS NULL OR d.url_dead = 0)
+        \\  COALESCE(d.publication_uri, '')
+        \\FROM documents d LEFT JOIN publications p ON d.publication_uri = p.uri
+        \\WHERE d.uri = ?
+        \\AND (d.is_bridgyfed IS NULL OR d.is_bridgyfed = 0)
+        \\AND (d.url_dead IS NULL OR d.url_dead = 0)
     ;
 }
 

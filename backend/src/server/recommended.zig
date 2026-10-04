@@ -362,12 +362,11 @@ const RecommendedByTopAuthorsQuery = zql.Query(
 // same order so Row's column lookup via TopQuery works for all of them.
 comptime {
     const all_queries = .{
-        TopQuery,                     TrendingQuery,
-        TopByAuthorQuery,             TrendingByAuthorQuery,
-        TopByCuratorQuery,            TrendingByCuratorQuery,
-        RecentQuery,                  RecentByAuthorQuery,
-        RecentByCuratorQuery,
-        RecommendedByTopAuthorsQuery,
+        TopQuery,             TrendingQuery,
+        TopByAuthorQuery,     TrendingByAuthorQuery,
+        TopByCuratorQuery,    TrendingByCuratorQuery,
+        RecentQuery,          RecentByAuthorQuery,
+        RecentByCuratorQuery, RecommendedByTopAuthorsQuery,
     };
     @setEvalBranchQuota(20_000);
     for (all_queries) |Q| {

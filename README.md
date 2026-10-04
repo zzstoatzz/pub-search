@@ -28,7 +28,7 @@ claude mcp add-json pub-search '{"type":"http","url":"https://pub-search-by-zzst
 
 ## develop
 
-backend builds require Zig 0.16.0. Python batch scripts use [uv](https://docs.astral.sh/uv/) and inline dependencies; the Atlas builder requires Python 3.12 or 3.13. frontend checks use Node.js.
+backend builds require Zig 0.17.0. Python batch scripts use [uv](https://docs.astral.sh/uv/) and inline dependencies; the Atlas builder requires Python 3.12 or 3.13. frontend checks use Node.js.
 
 ```sh
 (cd backend && zig build)                   # compile the backend

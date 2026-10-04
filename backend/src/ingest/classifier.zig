@@ -501,7 +501,7 @@ pub fn writeSummaryJson(allocator: Allocator) ![]u8 {
     try jw.beginObject();
 
     // counts by state
-    var counts = [_]i64{0} ** 5;
+    var counts: [5]i64 = @splat(0);
     {
         var r = try conn.rows("SELECT state, COUNT(*) FROM author_stats GROUP BY state", .{});
         defer r.deinit();
@@ -1151,7 +1151,7 @@ fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) !
         // 429 / 529 from the Messages API mean the same thing operationally:
         // nothing is wrong with the author, try again later.
         if (res.status == .service_unavailable or res.status == .not_found or
-            res.status == .too_many_requests or @intFromEnum(res.status) == 529) return error.NoCapacity;
+            res.status == .too_many_requests or @backingInt(res.status) == 529) return error.NoCapacity;
         return error.CocoreApiError;
     }
     return text;
@@ -1611,7 +1611,8 @@ test "utf8Excerpt never splits a codepoint (regression: CJK authors stuck inconc
 test "utf8Middle: bounded middle window, valid UTF-8 on both edges" {
     // 30 Korean codepoints = 90 bytes; a 20-byte middle window lands mid-codepoint
     // on both sides without alignment.
-    const kr = "스케치" ** 10;
+    const tiled: [10][9]u8 = @splat("스케치".*);
+    const kr: []const u8 = @as(*const [90]u8, @ptrCast(&tiled));
     const mid = utf8Middle(kr, 20);
     try std.testing.expect(mid.len <= 20 and mid.len > 0);
     try std.testing.expect(std.unicode.utf8ValidateSlice(mid));

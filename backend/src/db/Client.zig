@@ -159,20 +159,20 @@ fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
     if (info == .pointer) {
         const child = @typeInfo(info.pointer.child);
         if (child == .@"struct") {
-            const fields = child.@"struct".fields;
-            const slice = try self.allocator.alloc([]const u8, fields.len);
-            inline for (fields, 0..) |field, i| {
-                slice[i] = @field(args.*, field.name);
+            const names = child.@"struct".field_names;
+            const slice = try self.allocator.alloc([]const u8, names.len);
+            inline for (names, 0..) |name, i| {
+                slice[i] = @field(args.*, name);
             }
             return slice;
         }
     }
 
     if (info == .@"struct") {
-        const fields = info.@"struct".fields;
-        const slice = try self.allocator.alloc([]const u8, fields.len);
-        inline for (fields, 0..) |field, i| {
-            slice[i] = @field(args, field.name);
+        const names = info.@"struct".field_names;
+        const slice = try self.allocator.alloc([]const u8, names.len);
+        inline for (names, 0..) |name, i| {
+            slice[i] = @field(args, name);
         }
         return slice;
     }
@@ -276,7 +276,7 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
             const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
             logfire.err("{s} turso error: {} | sql: {s} | response: {s}", .{ span_name, res.status, truncated, resp_preview });
             span.recordError(error.TursoError);
-            span.setAttribute("turso.status", @intFromEnum(res.status));
+            span.setAttribute("turso.status", @backingInt(res.status));
             // NEVER attach resp_preview to the span: it's freed by the defer
             // above before `defer span.end()` (declared earlier, runs later)
             // deep-copies attributes — use-after-free, segfault, process death.
@@ -531,12 +531,12 @@ fn countArgsType(comptime ArgsType: type) usize {
     if (info == .pointer) {
         const child = @typeInfo(info.pointer.child);
         if (child == .@"struct") {
-            return child.@"struct".fields.len;
+            return child.@"struct".field_names.len;
         }
     }
 
     if (info == .@"struct") {
-        return info.@"struct".fields.len;
+        return info.@"struct".field_names.len;
     }
 
     return 0;

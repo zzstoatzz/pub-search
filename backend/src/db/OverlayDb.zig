@@ -32,8 +32,8 @@ pub const DEFAULT_MAX_ROWS: i64 = 50_000;
 const READ_POOL_SIZE = 4;
 
 conn: ?zqlite.Conn = null,
-read_pool: [READ_POOL_SIZE]?zqlite.Conn = .{null} ** READ_POOL_SIZE,
-read_in_use: [READ_POOL_SIZE]bool = .{false} ** READ_POOL_SIZE,
+read_pool: [READ_POOL_SIZE]?zqlite.Conn = @splat(null),
+read_in_use: [READ_POOL_SIZE]bool = @splat(false),
 pool_mutex: Io.Mutex = Io.Mutex.init,
 pool_cond: Io.Condition = Io.Condition.init,
 mutex: Io.Mutex = Io.Mutex.init, // guards write conn
@@ -121,7 +121,7 @@ fn quickCheckOk(self: *OverlayDb) bool {
 fn deleteDbFiles(path: []const u8) void {
     var buf: [280]u8 = undefined;
     inline for (.{ "", "-wal", "-shm" }) |sfx| {
-        const z = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ path, sfx }) catch return;
+        const z = std.mem.printSentinel(&buf, "{s}{s}", .{ path, sfx }, 0) catch return;
         _ = std.c.unlink(z.ptr);
     }
 }
@@ -203,10 +203,10 @@ fn upsertInner(self: *OverlayDb, row: DocRow) !void {
         \\   platform, path, base_path, has_publication, cover_image, is_bridgyfed, deleted, indexed_at)
         \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
     , .{
-        row.uri,             row.did,      row.rkey,      row.title,
-        row.content,         row.created_at, row.publication_uri, row.publication_name,
-        row.platform,        row.path,     row.base_path, row.has_publication,
-        row.cover_image,     row.is_bridgyfed,
+        row.uri,         row.did,          row.rkey,            row.title,
+        row.content,     row.created_at,   row.publication_uri, row.publication_name,
+        row.platform,    row.path,         row.base_path,       row.has_publication,
+        row.cover_image, row.is_bridgyfed,
     });
     try c.exec("DELETE FROM overlay_fts WHERE uri = ?", .{row.uri});
     try c.exec("INSERT INTO overlay_fts (uri, title, content) VALUES (?, ?, ?)", .{ row.uri, row.title, row.content });
@@ -291,11 +291,11 @@ pub fn enforceCap(self: *OverlayDb) !i64 {
 pub const Stats = struct {
     rows: i64 = 0,
     tombstones: i64 = 0,
-    min_indexed_at: [32]u8 = .{0} ** 32,
-    max_indexed_at: [32]u8 = .{0} ** 32,
+    min_indexed_at: [32]u8 = @splat(0),
+    max_indexed_at: [32]u8 = @splat(0),
     min_len: usize = 0,
     max_len: usize = 0,
-    compacted_watermark: [32]u8 = .{0} ** 32,
+    compacted_watermark: [32]u8 = @splat(0),
     watermark_len: usize = 0,
 };
 

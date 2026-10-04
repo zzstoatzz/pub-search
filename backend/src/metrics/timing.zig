@@ -33,7 +33,7 @@ pub const Endpoint = enum {
 };
 
 const SAMPLE_COUNT = 1000;
-const ENDPOINT_COUNT = @typeInfo(Endpoint).@"enum".fields.len;
+const ENDPOINT_COUNT = @typeInfo(Endpoint).@"enum".field_names.len;
 const PERSIST_PATH = "/data/timing.bin";
 const PERSIST_PATH_HOURLY = "/data/timing_hourly.bin";
 const HOURS_TO_KEEP = 720; // 30 days
@@ -65,7 +65,7 @@ pub const LatencyRange = enum {
 
 /// per-endpoint latency buffer
 const LatencyBuffer = struct {
-    samples: [SAMPLE_COUNT]u32 = .{0} ** SAMPLE_COUNT, // microseconds
+    samples: [SAMPLE_COUNT]u32 = @splat(0), // microseconds
     count: usize = 0,
     head: usize = 0,
     total_count: u64 = 0,
@@ -117,8 +117,8 @@ pub const EndpointStats = struct {
     max_ms: f64 = 0,
 };
 
-var buffers: [ENDPOINT_COUNT]LatencyBuffer = [_]LatencyBuffer{.{}} ** ENDPOINT_COUNT;
-var hourly: [ENDPOINT_COUNT][HOURS_TO_KEEP]HourlyBucket = [_][HOURS_TO_KEEP]HourlyBucket{[_]HourlyBucket{.{}} ** HOURS_TO_KEEP} ** ENDPOINT_COUNT;
+var buffers: [ENDPOINT_COUNT]LatencyBuffer = @splat(.{});
+var hourly: [ENDPOINT_COUNT][HOURS_TO_KEEP]HourlyBucket = @splat(@splat(.{}));
 var mutex: Io.Mutex = Io.Mutex.init;
 var global_io: ?Io = null;
 var initialized: bool = false;
@@ -153,10 +153,7 @@ fn persistLoop() void {
 }
 
 fn endpointFromName(name: []const u8) ?Endpoint {
-    inline for (@typeInfo(Endpoint).@"enum".fields) |f| {
-        if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
-    }
-    return null;
+    return std.meta.stringToEnum(Endpoint, name);
 }
 
 /// Upsert the current + previous hour's per-endpoint buckets to turso. Cheap
@@ -187,7 +184,7 @@ pub fn flushToTurso() void {
     }
     // network outside the lock
     for (pending[0..n]) |p| {
-        const ep_name = @tagName(@as(Endpoint, @enumFromInt(p.ep)));
+        const ep_name = @tagName(@as(Endpoint, @fromBackingInt(@intCast(p.ep))));
         var buf: [384]u8 = undefined;
         const sql = std.fmt.bufPrint(
             &buf,
@@ -222,7 +219,7 @@ pub fn loadFromTurso() void {
         const hour = row.int(0);
         const ep = endpointFromName(row.text(1)) orelse continue;
         const idx = getHourIndex(hour);
-        hourly[@intFromEnum(ep)][idx] = .{
+        hourly[@backingInt(ep)][idx] = .{
             .hour = hour,
             .count = @intCast(@max(0, row.int(2))),
             .sum_us = @intCast(@max(0, row.int(3))),
@@ -268,7 +265,7 @@ pub fn record(endpoint: Endpoint, start_time: i64) void {
 
     ensureInitialized();
 
-    const ep_idx = @intFromEnum(endpoint);
+    const ep_idx = @backingInt(endpoint);
     buffers[ep_idx].record(elapsed_us);
     hourly[ep_idx][hour_idx].record(current_hour, elapsed_us);
     // memory-only: persistence happens on the background loop (see setIo).
@@ -391,7 +388,7 @@ pub fn getStats(endpoint: Endpoint) EndpointStats {
 
     ensureInitialized();
 
-    const buf = &buffers[@intFromEnum(endpoint)];
+    const buf = &buffers[@backingInt(endpoint)];
     if (buf.count == 0) return .{};
 
     // copy and sort for percentiles
@@ -417,7 +414,7 @@ pub fn getStats(endpoint: Endpoint) EndpointStats {
 pub fn getAllStats() [ENDPOINT_COUNT]EndpointStats {
     var result: [ENDPOINT_COUNT]EndpointStats = undefined;
     for (0..ENDPOINT_COUNT) |i| {
-        result[i] = getStats(@enumFromInt(i));
+        result[i] = getStats(@fromBackingInt(@intCast(i)));
     }
     return result;
 }
@@ -438,7 +435,7 @@ pub fn getTimeSeries(endpoint: Endpoint) [LATENCY_HISTORY_HOURS]TimeSeriesPoint 
 pub fn getAllTimeSeries() [ENDPOINT_COUNT][LATENCY_HISTORY_HOURS]TimeSeriesPoint {
     var result: [ENDPOINT_COUNT][LATENCY_HISTORY_HOURS]TimeSeriesPoint = undefined;
     for (0..ENDPOINT_COUNT) |i| {
-        result[i] = getTimeSeries(@enumFromInt(i));
+        result[i] = getTimeSeries(@fromBackingInt(@intCast(i)));
     }
     return result;
 }
@@ -463,7 +460,7 @@ fn fillTimeSeriesLocked(endpoint: Endpoint, count: usize, out: []TimeSeriesPoint
     std.debug.assert(count <= HOURS_TO_KEEP);
 
     const current_hour = getCurrentHour();
-    const ep_buckets = hourly[@intFromEnum(endpoint)];
+    const ep_buckets = hourly[@backingInt(endpoint)];
 
     for (0..count) |i| {
         const hours_ago = count - 1 - i;
@@ -508,7 +505,7 @@ pub fn getTrafficSeries() [HOURS_TO_KEEP]TrafficPoint {
 
         var total: u32 = 0;
         for (0..ENDPOINT_COUNT) |ep| {
-            if (!@as(Endpoint, @enumFromInt(ep)).countsAsTraffic()) continue;
+            if (!@as(Endpoint, @fromBackingInt(@intCast(ep))).countsAsTraffic()) continue;
             const bucket = hourly[ep][idx];
             if (bucket.hour == hour) {
                 total += bucket.count;
@@ -523,8 +520,7 @@ test "activity poll is excluded from traffic aggregate" {
     // /activity is a per-tab liveness poll (1/s); it must not inflate the
     // aggregate traffic chart. Every other endpoint counts as real traffic.
     try std.testing.expect(!Endpoint.activity.countsAsTraffic());
-    inline for (@typeInfo(Endpoint).@"enum".fields) |f| {
-        const ep = @field(Endpoint, f.name);
+    for (std.enums.values(Endpoint)) |ep| {
         if (ep != .activity) try std.testing.expect(ep.countsAsTraffic());
     }
 }

@@ -253,7 +253,7 @@ test "label DAG-CBOR key ordering" {
         .cts = "2024-01-01T00:00:00.000Z",
         .exp = "2025-01-01T00:00:00.000Z",
         .cid = "bafytest",
-        .sig = &(.{0xaa} ** 64),
+        .sig = &@as([64]u8, @splat(0xaa)),
     };
 
     const encoded = try label.encodeSigned(allocator);

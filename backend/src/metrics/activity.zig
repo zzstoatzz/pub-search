@@ -5,7 +5,7 @@ const Io = std.Io;
 pub const SLOTS = 60;
 const TICK_MS = 100;
 
-var counts: [SLOTS]u16 = .{0} ** SLOTS;
+var counts: [SLOTS]u16 = @splat(0);
 var slot: usize = 0;
 var mutex: Io.Mutex = Io.Mutex.init;
 var global_io: ?Io = null;

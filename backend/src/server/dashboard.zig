@@ -76,11 +76,11 @@ pub const TimelineSlot = enum {
             .y1 => 3,
             .all_time => 4,
         };
-        return @enumFromInt(base + @as(u4, if (f == .created) 5 else 0));
+        return @fromBackingInt(@intCast(base + @as(u4, if (f == .created) 5 else 0)));
     }
 
     fn range(self: TimelineSlot) TimelineRange {
-        return switch (@intFromEnum(self) % 5) {
+        return switch (@backingInt(self) % 5) {
             0 => .d7,
             1 => .d30,
             2 => .d90,
@@ -90,7 +90,7 @@ pub const TimelineSlot = enum {
     }
 
     fn field(self: TimelineSlot) TimelineField {
-        return if (@intFromEnum(self) >= 5) .created else .indexed;
+        return if (@backingInt(self) >= 5) .created else .indexed;
     }
 };
 
@@ -335,8 +335,14 @@ pub fn fetch(alloc: Allocator) !Data {
         logfire.warn("dashboard: turso batch returned no stats row", .{});
     }
     const s: StatsRow = if (stats_row) |r| StatsQuery.fromRow(StatsRow, r) else .{
-        .docs = 0, .pubs = 0, .searches = 0, .errors = 0,
-        .started_at = 0, .embeddings = 0, .bridgyfed = 0, .last_indexed = 0,
+        .docs = 0,
+        .pubs = 0,
+        .searches = 0,
+        .errors = 0,
+        .started_at = 0,
+        .embeddings = 0,
+        .bridgyfed = 0,
+        .last_indexed = 0,
     };
     const started_at = s.started_at;
     const searches = s.searches;
@@ -558,10 +564,10 @@ fn formatTimingJson(alloc: Allocator) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
 
     try jw.beginObject();
-    inline for (@typeInfo(timing.Endpoint).@"enum".fields, 0..) |field, i| {
+    inline for (@typeInfo(timing.Endpoint).@"enum".field_names, 0..) |name, i| {
         const t = all_timing[i];
         const series = all_series[i];
-        try jw.objectField(field.name);
+        try jw.objectField(name);
         // EndpointStats + the 24h history serialize as one struct — field
         // names of EndpointStats and TimeSeriesPoint already match the wire
         // shape we want.
@@ -652,10 +658,9 @@ pub fn fetchLatency(alloc: Allocator, range: timing.LatencyRange) ![]const u8 {
     try jw.objectField("endpoints");
     try jw.beginObject();
 
-    inline for (@typeInfo(timing.Endpoint).@"enum".fields) |field| {
-        const ep: timing.Endpoint = @enumFromInt(field.value);
+    for (std.enums.values(timing.Endpoint)) |ep| {
         timing.writeTimeSeries(ep, points);
-        try jw.objectField(field.name);
+        try jw.objectField(@tagName(ep));
         // TimeSeriesPoint's field names match the wire shape we want, so the
         // serializer walks them directly — no per-field boilerplate needed.
         try jw.write(points);
@@ -692,7 +697,7 @@ fn writeTimelinePoints(jw: *json.Stringify, comptime sql_query: []const u8) !voi
     try jw.beginArray();
     for (res.rows) |row| {
         const r = TimelineQueryRef.fromRow(TimelineRow, row);
-                try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
+        try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
     }
     try jw.endArray();
 }

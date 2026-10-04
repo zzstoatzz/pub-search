@@ -935,9 +935,9 @@ fn handleStats(request: *http.Server.Request) !void {
     // timing stats per endpoint
     try jw.objectField("timing");
     try jw.beginObject();
-    inline for (@typeInfo(metrics.timing.Endpoint).@"enum".fields, 0..) |field, i| {
+    inline for (@typeInfo(metrics.timing.Endpoint).@"enum".field_names, 0..) |name, i| {
         const t = all_timing[i];
-        try jw.objectField(field.name);
+        try jw.objectField(name);
         try jw.beginObject();
         try jw.objectField("count");
         try jw.write(t.count);

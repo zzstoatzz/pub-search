@@ -127,7 +127,7 @@ fn readCursor(path: [:0]const u8) ?i64 {
 
 fn persistCursor(path: [:0]const u8, value: i64) void {
     var tmp_buf: [256]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.tmp", .{path}) catch return;
+    const tmp = std.mem.printSentinel(&tmp_buf, "{s}.tmp", .{path}, 0) catch return;
     const fd = std.c.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
     var num_buf: [32]u8 = undefined;
@@ -448,7 +448,7 @@ test "v1 time_us cursors are detected for anchor conversion" {
 
 test "cursor round-trips through the persist file" {
     var path_buf: [128]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/jetstream-cursor-test-{d}", .{std.testing.random_seed});
+    const path = try std.mem.printSentinel(&path_buf, "/tmp/jetstream-cursor-test-{d}", .{std.testing.random_seed}, 0);
     defer _ = std.c.unlink(path.ptr);
 
     try std.testing.expectEqual(@as(?i64, null), readCursor(path));
@@ -463,7 +463,7 @@ test "health observes durable cursor progress and missing cursor" {
     defer threaded.deinit();
     const io = threaded.io();
     var path_buf: [96]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/pub-health-cursor-{d}", .{std.c.getpid()});
+    const path = try std.mem.printSentinel(&path_buf, "/tmp/pub-health-cursor-{d}", .{std.c.getpid()}, 0);
     _ = std.c.unlink(path.ptr);
     defer _ = std.c.unlink(path.ptr);
     const now = Io.Timestamp.now(io, .real).nanoseconds;

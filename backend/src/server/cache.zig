@@ -36,7 +36,7 @@ pub fn WindowedJsonCache(
     comptime Slot: type,
     comptime cfg: Config(Slot),
 ) type {
-    const slot_count = @typeInfo(Slot).@"enum".fields.len;
+    const slot_count = @typeInfo(Slot).@"enum".field_names.len;
 
     return struct {
         const Entry = struct {
@@ -45,7 +45,7 @@ pub fn WindowedJsonCache(
             fetched_at_ns: i128 = 0,
         };
 
-        var entries: [slot_count]Entry = [_]Entry{.{}} ** slot_count;
+        var entries: [slot_count]Entry = @splat(.{});
         var io_storage: ?Io = null;
         var refresh_thread: ?std.Thread = null;
 
@@ -67,7 +67,7 @@ pub fn WindowedJsonCache(
         /// background thread hasn't populated it yet. Caller owns the slice.
         pub fn snapshot(slot: Slot, alloc: std.mem.Allocator) !?[]u8 {
             const io = io_storage orelse return null;
-            const idx = @intFromEnum(slot);
+            const idx = @backingInt(slot);
             entries[idx].mu.lockUncancelable(io);
             defer entries[idx].mu.unlock(io);
             if (entries[idx].body) |body| return try alloc.dupe(u8, body);
@@ -86,9 +86,7 @@ pub fn WindowedJsonCache(
         }
 
         fn refreshAll() void {
-            inline for (@typeInfo(Slot).@"enum".fields) |f| {
-                refreshSlot(@as(Slot, @enumFromInt(f.value)));
-            }
+            for (std.enums.values(Slot)) |slot| refreshSlot(slot);
         }
 
         fn refreshSlot(slot: Slot) void {
@@ -108,7 +106,7 @@ pub fn WindowedJsonCache(
             };
             const now_ns: i128 = Io.Timestamp.now(io, .real).nanoseconds;
 
-            const idx = @intFromEnum(slot);
+            const idx = @backingInt(slot);
             entries[idx].mu.lockUncancelable(io);
             defer entries[idx].mu.unlock(io);
             if (entries[idx].body) |old| std.heap.page_allocator.free(old);

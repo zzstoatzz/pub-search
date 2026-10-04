@@ -626,7 +626,7 @@ fn checkDocUrl(allocator: Allocator, url: []const u8, last_head_ns: *std.StringH
         .response_writer = &sink.writer,
     }) catch return .url_skip;
 
-    const code: u10 = @intFromEnum(res.status);
+    const code: u10 = @backingInt(res.status);
     if (code == 404) return .url_dead;
     if (code >= 200 and code < 400) return .url_ok;
     // 405 (HEAD not allowed), 403, 429, 5xx, anything else — don't penalize
@@ -710,7 +710,7 @@ fn checkRecord(allocator: Allocator, pds: []const u8, did: []const u8, collectio
         return .error_skip;
     };
 
-    return recordStatus(allocator, @intFromEnum(res.status), response_body.written());
+    return recordStatus(allocator, @backingInt(res.status), response_body.written());
 }
 
 fn recordStatus(allocator: Allocator, status: u10, body: []const u8) RecordStatus {
@@ -788,7 +788,7 @@ test "every document is claimed exactly once under concurrent workers" {
     // deleted twice, and one never claimed is silently never verified while
     // the cycle still reports success.
     const N = 1000;
-    var counts = [_]std.atomic.Value(u32){.init(0)} ** N;
+    var counts: [N]std.atomic.Value(u32) = @splat(.init(0));
     var next: std.atomic.Value(usize) = .init(0);
 
     const Runner = struct {

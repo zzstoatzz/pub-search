@@ -2348,7 +2348,7 @@ fn firstQueryHit(content: []const u8, query: []const u8) ?usize {
             continue;
         }
         if (needle.len < 2) continue;
-        if (std.ascii.indexOfIgnoreCase(content, needle)) |pos| {
+        if (std.ascii.findIgnoreCase(content, needle)) |pos| {
             if (best == null or pos < best.?) best = pos;
         }
     }
@@ -2407,7 +2407,8 @@ test "snippetFromContent: window around the first hit, opening otherwise" {
     defer alloc.free(short);
     try std.testing.expectEqualStrings("tiny body", short);
 
-    const cjk = snippetFromContent(alloc, "前置き " ++ "字" ** 300 ++ " atproto の話", "atproto");
+    const filler: [300][3]u8 = @splat("字".*);
+    const cjk = snippetFromContent(alloc, "前置き " ++ @as(*const [900]u8, @ptrCast(&filler)) ++ " atproto の話", "atproto");
     defer alloc.free(cjk);
     try std.testing.expect(std.unicode.utf8ValidateSlice(cjk));
     try std.testing.expect(std.mem.indexOf(u8, cjk, "atproto") != null);
@@ -2573,12 +2574,12 @@ test "local tag browse: recommend-lifted ranking, correct order at corpus scale"
     const tio = threaded.io();
 
     var path_buf: [64]u8 = undefined;
-    const zpath = std.fmt.bufPrintZ(&path_buf, "/tmp/tag-browse-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const zpath = std.mem.printSentinel(&path_buf, "/tmp/tag-browse-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     const cleanup = struct {
         fn rm(p: []const u8) void {
             var b: [80]u8 = undefined;
             inline for (.{ "", "-wal", "-shm" }) |sfx| {
-                const z = std.fmt.bufPrintZ(&b, "{s}{s}", .{ p, sfx }) catch return;
+                const z = std.mem.printSentinel(&b, "{s}{s}", .{ p, sfx }, 0) catch return;
                 _ = std.c.unlink(z.ptr);
             }
         }
@@ -2640,14 +2641,14 @@ test "local tag browse: recommend-lifted ranking, correct order at corpus scale"
             .{ "A", 100, 6 }, .{ "B", 10, 0 }, .{ "C", 200, 12 }, .{ "D", 40, 1 },
         }) |probe| {
             var sql_buf: [512]u8 = undefined;
-            const ins = try std.fmt.bufPrintZ(&sql_buf, "INSERT INTO documents (uri, did, rkey, title, content, created_at, platform, base_path, has_publication, path, cover_image) " ++
-                "VALUES ('at://probe/{s}', 'did:plc:probe{s}', 'rk{s}', 'probe {s}', '', datetime('now', '-{d} days'), 'other', '', 0, '', '')", .{ probe[0], probe[0], probe[0], probe[0], probe[1] });
+            const ins = try std.mem.printSentinel(&sql_buf, "INSERT INTO documents (uri, did, rkey, title, content, created_at, platform, base_path, has_publication, path, cover_image) " ++
+                "VALUES ('at://probe/{s}', 'did:plc:probe{s}', 'rk{s}', 'probe {s}', '', datetime('now', '-{d} days'), 'other', '', 0, '', '')", .{ probe[0], probe[0], probe[0], probe[0], probe[1] }, 0);
             try w.exec(ins, .{});
             try w.exec("INSERT INTO document_tags VALUES ('at://probe/" ++ probe[0] ++ "', 'photography')", .{});
             var r: usize = 0;
             while (r < probe[2]) : (r += 1) {
                 var rec_buf: [256]u8 = undefined;
-                const rec = try std.fmt.bufPrintZ(&rec_buf, "INSERT INTO recommends VALUES ('at://rec/{s}/{d}', 'did:plc:fan{d}', 'rr{d}', 'at://probe/{s}', '', '')", .{ probe[0], r, r, r, probe[0] });
+                const rec = try std.mem.printSentinel(&rec_buf, "INSERT INTO recommends VALUES ('at://rec/{s}/{d}', 'did:plc:fan{d}', 'rr{d}', 'at://probe/{s}', '', '')", .{ probe[0], r, r, r, probe[0] }, 0);
                 try w.exec(rec, .{});
             }
         }
@@ -2748,12 +2749,12 @@ test "keyword doc search: candidate pass probes documents by rowid, never a scan
     const tio = threaded.io();
 
     var path_buf: [64]u8 = undefined;
-    const zpath = std.fmt.bufPrintZ(&path_buf, "/tmp/docs-fts-plan-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const zpath = std.mem.printSentinel(&path_buf, "/tmp/docs-fts-plan-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     const cleanup = struct {
         fn rm(p: []const u8) void {
             var b: [80]u8 = undefined;
             inline for (.{ "", "-wal", "-shm" }) |sfx| {
-                const z = std.fmt.bufPrintZ(&b, "{s}{s}", .{ p, sfx }) catch return;
+                const z = std.mem.printSentinel(&b, "{s}{s}", .{ p, sfx }, 0) catch return;
                 _ = std.c.unlink(z.ptr);
             }
         }
@@ -2881,14 +2882,14 @@ test "overlay merge: fresh docs appear, overlay wins on uri, tombstones suppress
     const tio = threaded.io();
 
     var path_buf: [64]u8 = undefined;
-    const zpath = std.fmt.bufPrintZ(&path_buf, "/tmp/overlay-merge-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const zpath = std.mem.printSentinel(&path_buf, "/tmp/overlay-merge-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     var opath_buf: [64]u8 = undefined;
-    const opath = std.fmt.bufPrintZ(&opath_buf, "/tmp/overlay-merge-ov-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const opath = std.mem.printSentinel(&opath_buf, "/tmp/overlay-merge-ov-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     const cleanup = struct {
         fn rm(p: []const u8) void {
             var b: [80]u8 = undefined;
             inline for (.{ "", "-wal", "-shm" }) |sfx| {
-                const z = std.fmt.bufPrintZ(&b, "{s}{s}", .{ p, sfx }) catch return;
+                const z = std.mem.printSentinel(&b, "{s}{s}", .{ p, sfx }, 0) catch return;
                 _ = std.c.unlink(z.ptr);
             }
         }
@@ -2998,14 +2999,14 @@ test "overlay merge: tag browse includes fresh tagged docs" {
     const tio = threaded.io();
 
     var path_buf: [64]u8 = undefined;
-    const zpath = std.fmt.bufPrintZ(&path_buf, "/tmp/overlay-tag-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const zpath = std.mem.printSentinel(&path_buf, "/tmp/overlay-tag-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     var opath_buf: [64]u8 = undefined;
-    const opath = std.fmt.bufPrintZ(&opath_buf, "/tmp/overlay-tag-ov-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const opath = std.mem.printSentinel(&opath_buf, "/tmp/overlay-tag-ov-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     const cleanup = struct {
         fn rm(p: []const u8) void {
             var b: [80]u8 = undefined;
             inline for (.{ "", "-wal", "-shm" }) |sfx| {
-                const z = std.fmt.bufPrintZ(&b, "{s}{s}", .{ p, sfx }) catch return;
+                const z = std.mem.printSentinel(&b, "{s}{s}", .{ p, sfx }, 0) catch return;
                 _ = std.c.unlink(z.ptr);
             }
         }

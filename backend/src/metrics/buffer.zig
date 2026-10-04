@@ -28,7 +28,7 @@ var cached_last_indexed: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var cache_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 // popular searches ring buffer
-var pending_searches: [MAX_PENDING_SEARCHES]?[]const u8 = .{null} ** MAX_PENDING_SEARCHES;
+var pending_searches: [MAX_PENDING_SEARCHES]?[]const u8 = @splat(null);
 var search_write_idx: usize = 0;
 var search_read_idx: usize = 0;
 var search_mutex: Io.Mutex = Io.Mutex.init;

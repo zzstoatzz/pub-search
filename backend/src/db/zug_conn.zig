@@ -28,15 +28,15 @@ pub const MigrationConn = struct {
     }
 
     pub fn exec(self: *MigrationConn, sql: []const u8, args: anytype) !void {
-        const fields = comptime tupleFields(@TypeOf(args));
-        var buf: [fields.len]Client.RuntimeValue = undefined;
+        const names = comptime tupleFieldNames(@TypeOf(args));
+        var buf: [names.len]Client.RuntimeValue = undefined;
         argsToRuntimeValues(args, buf[0..]);
         return self.client.execRuntime(sql, buf[0..]);
     }
 
     pub fn rows(self: *MigrationConn, sql: []const u8, args: anytype) !Rows {
-        const fields = comptime tupleFields(@TypeOf(args));
-        var buf: [fields.len]Client.RuntimeValue = undefined;
+        const names = comptime tupleFieldNames(@TypeOf(args));
+        var buf: [names.len]Client.RuntimeValue = undefined;
         argsToRuntimeValues(args, buf[0..]);
         return .{ .result = try self.client.queryRuntime(sql, buf[0..]) };
     }
@@ -59,21 +59,21 @@ pub const MigrationConn = struct {
     };
 };
 
-/// Extract the field list of a tuple/struct, handling pointer-to-tuple too.
-fn tupleFields(comptime ArgsType: type) []const std.builtin.Type.StructField {
+/// Extract the field names of a tuple/struct, handling pointer-to-tuple too.
+fn tupleFieldNames(comptime ArgsType: type) []const [:0]const u8 {
     const info = @typeInfo(ArgsType);
     if (info == .pointer) {
         const child = @typeInfo(info.pointer.child);
-        if (child == .@"struct") return child.@"struct".fields;
+        if (child == .@"struct") return child.@"struct".field_names;
     }
-    if (info == .@"struct") return info.@"struct".fields;
+    if (info == .@"struct") return info.@"struct".field_names;
     @compileError("MigrationConn args must be a tuple or pointer to tuple, got " ++ @typeName(ArgsType));
 }
 
 fn argsToRuntimeValues(args: anytype, out: []Client.RuntimeValue) void {
-    const fields = comptime tupleFields(@TypeOf(args));
-    inline for (fields, 0..) |field, i| {
-        out[i] = runtimeValueFrom(@field(args, field.name));
+    const names = comptime tupleFieldNames(@TypeOf(args));
+    inline for (names, 0..) |name, i| {
+        out[i] = runtimeValueFrom(@field(args, name));
     }
 }
 

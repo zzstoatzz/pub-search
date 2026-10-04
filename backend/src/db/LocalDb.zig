@@ -49,8 +49,8 @@ read_conn: ?zqlite.Conn = null, // legacy single read conn (kept as pool[0] alia
 // closes. A thread therefore blocks (in acquireRead) only while holding zero
 // connections, so a deadlock cycle cannot form. Distinct threads get distinct
 // connections → true WAL-parallel reads.
-read_pool: [READ_POOL_SIZE]?zqlite.Conn = .{null} ** READ_POOL_SIZE,
-read_in_use: [READ_POOL_SIZE]bool = .{false} ** READ_POOL_SIZE,
+read_pool: [READ_POOL_SIZE]?zqlite.Conn = @splat(null),
+read_in_use: [READ_POOL_SIZE]bool = @splat(false),
 pool_mutex: Io.Mutex = Io.Mutex.init, // guards read_in_use
 pool_cond: Io.Condition = Io.Condition.init, // signaled when a connection is returned
 allocator: Allocator,
@@ -102,7 +102,7 @@ fn deleteDbFiles(path: []const u8) void {
 
 fn hasManifestSidecar(path_env: []const u8) bool {
     var buf: [280]u8 = undefined;
-    const sidecar = std.fmt.bufPrintZ(&buf, "{s}.manifest.json", .{path_env}) catch return false;
+    const sidecar = std.mem.printSentinel(&buf, "{s}.manifest.json", .{path_env}, 0) catch return false;
     const fd = std.c.open(sidecar.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
     if (fd < 0) return false;
     _ = std.c.close(fd);
@@ -139,9 +139,9 @@ pub fn openAt(self: *LocalDb, path: []const u8) !void {
 /// sidecar) so rollback is `mv .prev .new` + restart, no re-download.
 fn adoptPending(path_env: []const u8) void {
     var new_buf: [256]u8 = undefined;
-    const new_path = std.fmt.bufPrintZ(&new_buf, "{s}.new", .{path_env}) catch return;
+    const new_path = std.mem.printSentinel(&new_buf, "{s}.new", .{path_env}, 0) catch return;
     var cur_buf: [256]u8 = undefined;
-    const cur_path = std.fmt.bufPrintZ(&cur_buf, "{s}", .{path_env}) catch return;
+    const cur_path = std.mem.printSentinel(&cur_buf, "{s}", .{path_env}, 0) catch return;
 
     const fd = std.c.open(new_path.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
     if (fd < 0) return; // nothing pending
@@ -149,13 +149,13 @@ fn adoptPending(path_env: []const u8) void {
 
     var aux_buf: [264]u8 = undefined;
     inline for (.{ "-wal", "-shm" }) |suffix| {
-        const aux = std.fmt.bufPrintZ(&aux_buf, "{s}{s}", .{ path_env, suffix }) catch return;
+        const aux = std.mem.printSentinel(&aux_buf, "{s}{s}", .{ path_env, suffix }, 0) catch return;
         _ = std.c.unlink(aux.ptr);
     }
 
     // keep the displaced snapshot for rollback: live -> .prev (best-effort)
     var prev_buf: [256]u8 = undefined;
-    if (std.fmt.bufPrintZ(&prev_buf, "{s}.prev", .{path_env})) |prev_path| {
+    if (std.mem.printSentinel(&prev_buf, "{s}.prev", .{path_env}, 0)) |prev_path| {
         _ = std.c.rename(cur_path.ptr, prev_path.ptr);
     } else |_| {}
 
@@ -163,13 +163,13 @@ fn adoptPending(path_env: []const u8) void {
     // manual swaps without sidecars are fine — these renames just fail)
     var sc_a: [280]u8 = undefined;
     var sc_b: [280]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sc_a, "{s}.manifest.json", .{path_env})) |live_sc| {
-        if (std.fmt.bufPrintZ(&sc_b, "{s}.prev.manifest.json", .{path_env})) |prev_sc| {
+    if (std.mem.printSentinel(&sc_a, "{s}.manifest.json", .{path_env}, 0)) |live_sc| {
+        if (std.mem.printSentinel(&sc_b, "{s}.prev.manifest.json", .{path_env}, 0)) |prev_sc| {
             _ = std.c.rename(live_sc.ptr, prev_sc.ptr);
         } else |_| {}
     } else |_| {}
-    if (std.fmt.bufPrintZ(&sc_a, "{s}.new.manifest.json", .{path_env})) |new_sc| {
-        if (std.fmt.bufPrintZ(&sc_b, "{s}.manifest.json", .{path_env})) |live_sc| {
+    if (std.mem.printSentinel(&sc_a, "{s}.new.manifest.json", .{path_env}, 0)) |new_sc| {
+        if (std.mem.printSentinel(&sc_b, "{s}.manifest.json", .{path_env}, 0)) |live_sc| {
             _ = std.c.rename(new_sc.ptr, live_sc.ptr);
         } else |_| {}
     } else |_| {}
@@ -693,7 +693,7 @@ fn unlinkDbFiles(path: [:0]const u8) void {
     _ = std.c.unlink(path.ptr);
     var b: [80]u8 = undefined;
     inline for (.{ "-wal", "-shm" }) |sfx| {
-        const z = std.fmt.bufPrintZ(&b, "{s}{s}", .{ path, sfx }) catch return;
+        const z = std.mem.printSentinel(&b, "{s}{s}", .{ path, sfx }, 0) catch return;
         _ = std.c.unlink(z.ptr);
     }
 }
@@ -711,7 +711,7 @@ test "read pool: concurrent nested queries never deadlock and never leak" {
     // Per-process path + defer cleanup: never shares state with a concurrent
     // run or a prior crashed run, and tidies up even if an assertion fails.
     var path_buf: [64]u8 = undefined;
-    const zpath = std.fmt.bufPrintZ(&path_buf, "/tmp/leaflet-pool-{d}.db", .{std.c.getpid()}) catch unreachable;
+    const zpath = std.mem.printSentinel(&path_buf, "/tmp/leaflet-pool-{d}.db", .{std.c.getpid()}, 0) catch unreachable;
     unlinkDbFiles(zpath);
     defer unlinkDbFiles(zpath);
     {
@@ -766,11 +766,11 @@ test "adoptPending keeps previous snapshot and moves manifest sidecars" {
     // Per-process dir + defer cleanup: hermetic against concurrent runs, prior
     // crashed runs, and assertion failures partway through this test.
     var dir_buf: [64]u8 = undefined;
-    const dir = std.fmt.bufPrintZ(&dir_buf, "/tmp/leaflet-adopt-{d}", .{std.c.getpid()}) catch unreachable;
+    const dir = std.mem.printSentinel(&dir_buf, "/tmp/leaflet-adopt-{d}", .{std.c.getpid()}, 0) catch unreachable;
     _ = std.c.mkdir(dir.ptr, 0o755);
     const jp = struct {
         fn f(buf: []u8, d: []const u8, suffix: []const u8) [:0]const u8 {
-            return std.fmt.bufPrintZ(buf, "{s}/local.db{s}", .{ d, suffix }) catch unreachable;
+            return std.mem.printSentinel(buf, "{s}/local.db{s}", .{ d, suffix }, 0) catch unreachable;
         }
     }.f;
     defer {

@@ -260,7 +260,7 @@ fn hydrateBlobPages(allocator: Allocator, io: Io, did: []const u8, doc: *extract
         .method = .GET,
         .response_writer = &sink.writer,
     }, BLOB_FETCH_TIMEOUT_SECS);
-    const status: u10 = @intFromEnum(res.status);
+    const status: u10 = @backingInt(res.status);
     if (status < 200 or status >= 300) return error.BlobUnavailable;
 
     const body = try sink.toOwnedSlice();
@@ -442,7 +442,7 @@ fn fetchRecord(
         .method = .GET,
         .response_writer = &sink.writer,
     });
-    const status: u10 = @intFromEnum(response.status);
+    const status: u10 = @backingInt(response.status);
     if (status == 400 or status == 404) return .missing;
     if (status < 200 or status >= 300) return error.PdsUnavailable;
     return .{ .found = try sink.toOwnedSlice() };
@@ -702,7 +702,7 @@ fn listRecords(
         .method = .GET,
         .response_writer = &sink.writer,
     });
-    if (@intFromEnum(res.status) < 200 or @intFromEnum(res.status) >= 300) return error.ListRecordsFailed;
+    if (@backingInt(res.status) < 200 or @backingInt(res.status) >= 300) return error.ListRecordsFailed;
 
     return sink.toOwnedSlice();
 }

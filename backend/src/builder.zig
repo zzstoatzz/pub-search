@@ -285,10 +285,10 @@ pub fn run(allocator: Allocator, io: Io) !void {
         \\}}
         \\
     , .{
-        MANIFEST_VERSION,        LocalDb.SCHEMA_VERSION, build_id,    @tagName(channel),
-        snapshot_key,            byte_size,              &sha_hex,    watermark,
-        counts.documents,        counts.publications,    counts.tags, counts.recommends,
-        started_s,               getenv("BUILDER_VERSION") orelse "dev",
+        MANIFEST_VERSION, LocalDb.SCHEMA_VERSION,                 build_id,    @tagName(channel),
+        snapshot_key,     byte_size,                              &sha_hex,    watermark,
+        counts.documents, counts.publications,                    counts.tags, counts.recommends,
+        started_s,        getenv("BUILDER_VERSION") orelse "dev",
     });
 
     try writeFile(io, manifest_path, manifest);

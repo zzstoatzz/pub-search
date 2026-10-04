@@ -947,10 +947,10 @@ test "DOC_UPSERT_SQL: unchanged content keeps indexed_at, changed content bumps 
     const upsert = struct {
         fn run(c: zqlite.Conn, hash: []const u8, cover: []const u8) !void {
             try c.exec(DOC_UPSERT_SQL, .{
-                "at://did:plc:x/doc/1", "did:plc:x",  "1",   "title", "content",
-                "2020-01-01",           "",           "other", "site.standard.document",
-                "",                     "",           "0",   hash,    cover,
-                "0",                    "",           "",
+                "at://did:plc:x/doc/1", "did:plc:x", "1",     "title",                  "content",
+                "2020-01-01",           "",          "other", "site.standard.document", "",
+                "",                     "0",         hash,    cover,                    "0",
+                "",                     "",
             });
         }
     }.run;

@@ -242,7 +242,7 @@ test "store insert and query by cursor" {
         .uri = "did:plc:user1",
         .val = "bulk-mirror",
         .cts = "2024-01-01T00:00:00.000Z",
-        .sig = &(.{0xaa} ** 64),
+        .sig = &@as([64]u8, @splat(0xaa)),
     };
     const seq1 = try store.insert(&label1, "encoded1");
 
@@ -251,7 +251,7 @@ test "store insert and query by cursor" {
         .uri = "did:plc:user2",
         .val = "bulk-mirror",
         .cts = "2024-01-01T00:01:00.000Z",
-        .sig = &(.{0xbb} ** 64),
+        .sig = &@as([64]u8, @splat(0xbb)),
     };
     const seq2 = try store.insert(&label2, "encoded2");
 
@@ -280,7 +280,7 @@ fn seedThree(store: *Store) !void {
         .uri = "did:plc:target",
         .val = "bulk-mirror",
         .cts = "2024-01-01T00:00:00.000Z",
-        .sig = &(.{0xaa} ** 64),
+        .sig = &@as([64]u8, @splat(0xaa)),
     };
     _ = try store.insert(&l1, "e1");
 
@@ -289,7 +289,7 @@ fn seedThree(store: *Store) !void {
         .uri = "did:plc:other",
         .val = "bulk-mirror",
         .cts = "2024-01-01T00:00:01.000Z",
-        .sig = &(.{0xbb} ** 64),
+        .sig = &@as([64]u8, @splat(0xbb)),
     };
     _ = try store.insert(&l2, "e2");
 
@@ -298,7 +298,7 @@ fn seedThree(store: *Store) !void {
         .uri = "at://did:plc:target/app.bsky.feed.post/abc",
         .val = "bulk-mirror",
         .cts = "2024-01-01T00:00:02.000Z",
-        .sig = &(.{0xcc} ** 64),
+        .sig = &@as([64]u8, @splat(0xcc)),
     };
     _ = try store.insert(&l3, "e3");
 }

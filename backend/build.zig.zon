@@ -2,39 +2,39 @@
     .name = .leaflet_search,
     .version = "0.0.1",
     .fingerprint = 0x4a432eb7171f22eb,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .websocket = .{
-            .url = "https://tangled.org/zzstoatzz.io/websocket.zig/archive/v0.1.12.tar.gz",
-            .hash = "websocket-0.1.12-ZPISdTJEBQDiqWKUP5mPPK9IXJ5xscVHybOlUbPHM9Rr",
+            .url = "https://tangled.org/zzstoatzz.io/websocket.zig/archive/v0.2.0-alpha.3.tar.gz",
+            .hash = "websocket-0.2.0-alpha.3-ZPISdTdhBQCfitS39hRrh-l0dHYA1OFBj4TYKlujpcet",
         },
         .zql = .{
-            .url = "https://github.com/zzstoatzz/zql/archive/main.tar.gz",
-            .hash = "zql-0.0.1-alpha-xNRI4IRNAABUb9gLat5FWUaZDD5HvxAxet_-elgR_A_y",
+            .url = "https://tangled.org/zzstoatzz.io/zql/archive/b21f02e28943b4e161e08a251a027c2f410f0ea9.tar.gz",
+            .hash = "zql-0.0.1-alpha-xNRI4BtLAAAcBirCJWvTMCVK-u4a8abVi1zN8rUnlqQu",
         },
         .zat = .{
-            .url = "https://tangled.org/zat.dev/zat/archive/v0.4.2.tar.gz",
-            .hash = "zat-0.4.2-5PuC7iaJDACQSazzCxGb6_e75EIOPHAG2JU_WDdO3qW6",
+            .url = "https://tangled.org/zat.dev/zat/archive/v0.6.0-alpha.3.tar.gz",
+            .hash = "zat-0.6.0-alpha.3-5PuC7knODAA5k6O9uVehwqDLQqwFufPmZQu3974opa_0",
         },
         .zqlite = .{
-            .url = "https://github.com/karlseguin/zqlite.zig/archive/5ac4cabe95a6d7faa7baf0da8057a8e6e8a227a1.tar.gz",
-            .hash = "zqlite-0.0.1-RWLaY64xnAAxsD2YNT8QqPMJUuaFv2GOzFRR4aGypJv3",
+            .url = "https://tangled.org/zzstoatzz.io/zqlite.zig/archive/f095cf2589640e9722ca8aee0daead2928a7dcac.tar.gz",
+            .hash = "zqlite-0.0.1-RWLaY-k8nADr-cpp3VIySOX2zAUPxlU3qF1kQ2T3zG23",
         },
         .logfire = .{
-            .url = "https://tangled.sh/@zzstoatzz.io/logfire-zig/archive/df76dac2b228945ab0a6954268cfe53d0e34a753.tar.gz",
-            .hash = "logfire_zig-0.2.4-x2yDLsGPAACfc3bIqty9Z2tMD0UlZI8pz74irecHRDDQ",
+            .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/6501065cd8102203e20b0060eab4c64929f97870.tar.gz",
+            .hash = "logfire_zig-0.3.2-x2yDLrfUAADZ4JHvkP92-0sV-ILBtiRx4_D37Wx-4ODE",
         },
         .zug = .{
-            .url = "https://tangled.org/zzstoatzz.io/zug/archive/v0.1.1-alpha.0.tar.gz",
-            .hash = "zug-0.1.1-alpha.0-h4vXbambAAAfzRxf5WGSkExOJkO9QfpkdA9R7s2XPNo0",
+            .url = "https://tangled.org/zzstoatzz.io/zug/archive/3ecbffd27a0ebebc26e56a124b4d36a8d003c7dd.tar.gz",
+            .hash = "zug-0.1.2-alpha.0-h4vXbSewAADWsV2FBFfKVjl6o3pCh20umu-wDLaDPVsj",
         },
         .poolio = .{
-            .url = "https://tangled.org/zzstoatzz.io/poolio/archive/v0.0.1-alpha.1.tar.gz",
-            .hash = "poolio-0.0.1-alpha.1-qYctK2JcAADiWqRISK92yk_GjGTVYeBEUGMrE4QtJE0N",
+            .url = "https://tangled.org/zzstoatzz.io/poolio/archive/ed65c24a3b8a6eb7b2070314c8cf04cb96ec300b.tar.gz",
+            .hash = "poolio-0.0.1-alpha.2-qYctK9tlAACCRGbHlKbpHlix6vJTn5n_-UAIlZZeUTqB",
         },
         .jetstream = .{
-            .url = "https://tangled.org/zat.dev/jetstream/archive/v0.1.0.tar.gz",
-            .hash = "jetstream-0.1.0-6CDX5pbvAgAlmwrChL-Hhsyq2VOr03dmjjZNjus6MWUS",
+            .url = "https://tangled.org/zat.dev/jetstream/archive/55be8c9b4451a8d0fd11f246865c2aba1b2f1d97.tar.gz",
+            .hash = "jetstream-0.1.5-6CDX5moaBQAvjNaeC-BDOrs_m4u2lsg6SsbuZvZqsDGT",
         },
     },
     .paths = .{
