@@ -103,6 +103,7 @@ pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
             return;
         };
         const recv_us = microTimestamp(io) - recv_start;
+        if (rejectUnframedBody(&request)) return;
         const target = request.head.target;
 
         const req_span = logfire.span("http.request", .{
@@ -120,6 +121,18 @@ pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
 
         if (!request.head.keep_alive) return;
     }
+}
+
+/// A POST/PUT/PATCH with neither Content-Length nor Transfer-Encoding trips an
+/// assert inside std.http.Server when a keep-alive response is sent without
+/// the body having been read, which panics the whole process. No handler here
+/// reads a body, so answer 411 and close before any of them can respond.
+fn rejectUnframedBody(request: *http.Server.Request) bool {
+    const head = &request.head;
+    if (!head.method.requestHasBody()) return false;
+    if (head.transfer_encoding != .none or head.content_length != null) return false;
+    request.respond("", .{ .status = .length_required, .keep_alive = false }) catch {};
+    return true;
 }
 
 fn handleRequest(server: *http.Server, request: *http.Server.Request, io: Io) !void {
@@ -1890,4 +1903,29 @@ test "result policy fails closed when the visibility set never loaded" {
     const filtered = try applyResultPolicy(alloc, body, .{});
     const root = try json.parseFromSliceLeaky(json.Value, alloc, filtered, .{});
     try std.testing.expectEqual(@as(usize, 0), root.array.items.len);
+}
+
+test "rejectUnframedBody: bodiless POST gets 411 instead of reaching a handler" {
+    var out: [512]u8 = undefined;
+
+    var unframed: Io.Reader = .fixed("POST /search HTTP/1.1\r\nHost: x\r\n\r\n");
+    var unframed_out: Io.Writer = .fixed(&out);
+    var unframed_server = http.Server.init(&unframed, &unframed_out);
+    var unframed_request = try unframed_server.receiveHead();
+    try std.testing.expect(rejectUnframedBody(&unframed_request));
+    try std.testing.expect(mem.startsWith(u8, unframed_out.buffered(), "HTTP/1.1 411 "));
+    try std.testing.expect(mem.indexOf(u8, unframed_out.buffered(), "connection: close") != null);
+
+    inline for (.{
+        "GET /search HTTP/1.1\r\nHost: x\r\n\r\n",
+        "POST /search HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+        "POST /search HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n",
+    }) |raw| {
+        var in: Io.Reader = .fixed(raw);
+        var w: Io.Writer = .fixed(&out);
+        var server = http.Server.init(&in, &w);
+        var request = try server.receiveHead();
+        try std.testing.expect(!rejectUnframedBody(&request));
+        try std.testing.expectEqual(0, w.buffered().len);
+    }
 }
