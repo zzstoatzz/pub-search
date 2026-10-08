@@ -67,7 +67,7 @@ pub-search-snapshot flow (daily):            backend serves search unchanged:
    `snapshot-builder-hourly`; DELETE `scripts/reconcile-snapshot-builder`,
    `scripts/guard-snapshot-builder`, their workflow step + path triggers in
    `.github/workflows/deploy-backend.yml`, and the builder-machine runbooks
-   in CLAUDE.md. builder *code* (builder.zig, r2.zig, BUILDER_* env handling)
+   in AGENTS.md. builder *code* (builder.zig, r2.zig, BUILDER_* env handling)
    stays — it is what heavypad runs. the watchdog stays too (flow-level belt
    + binary-level suspenders), default bumped so ad-hoc runs aren't leashed.
 5. **cadence**: start at every 2h (bandwidth ~14GB/day upload at 600MB —
