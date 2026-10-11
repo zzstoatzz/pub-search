@@ -29,8 +29,10 @@
       if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', t);
     })();
+    window.atlasViewRequest = fetch('atlas-view.json.gz');
+    window.atlasViewRequest.catch(function() {});
   </script>
-  <link rel="stylesheet" href="atlas.css?build=rest-1">
+  <link rel="stylesheet" href="atlas.css?build=view-1">
   <link rel="stylesheet" href="components.css?v=1783000000">
   <script src="loading.js" defer></script>
 </head>
@@ -120,10 +122,11 @@
   <script src="clients.js"></script>
   <script src="ui.js"></script>
   <script src="atlas-gl.js"></script>
-  <script src="atlas-interaction.js?v=rest-1"></script>
-  <script src="atlas-summaries.js?build=rest-1"></script>
-  <script src="atlas-finder.js?build=rest-1"></script>
-  <script src="atlas.js?build=rest-1"></script>
+  <script src="atlas-interaction.js?v=view-1"></script>
+  <script src="atlas-view.js?build=view-1"></script>
+  <script src="atlas-summaries.js?build=view-1"></script>
+  <script src="atlas-finder.js?build=view-1"></script>
+  <script src="atlas.js?build=view-1"></script>
   <script>
     document.getElementById('settings-btn').addEventListener('click', function() {
       window.LeafletUI.openSettings();

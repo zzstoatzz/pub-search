@@ -91,6 +91,9 @@ class Handler(SimpleHTTPRequestHandler):
             body, kind = b'{"version":2,"status":"unavailable","clusters":[]}', "application/json"
         elif path == "/":
             body, kind = PAGE, "text/html"
+        elif path == "/site/atlas-view.json.gz":
+            self.send_error(404)
+            return
         elif path == "/site/atlas.json.gz":
             body, kind = DATA, "application/gzip"
         elif path.startswith("/api/"):

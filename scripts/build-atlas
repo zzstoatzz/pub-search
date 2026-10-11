@@ -37,6 +37,7 @@ from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from atlas_labels import excluded_dids, filter_labeled_rows
+import atlas_view
 
 
 # avatar cache: persists did → avatar URL across runs.
@@ -856,6 +857,14 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(output, separators=(",", ":")).encode()
     out_path.write_bytes(gzip.compress(raw, mtime=0))
+    # the page's smaller download; without it the page falls back to out_path
+    view_path = out_path.with_name(atlas_view.NAME)
+    try:
+        atlas_view.write(out_path)
+        log(f"wrote {view_path} ({view_path.stat().st_size / 1024:.0f} KB gz)")
+    except Exception as exc:
+        view_path.unlink(missing_ok=True)
+        log(f"warning: atlas view not written ({type(exc).__name__}: {exc})")
 
     size_kb = out_path.stat().st_size / 1024
     elapsed = time.monotonic() - t_start

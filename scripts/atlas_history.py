@@ -9,6 +9,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import atlas_view
+
 
 def archive(atlas_path: Path, database: Path) -> str:
     atlas_raw = gzip.decompress(atlas_path.read_bytes())
@@ -53,6 +55,10 @@ def restore(database: Path, snapshot_id: str, output: Path) -> None:
     for name, content in (("atlas.json.gz", payloads[0][0]), ("atlas-summaries.json", payloads[1][1])):
         with (output / name).open("xb") as destination:
             destination.write(content)
+    try:
+        atlas_view.write(output / "atlas.json.gz")
+    except (KeyError, ValueError):
+        pass  # an archive the view cannot express; the page falls back to atlas.json.gz
 
 
 if __name__ == "__main__":

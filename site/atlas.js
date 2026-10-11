@@ -2374,14 +2374,12 @@
     // start logo prefetch in parallel — they're small (<60KB total) and we
     // want them ready by the time the user zooms in far enough for titles.
     loadPlatformLogos();
-    // atlas.json.gz: the raw json passed cloudflare pages' 25MiB per-file
-    // limit, so the build ships it gzipped and we decompress client-side
+    // the map ships gzipped and is decompressed client-side: the raw json
+    // passed cloudflare pages' 25MiB per-file limit. atlas.html starts the
+    // download before these scripts have loaded.
     var started = performance.now();
-    fetch('atlas.json.gz')
-      .then(function(response) {
-        if(!response.ok) throw new Error('Map download failed ('+response.status+').');
-        return new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).json();
-      }).then(async function(d) {
+    AtlasView.load(window.atlasViewRequest)
+      .then(async function(d) {
         document.querySelector('#loading pub-loading').textContent='Finding room for '+d.points.length.toLocaleString()+' documents…';
         data = d;
         var n = d.points.length;

@@ -265,6 +265,7 @@ def test_archive_restores_exact_inputs_and_deduplicates(tmp_path):
     restore(database, first, tmp_path / 'restored')
     assert gzip.decompress((tmp_path / 'restored/atlas.json.gz').read_bytes()) == raw
     assert json.loads((tmp_path / 'restored/atlas-summaries.json').read_text())['prompt'] == 'original prompt'
+    assert not (tmp_path / 'restored/atlas-view.json.gz').exists()
     with pytest.raises(FileExistsError):
         restore(database, first, tmp_path / 'restored')
     with sqlite3.connect(database) as db:

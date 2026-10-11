@@ -43,7 +43,7 @@ Browser harnesses under `/scripts/tests/` use the actual frontend:
 - `atlas-gl.html`: GPU rendering checks.
 
 ```sh
-node --test scripts/tests/atlas-interaction.cjs scripts/tests/atlas-spacing.cjs scripts/tests/atlas-finder.mjs scripts/tests/atlas-summaries.mjs
+node --test scripts/tests/atlas-interaction.cjs scripts/tests/atlas-spacing.cjs scripts/tests/atlas-finder.mjs scripts/tests/atlas-summaries.mjs scripts/tests/atlas-view.mjs
 ```
 
 For visual changes, check narrow and desktop layouts, light/dark themes, reduced
@@ -59,7 +59,7 @@ Never deploy the frontend by calling Wrangler directly.
 Before a manual UI release, download the current generated files into `site/`:
 
 ```sh
-for f in atlas.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json atlas-summaries-lite.json; do
+for f in atlas.json.gz atlas-view.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json atlas-summaries-lite.json; do
   curl --fail --silent --show-error --output "site/$f" "https://pub-search.waow.tech/$f" || break
 done
 ```

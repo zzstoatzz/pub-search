@@ -13,8 +13,8 @@ module.exports = {
   globIgnores: ['sw.js', 'sw-atlas-refresh.js', 'atlas.html', 'workbox-*.js', 'workbox-config.cjs'],
   importScripts: ['sw-atlas-refresh.js'],
   manifestTransforms: [async entries => ({
-    manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js', 'atlas-finder.js'].includes(entry.url)
-      ? { ...entry, url: entry.url + '?build=rest-1' } : entry),
+    manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js', 'atlas-finder.js', 'atlas-view.js'].includes(entry.url)
+      ? { ...entry, url: entry.url + '?build=view-1' } : entry),
     warnings: [],
   })],
   swDest: 'sw.js',
@@ -31,7 +31,7 @@ module.exports = {
       options: { cacheName: 'atlas-page', networkTimeoutSeconds: 10, expiration: { maxEntries: 4 } },
     },
     {
-      urlPattern: /\/atlas\.json\.gz$/,
+      urlPattern: /\/atlas(-view)?\.json\.gz$/,
       handler: 'NetworkFirst',
       options: { cacheName: 'atlas-map', networkTimeoutSeconds: 10, expiration: { maxEntries: 2 } },
     },
