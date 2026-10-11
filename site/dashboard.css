@@ -221,7 +221,7 @@ a.pub-name:hover { color: #2a9d5c; }
 
 .latency-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 0.75rem;
 }
 .latency-cell {
