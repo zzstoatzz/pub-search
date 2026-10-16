@@ -310,6 +310,10 @@
   function rowMenuItems(opts) {
     var items = [];
     if (opts.uri) {
+      items.push({ label: 'Who recommended this?', onSelect: function() {
+        openRecommenders(opts.uri, opts.trigger, opts.apiBase);
+      }});
+      items.push({ divider: true });
       items.push({ label: 'View document on atlas', onSelect: function() {
         location.href = '/atlas.html?uri=' + encodeURIComponent(opts.uri);
       }});
@@ -319,26 +323,110 @@
         location.href = '/atlas.html?pub=' + encodeURIComponent(opts.basePath);
       }});
     }
-    if (opts.handle) {
-      items.push({ label: 'View author on atlas', onSelect: function() {
-        location.href = '/atlas.html?q=' + encodeURIComponent('@' + opts.handle);
-      }});
-    }
-    // Cross-page jump from a doc row to leaderboard views of this author.
-    // Needs the DID (handle alone isn't enough for the backend filter).
-    if (opts.authorDid) {
-      items.push({ label: "Most-recommended posts they've written", onSelect: function() {
-        location.href = '/recommended.html?author=' + encodeURIComponent(opts.authorDid);
-      }});
-      items.push({ label: "Posts they've recommended", onSelect: function() {
-        location.href = '/recommended.html?curator=' + encodeURIComponent(opts.authorDid);
-      }});
-    }
     if (opts.externalUrl) {
       items.push({ divider: true });
       items.push({ label: 'Copy link', onSelect: function() { copyToClipboard(opts.externalUrl); } });
     }
     return items;
+  }
+
+  function openRecommenders(uri, trigger, apiBase) {
+    var previous = document.querySelector('.lf-recommenders');
+    if (previous) previous.close();
+    var returnFocus = trigger || document.activeElement;
+    var dialog = document.createElement('dialog');
+    dialog.className = 'lf-recommenders';
+    dialog.setAttribute('aria-labelledby', 'lf-recommenders-title');
+    dialog.innerHTML = '<header><h2 id="lf-recommenders-title">Recommended by</h2>' +
+      '<button type="button" class="lf-recommenders-close" aria-label="Close recommenders">×</button></header>' +
+      '<div class="lf-recommenders-content" aria-live="polite"></div>';
+    var content = dialog.querySelector('.lf-recommenders-content');
+    var controller = new AbortController();
+    var oldOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(dialog);
+    dialog.addEventListener('close', function() {
+      controller.abort();
+      if (trigger && trigger.hasAttribute('aria-expanded')) trigger.setAttribute('aria-expanded', 'false');
+      document.body.style.overflow = oldOverflow;
+      dialog.remove();
+      if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+    });
+    dialog.querySelector('.lf-recommenders-close').addEventListener('click', function() { dialog.close(); });
+    dialog.addEventListener('click', function(e) {
+      if (e.target !== dialog) return;
+      var rect = dialog.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) dialog.close();
+    });
+    dialog.showModal();
+    if (trigger && trigger.hasAttribute('aria-expanded')) trigger.setAttribute('aria-expanded', 'true');
+
+    function render(dids, profiles) {
+      if (!dialog.open) return;
+      content.replaceChildren();
+      if (!dids.length) {
+        content.textContent = 'No recommendations indexed yet.';
+        return;
+      }
+      var list = document.createElement('ul');
+      dids.forEach(function(did) {
+        var p = profiles.get(did);
+        var label = p && (p.displayName || p.handle) || did;
+        var item = document.createElement('li');
+        var link = document.createElement('a');
+        link.className = 'lf-recommender';
+        link.href = '/recommended.html?curator=' + encodeURIComponent(did);
+        link.title = 'See posts recommended by ' + label;
+        var avatar = document.createElement('span');
+        avatar.className = 'lf-recommender-avatar';
+        avatar.textContent = label.charAt(0).toUpperCase();
+        if (p && p.avatar && /^https?:\/\//.test(p.avatar)) {
+          var img = document.createElement('img');
+          img.src = p.avatar;
+          img.alt = '';
+          img.loading = 'lazy';
+          img.addEventListener('error', function() { img.remove(); });
+          avatar.appendChild(img);
+        }
+        var identity = document.createElement('span');
+        identity.className = 'lf-recommender-identity';
+        var name = document.createElement('strong');
+        name.textContent = label;
+        identity.appendChild(name);
+        if (p && p.handle) {
+          var handle = document.createElement('span');
+          handle.textContent = '@' + p.handle;
+          identity.appendChild(handle);
+        }
+        link.append(avatar, identity);
+        item.appendChild(link);
+        list.appendChild(item);
+      });
+      content.appendChild(list);
+    }
+
+    function load() {
+      content.textContent = 'Loading recommenders…';
+      fetch((apiBase || '/api') + '/recommenders?document=' + encodeURIComponent(uri), { signal: controller.signal })
+        .then(function(r) { if (!r.ok) throw new Error('request failed'); return r.json(); })
+        .then(function(rows) {
+          if (!Array.isArray(rows) || rows.some(function(r) { return !r || typeof r.did !== 'string'; })) throw new Error('invalid recommenders');
+          var dids = Array.from(new Set(rows.map(function(r) { return r.did; })));
+          render(dids, new Map());
+          if (!dids.length || !window.LeafletIdentity) return;
+          return window.LeafletIdentity.resolveProfiles(dids).then(function(profiles) { render(dids, profiles); });
+        })
+        .catch(function(err) {
+          if (err.name === 'AbortError' || !dialog.open) return;
+          content.textContent = 'Couldn’t load recommenders. ';
+          var retry = document.createElement('button');
+          retry.type = 'button';
+          retry.textContent = 'Try again';
+          retry.addEventListener('click', load);
+          content.appendChild(retry);
+        });
+    }
+    load();
   }
 
   // ---------- typeahead ----------
@@ -571,6 +659,7 @@
     authorMenuItems: authorMenuItems,
     publicationMenuItems: publicationMenuItems,
     rowMenuItems: rowMenuItems,
+    openRecommenders: openRecommenders,
     curatorMenuItems: curatorMenuItems,
     isMobile: isMobile,
   };

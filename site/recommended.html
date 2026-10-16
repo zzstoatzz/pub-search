@@ -441,6 +441,8 @@
       -webkit-tap-highlight-color: transparent;
     }
     .row .lf-row-more:hover { color: var(--text-secondary); }
+    .row-avatar[role="button"] { cursor: pointer; }
+    .row-avatar[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
     /* view toggle: posts | curators — higher-order than the window picker.
      * Same axis (recommends) measured against different entities. */
@@ -817,7 +819,7 @@
       var scoreHtml = doc.uri
         ? '<div class="score-wrap">' +
             '<button type="button" class="score score-btn" aria-expanded="false" ' +
-              'aria-label="show who recommended this" data-uri="' + escapeHtml(doc.uri) + '">' +
+              'aria-haspopup="dialog" title="Who recommended this?" aria-label="show who recommended this" data-uri="' + escapeHtml(doc.uri) + '">' +
               scoreInner +
             '</button>' +
             '<div class="likers-pop" hidden></div>' +
@@ -945,6 +947,8 @@
             } else {
               items = window.LeafletUI.rowMenuItems({
                 uri: data.uri || '',
+                trigger: moreBtn,
+                apiBase: API_BASE,
                 basePath: data.basePath || '',
                 handle: '',
                 authorDid: data.did || '',
@@ -956,6 +960,21 @@
           };
           moreBtn.addEventListener('click', handler);
           window.LeafletUI.longPress(moreBtn, handler);
+        }
+
+        var authorAvatar = row.querySelector('.row-avatar');
+        if (data.kind !== 'curator' && authorAvatar && data.did) {
+          authorAvatar.setAttribute('role', 'button');
+          authorAvatar.setAttribute('tabindex', '0');
+          authorAvatar.setAttribute('aria-label', 'Author actions');
+          var showAuthor = function() {
+            var rect = authorAvatar.getBoundingClientRect();
+            window.LeafletUI.showMenu(window.LeafletUI.authorMenuItems(handleCache.get(data.did) || data.did, data.did), rect.left, rect.bottom + 4);
+          };
+          authorAvatar.addEventListener('click', showAuthor);
+          authorAvatar.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showAuthor(); }
+          });
         }
 
         var pubLink = row.querySelector('.pub-link');
@@ -999,7 +1018,8 @@
       btn.addEventListener('click', function(e) {
         e.preventDefault();
         cancelClose(pop);
-        if (pop.hasAttribute('hidden')) open(); else closePop(pop);
+        closePop(pop);
+        window.LeafletUI.openRecommenders(btn.dataset.uri, btn, API_BASE);
       });
 
       if (CAN_HOVER) {

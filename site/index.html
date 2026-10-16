@@ -1746,7 +1746,7 @@
               </div>
               ${snippetHtml}
               <div class="result-meta" ${metaData}>
-                ${date ? `${date} | ` : ""}<span class="author-name"></span>${pubLabelHtml}<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>
+                ${date ? `${date} | ` : ""}<span class="author-name"></span>${pubLabelHtml}${doc.uri ? `<button class="lf-recommendations-btn" type="button" aria-haspopup="dialog">Recommendations</button>` : ""}<button class="lf-row-more" type="button" aria-label="more actions" title="more">⋯</button>
               </div>
             </div>
           `;
@@ -1881,6 +1881,11 @@
                     const meta = row.querySelector(".result-meta");
                     const data = meta ? meta.dataset : {};
 
+                    const recBtn = row.querySelector(".lf-recommendations-btn");
+                    if (recBtn) recBtn.addEventListener("click", () => {
+                        window.LeafletUI.openRecommenders(data.uri, recBtn, API_URL);
+                    });
+
                     const moreBtn = row.querySelector(".lf-row-more");
                     if (moreBtn) {
                         const handler = (e) => {
@@ -1891,6 +1896,8 @@
                                 : null;
                             const items = window.LeafletUI.rowMenuItems({
                                 uri: data.uri || "",
+                                trigger: moreBtn,
+                                apiBase: API_URL,
                                 basePath: data.basePath || "",
                                 handle: handle || "",
                                 authorDid: data.did || "",
