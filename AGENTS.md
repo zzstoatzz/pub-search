@@ -39,7 +39,7 @@
 - trigger a build now: `prefect deployment run 'pub-search-snapshot/pub-search-snapshot' --watch` (against prefect-server.waow.tech, tailnet)
 - channels: `staging` (default) → `staging/builds/…` + `latest.staging.json`; `prod` requires `BUILDER_ALLOW_PROD=1` and writes `builds/…` + `latest.json` (pointer uploaded LAST)
 - gates before publish: doc-count tolerance vs turso, FTS sentinel, quick_check; banned DIDs + bridgy rows excluded at build time (`policy.zig`)
-- completion signal: `builder: published <id> to <channel> channel` in the flow-run logs; fly promote watcher adopts within its 5-min poll
+- completion signal: `builder: published <id> to <channel> channel` in the flow-run logs; fly promote watcher polls every 5 minutes but adopts during 08:00–08:59 UTC only (`PROMOTE_ADOPT_UTC_HOURS=8`). The overlay carries freshness between daily adoptions; a roughly 24-hour-old serving snapshot is expected before the next window.
 
 ## zig dependencies
 - update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)
@@ -60,6 +60,7 @@
 ## labeler judge
 - the classifier's model-pass reads `REVIEW_PROVIDER` (`openai`, default, or `anthropic`), `REVIEW_MODEL`, `REVIEW_API_URL`, `REVIEW_API_KEY` from fly secrets. defaults: OpenAI `gpt-5.6-luna` at api.openai.com; `REVIEW_PROVIDER=anthropic` switches to `claude-haiku-4-5` (both scored 9/9 on judge-eval, 2026-09-04). re-evaluate a candidate judge with `scripts/judge-eval <model>` before changing it; it must get every known account right on a majority of votes
 - who reaches the judge: the title heuristic (`score` ≥ THRESHOLD), extreme volume (≥5000 docs), or **velocity** — at the 50-doc floor and every 25 after, an author whose documents per day over their date span is ≥2 is nominated regardless of score (fluent long-form farms score ~0.05). a human backfilling an old blog looks the same, costs one review, and then stays decided. **a rescore never drops a decided author**: LABELED/REJECTED/VETOED rows keep their verdict and only their counters are rebuilt, because serving filters on `author_stats` live (docs/retro-2026-09-05-rescore-label-spill.md)
+- reviews sample current Turso documents, independently of the frozen serving snapshot. Missing/unavailable evidence defers the account for 10 minutes without spending a review or incrementing attempts; other pending accounts continue.
 - reviews are budgeted: `REVIEW_DAILY_BUDGET` (default 10) authors per UTC day, tracked in `classifier_meta` so a restart does not reset it; nominations past the budget stay PENDING and are picked up on later days
 
 ## common tasks

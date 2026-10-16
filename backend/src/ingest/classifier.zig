@@ -144,6 +144,7 @@ pub fn init() void {
     // the column already exists).
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN state INTEGER NOT NULL DEFAULT 0") catch {};
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN review_attempts INTEGER NOT NULL DEFAULT 0") catch {};
+    conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN review_after INTEGER NOT NULL DEFAULT 0") catch {};
     conn.execNoArgs("ALTER TABLE author_stats ADD COLUMN reason TEXT NOT NULL DEFAULT ''") catch {};
     // display identity for authors with no replica presence (seeded bans):
     // the replica can't resolve a site for a DID it has zero docs for.
@@ -767,11 +768,18 @@ fn reviewWorker(allocator: Allocator, cfg: ReviewCfg, io: Io) void {
             io.sleep(Io.Duration.fromSeconds(600), .awake) catch {};
             continue;
         }
-        const did = nextPending(allocator, conn) orelse {
+        const now = @divFloor(Io.Timestamp.now(io, .real).toMicroseconds(), 1_000_000);
+        const did = nextPending(allocator, conn, now) orelse {
             io.sleep(Io.Duration.fromSeconds(30), .awake) catch {};
             continue;
         };
         defer allocator.free(did);
+        const material = fetchReviewMaterial(allocator, did) catch |err| {
+            deferReview(conn, did, now);
+            logfire.warn("classifier: evidence unavailable for {s}: {s}; deferred 10m without spending a review", .{ did, @errorName(err) });
+            continue;
+        };
+        defer for (material) |samples| allocator.free(samples);
         countReview(conn, io);
 
         // null verdict = inconclusive (empty/garbled reply, transient provider
@@ -779,7 +787,7 @@ fn reviewWorker(allocator: Allocator, cfg: ReviewCfg, io: Io) void {
         // CLEAR machine/human answer decides. The model's reason (free text — the
         // protocol can't carry it on the label, so we keep it ourselves) is
         // stored for the dashboard.
-        const verdict: ?Verdict = reviewAuthor(allocator, cfg, io, did) catch |err| blk: {
+        const verdict: ?Verdict = reviewAuthor(allocator, cfg, io, did, material) catch |err| blk: {
             if (err == error.NoCapacity) {
                 // nobody is serving the model (cocore has no queue — we are
                 // the queue). Pause; the candidate stays PENDING at its
@@ -862,11 +870,15 @@ fn resetExhaustedAttempts(conn: zqlite.Conn) void {
     ) catch {};
 }
 
-fn nextPending(allocator: Allocator, conn: zqlite.Conn) ?[]const u8 {
+fn deferReview(conn: zqlite.Conn, did: []const u8, now: i64) void {
+    conn.exec("UPDATE author_stats SET review_after = ? WHERE did = ?", .{ now + 600, did }) catch {};
+}
+
+fn nextPending(allocator: Allocator, conn: zqlite.Conn, now: i64) ?[]const u8 {
     if (g_rebuilding.load(.acquire)) return null;
     const row = (conn.row(
-        "SELECT did FROM author_stats WHERE state = ? AND review_attempts < ? ORDER BY review_attempts ASC LIMIT 1",
-        .{ STATE_PENDING, MAX_REVIEW_ATTEMPTS },
+        "SELECT did FROM author_stats WHERE state = ? AND review_attempts < ? AND review_after <= ? ORDER BY review_attempts ASC, did LIMIT 1",
+        .{ STATE_PENDING, MAX_REVIEW_ATTEMPTS, now },
     ) catch return null) orelse return null;
     defer row.deinit();
     return allocator.dupe(u8, row.text(0)) catch null;
@@ -890,7 +902,7 @@ const EXCERPT_LEN: usize = 800;
 /// independent reviews over different corpus slices, VOTE_MAJORITY clear
 /// agreeing answers decide. Returns null = no majority (retry). The returned
 /// reason (from the first vote on the winning side) is owned by `allocator`.
-fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8) !?Verdict {
+fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, material: [VOTES][]const u8) !?Verdict {
     var machine_reason: ?[]const u8 = null;
     var human_reason: ?[]const u8 = null;
     errdefer if (machine_reason) |r| allocator.free(r);
@@ -899,7 +911,7 @@ fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8) !
     var human_votes: usize = 0;
 
     for (0..VOTES) |vote| {
-        const v = (reviewVote(allocator, cfg, io, did, vote) catch |err| {
+        const v = (reviewVote(allocator, cfg, io, did, material[vote]) catch |err| {
             // capacity errors abort the whole review — the worker pauses the
             // queue instead of counting an offline provider as a failed attempt
             if (err == error.NoCapacity) return err;
@@ -933,11 +945,8 @@ fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8) !
     return null;
 }
 
-/// One vote: build this vote's evidence slice, ask the model once.
-fn reviewVote(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, vote: usize) !?Verdict {
-    const samples = try fetchVoteMaterial(allocator, did, vote);
-    defer allocator.free(samples);
-
+/// One vote: ask the model once using the prepared evidence slice.
+fn reviewVote(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, samples: []const u8) !?Verdict {
     // the line is COMPOSED vs GENERATED, not human vs machine: most banned
     // content was human-written at the source (patents, recall notices,
     // transcripts) and original AI writing is welcome. Keep this text in
@@ -995,48 +1004,54 @@ fn reviewVote(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, vot
 /// (openings are the most template-like part of anyone's writing). Everything
 /// is ordered by created_at and picked by deterministic index, phased by
 /// `vote`, so each vote sees a different — but reproducible — slice.
+const VOTE_MATERIAL_SQL = std.fmt.comptimePrint(
+    \\WITH ranked AS (
+    \\  SELECT uri, title, row_number() OVER (ORDER BY created_at, rkey) - 1 AS idx,
+    \\    count(*) OVER () AS n, min(created_at) OVER () AS first_at,
+    \\    max(created_at) OVER () AS last_at
+    \\  FROM documents WHERE did = ?
+    \\), selected AS (
+    \\  SELECT *, idx % max(n / {d}, 1) = CAST(? AS INTEGER) % max(n / {d}, 1)
+    \\    AND idx / max(n / {d}, 1) < {d} AS title_pick,
+    \\    idx IN (SELECT ((n * (2 * j + 1)) / {d} + CAST(? AS INTEGER)) % n
+    \\      FROM (SELECT 0 AS j UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4)) AS excerpt_pick
+    \\  FROM ranked
+    \\)
+    \\SELECT n, first_at, last_at, title, title_pick, excerpt_pick,
+    \\  CASE WHEN excerpt_pick THEN
+    \\    (SELECT substr(content, max(1, (length(content) - {d}) / 2 + 1), {d})
+    \\     FROM documents WHERE uri = selected.uri) ELSE '' END
+    \\FROM selected WHERE title_pick OR excerpt_pick ORDER BY idx
+, .{ TITLES_PER_VOTE, TITLES_PER_VOTE, TITLES_PER_VOTE, TITLES_PER_VOTE, 2 * EXCERPTS_PER_VOTE, EXCERPT_LEN, EXCERPT_LEN });
+
+fn fetchReviewMaterial(allocator: Allocator, did: []const u8) ![VOTES][]const u8 {
+    var material: [VOTES][]const u8 = undefined;
+    var fetched: usize = 0;
+    errdefer for (material[0..fetched]) |samples| allocator.free(samples);
+    for (&material, 0..) |*samples, vote| {
+        samples.* = try fetchVoteMaterial(allocator, did, vote);
+        fetched += 1;
+    }
+    return material;
+}
+
 fn fetchVoteMaterial(allocator: Allocator, did: []const u8, vote: usize) ![]const u8 {
-    const local = db.getLocalDbRaw() orelse return error.NoReplica;
+    const client = db.getClient() orelse return error.NoClient;
+    var vote_buf: [20]u8 = undefined;
+    const vote_text = try std.fmt.bufPrint(&vote_buf, "{d}", .{vote});
+    var result = try client.query(VOTE_MATERIAL_SQL, .{ did, vote_text, vote_text });
+    defer result.deinit();
+    const first = result.first() orelse return error.NoSamples;
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
-
-    const total: usize = blk: {
-        var rows = try local.query("SELECT COUNT(*), COALESCE(MIN(created_at),''), COALESCE(MAX(created_at),'') FROM documents WHERE did = ?", .{did});
-        defer rows.deinit();
-        const row = rows.next() orelse return error.NoSamples;
-        const n: usize = @intCast(@max(row.int(0), 0));
-        if (n == 0) return error.NoSamples;
-        try out.writer.print("Account facts: {d} documents, first {s}, latest {s}\n\nTitles across the account's history:\n", .{ n, row.text(1), row.text(2) });
-        break :blk n;
-    };
-
-    {
-        var rows = try local.query("SELECT title FROM documents WHERE did = ? ORDER BY created_at, rkey", .{did});
-        defer rows.deinit();
-        const stride = @max(total / TITLES_PER_VOTE, 1);
-        const phase = vote % stride;
-        var i: usize = 0;
-        var picked: usize = 0;
-        while (rows.next()) |row| : (i += 1) {
-            if (picked >= TITLES_PER_VOTE) break;
-            if (i % stride != phase) continue;
-            picked += 1;
-            try out.writer.print("- {s}\n", .{row.text(0)});
-        }
+    try out.writer.print("Account facts: {d} documents, first {s}, latest {s}\n\nTitles across the account's history:\n", .{ first.int(0), first.text(1), first.text(2) });
+    for (result.rows) |row| {
+        if (row.int(4) != 0) try out.writer.print("- {s}\n", .{row.text(3)});
     }
-
     try out.writer.writeAll("\nContent excerpts (from the middle of documents):\n\n");
-    for (0..EXCERPTS_PER_VOTE) |j| {
-        const idx = excerptIndex(total, j, vote);
-        var rows = try local.query(
-            "SELECT title, content FROM documents WHERE did = ? ORDER BY created_at, rkey LIMIT 1 OFFSET ?",
-            .{ did, @as(i64, @intCast(idx)) },
-        );
-        defer rows.deinit();
-        const row = rows.next() orelse continue;
-        try out.writer.print("- title: {s}\n  content: {s}\n\n", .{ row.text(0), utf8Middle(row.text(1), EXCERPT_LEN) });
+    for (result.rows) |row| {
+        if (row.int(5) != 0) try out.writer.print("- title: {s}\n  content: {s}\n\n", .{ row.text(3), utf8Middle(row.text(6), EXCERPT_LEN) });
     }
-
     return out.toOwnedSlice();
 }
 
@@ -1658,4 +1673,72 @@ test "exhausted pending authors get fresh attempts on worker start (regression: 
     try std.testing.expectEqual(@as(i64, 0), try attempts.of(conn, "did:stuck")); // visible to nextPending again
     try std.testing.expectEqual(@as(i64, 2), try attempts.of(conn, "did:fresh")); // in-flight count untouched
     try std.testing.expectEqual(MAX_REVIEW_ATTEMPTS, try attempts.of(conn, "did:done")); // non-pending untouched
+}
+
+test "review samples current documents with bounded, phased evidence" {
+    const conn = try zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+    defer conn.close();
+    try conn.execNoArgs("CREATE TABLE documents (uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, content TEXT, created_at TEXT)");
+    try conn.execNoArgs(
+        \\WITH RECURSIVE numbers(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM numbers WHERE i < 99)
+        \\INSERT INTO documents SELECT printf('uri:%03d',i), 'did:fresh', printf('%03d',i),
+        \\  CAST(i AS TEXT), '스케치' || printf('%02000d',i) || '끝', '2026-10-16' FROM numbers
+    );
+    for (0..VOTES) |vote| {
+        var rows = try conn.rows(VOTE_MATERIAL_SQL, .{ "did:fresh", vote, vote });
+        defer rows.deinit();
+        var titles: usize = 0;
+        var excerpts: usize = 0;
+        var count: usize = 0;
+        while (rows.next()) |row| {
+            count += 1;
+            try std.testing.expectEqual(@as(i64, 100), row.int(0));
+            const idx = try std.fmt.parseInt(usize, row.text(3), 10);
+            if (row.int(4) != 0) {
+                titles += 1;
+                try std.testing.expectEqual(vote, idx % 3);
+            }
+            if (row.int(5) != 0) {
+                try std.testing.expectEqual(excerptIndex(100, excerpts, vote), idx);
+                try std.testing.expectEqual(EXCERPT_LEN, row.text(6).len);
+                try std.testing.expect(std.unicode.utf8ValidateSlice(row.text(6)));
+                excerpts += 1;
+            } else try std.testing.expectEqualStrings("", row.text(6));
+        }
+        try std.testing.expectEqual(TITLES_PER_VOTE, titles);
+        try std.testing.expectEqual(EXCERPTS_PER_VOTE, excerpts);
+        try std.testing.expect(count <= TITLES_PER_VOTE + EXCERPTS_PER_VOTE);
+    }
+    try conn.execNoArgs("DELETE FROM documents WHERE did = 'did:fresh'");
+    var missing = try conn.rows(VOTE_MATERIAL_SQL, .{ "did:fresh", 0, 0 });
+    defer missing.deinit();
+    try std.testing.expect(missing.next() == null);
+    try conn.execNoArgs("INSERT INTO documents VALUES ('one', 'did:fresh', 'one', 'one', '스케치', '2026-10-16')");
+    for (0..VOTES) |vote| {
+        const row = (try conn.row(VOTE_MATERIAL_SQL, .{ "did:fresh", vote, vote })).?;
+        defer row.deinit();
+        try std.testing.expectEqual(@as(i64, 1), row.int(0));
+        try std.testing.expectEqual(@as(i64, 1), row.int(5));
+        try std.testing.expectEqualStrings("스케치", row.text(6));
+    }
+}
+
+test "unavailable evidence preserves budget and attempts without starving ready authors" {
+    const conn = try zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+    defer conn.close();
+    try conn.execNoArgs("CREATE TABLE author_stats (did TEXT PRIMARY KEY, state INTEGER, review_attempts INTEGER, review_after INTEGER DEFAULT 0)");
+    try conn.execNoArgs("CREATE TABLE classifier_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)");
+    try conn.execNoArgs("INSERT INTO author_stats (did,state,review_attempts) VALUES ('did:missing',1,0),('did:ready',1,1)");
+    setMeta(conn, "review_count", 3);
+    deferReview(conn, "did:missing", 1000);
+    try std.testing.expectEqual(@as(i64, 3), getMeta(conn, "review_count"));
+    const row = (try conn.row("SELECT review_attempts FROM author_stats WHERE did = 'did:missing'", .{})).?;
+    defer row.deinit();
+    try std.testing.expectEqual(@as(i64, 0), row.int(0));
+    const ready = nextPending(std.testing.allocator, conn, 1000).?;
+    defer std.testing.allocator.free(ready);
+    try std.testing.expectEqualStrings("did:ready", ready);
+    const retried = nextPending(std.testing.allocator, conn, 1600).?;
+    defer std.testing.allocator.free(retried);
+    try std.testing.expectEqualStrings("did:missing", retried);
 }
