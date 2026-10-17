@@ -150,7 +150,7 @@ fn fetchTurso(alloc: Allocator, scope: Scope) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = ByPublicationQuery.fromRow(Row, row);
+        const r = ByPublicationQuery.fromRow(row, Row);
         try jw.write(JsonRow{
             .did = r.did,
             .subscribedAt = r.subscribed_at,

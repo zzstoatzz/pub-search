@@ -77,7 +77,7 @@ pub fn fetch(alloc: Allocator, window: Window) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = Query.fromRow(Row, row);
+        const r = Query.fromRow(row, Row);
         try jw.write(JsonRow{
             .did = r.did,
             .recommendCount = r.recommend_count,

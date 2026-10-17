@@ -557,7 +557,7 @@ fn getTags(alloc: Allocator) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = TagsQuery.fromRow(TagsRow, row);
+        const r = TagsQuery.fromRow(row, TagsRow);
         try jw.write(TagJson{ .tag = r.tag, .count = r.count });
     }
     try jw.endArray();
@@ -574,7 +574,7 @@ fn getTagsLocal(alloc: Allocator, local: *db.LocalDb) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        const r = TagsQuery.fromRow(TagsRow, row);
+        const r = TagsQuery.fromRow(row, TagsRow);
         try jw.write(TagJson{ .tag = r.tag, .count = r.count });
     }
     try jw.endArray();
@@ -622,7 +622,7 @@ fn getPopular(alloc: Allocator, limit: usize) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = PopularQuery.fromRow(PopularRow, row);
+        const r = PopularQuery.fromRow(row, PopularRow);
         try jw.write(PopularJson{ .query = r.query, .count = r.n });
     }
     try jw.endArray();

@@ -334,7 +334,7 @@ pub fn fetch(alloc: Allocator) !Data {
     if (stats_row == null) {
         logfire.warn("dashboard: turso batch returned no stats row", .{});
     }
-    const s: StatsRow = if (stats_row) |r| StatsQuery.fromRow(StatsRow, r) else .{
+    const s: StatsRow = if (stats_row) |r| StatsQuery.fromRow(r, StatsRow) else .{
         .docs = 0,
         .pubs = 0,
         .searches = 0,
@@ -407,7 +407,7 @@ fn fetchLocal(alloc: Allocator, local: *db.LocalDb) !Data {
     var counts_rows = try local.query(LocalCountsQuery.positional, .{});
     defer counts_rows.deinit();
     const counts_row = counts_rows.next() orelse return error.NoStats;
-    const counts = LocalCountsQuery.fromRow(LocalCountsRow, counts_row);
+    const counts = LocalCountsQuery.fromRow(counts_row, LocalCountsRow);
     const documents = counts.docs;
     const publications = counts.pubs;
     const embeddings = counts.embeddings;
@@ -457,7 +457,7 @@ fn formatTagsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        const r = TagsQuery.fromRow(TagsRow, row);
+        const r = TagsQuery.fromRow(row, TagsRow);
         try jw.write(TagJson{ .tag = r.tag, .count = r.count });
     }
     try jw.endArray();
@@ -470,7 +470,7 @@ fn formatTimelineJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        const r = TimelineQueryRef.fromRow(TimelineRow, row);
+        const r = TimelineQueryRef.fromRow(row, TimelineRow);
         try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
     }
     try jw.endArray();
@@ -483,7 +483,7 @@ fn formatPubsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        const r = TopPubsQuery.fromRow(TopPubsRow, row);
+        const r = TopPubsQuery.fromRow(row, TopPubsRow);
         try jw.write(PubJson{ .name = r.name, .basePath = r.base_path, .count = r.doc_count });
     }
     try jw.endArray();
@@ -496,7 +496,7 @@ fn formatPlatformsJsonLocal(alloc: Allocator, rows: *db.LocalDb.Rows) ![]const u
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     while (rows.next()) |row| {
-        const r = PlatformsQuery.fromRow(PlatformsRow, row);
+        const r = PlatformsQuery.fromRow(row, PlatformsRow);
         try jw.write(PlatformJson{ .platform = r.platform, .count = r.count });
     }
     try jw.endArray();
@@ -509,7 +509,7 @@ fn formatTagsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (rows) |row| {
-        const r = TagsQuery.fromRow(TagsRow, row);
+        const r = TagsQuery.fromRow(row, TagsRow);
         try jw.write(TagJson{ .tag = r.tag, .count = r.count });
     }
     try jw.endArray();
@@ -522,7 +522,7 @@ fn formatTimelineJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (rows) |row| {
-        const r = TimelineQueryRef.fromRow(TimelineRow, row);
+        const r = TimelineQueryRef.fromRow(row, TimelineRow);
         try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
     }
     try jw.endArray();
@@ -535,7 +535,7 @@ fn formatPubsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (rows) |row| {
-        const r = TopPubsQuery.fromRow(TopPubsRow, row);
+        const r = TopPubsQuery.fromRow(row, TopPubsRow);
         try jw.write(PubJson{ .name = r.name, .basePath = r.base_path, .count = r.doc_count });
     }
     try jw.endArray();
@@ -548,7 +548,7 @@ fn formatPlatformsJson(alloc: Allocator, rows: []const db.Row) ![]const u8 {
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (rows) |row| {
-        const r = PlatformsQuery.fromRow(PlatformsRow, row);
+        const r = PlatformsQuery.fromRow(row, PlatformsRow);
         try jw.write(PlatformJson{ .platform = r.platform, .count = r.count });
     }
     try jw.endArray();
@@ -679,7 +679,7 @@ fn writeTimelinePoints(jw: *json.Stringify, comptime sql_query: []const u8) !voi
             defer rows.deinit();
             try jw.beginArray();
             while (rows.next()) |row| {
-                const r = TimelineQueryRef.fromRow(TimelineRow, row);
+                const r = TimelineQueryRef.fromRow(row, TimelineRow);
                 try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
             }
             try jw.endArray();
@@ -696,7 +696,7 @@ fn writeTimelinePoints(jw: *json.Stringify, comptime sql_query: []const u8) !voi
 
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = TimelineQueryRef.fromRow(TimelineRow, row);
+        const r = TimelineQueryRef.fromRow(row, TimelineRow);
         try jw.write(TimelineJson{ .date = r.date, .count = r.count, .bridgyfed = r.bridgyfed });
     }
     try jw.endArray();

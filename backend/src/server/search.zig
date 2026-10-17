@@ -400,9 +400,9 @@ const DocQueries = .{
 
 inline fn docCol(comptime name: []const u8) comptime_int {
     @setEvalBranchQuota(20000);
-    const canonical = DocsByTag.columnIndex(name);
+    const canonical = comptime DocsByTag.columnIndex(name).?;
     inline for (DocQueries) |Q| {
-        if (Q.columnIndex(name) != canonical) {
+        if (comptime Q.columnIndex(name).? != canonical) {
             @compileError("doc query column index drift for '" ++ name ++ "'");
         }
     }
@@ -413,7 +413,7 @@ inline fn docCol(comptime name: []const u8) comptime_int {
 // helper just defers to its columnIndex; if we add more Pub query variants
 // later, mirror the docCol drift-check pattern.
 inline fn pubCol(comptime name: []const u8) comptime_int {
-    return PubSearch.columnIndex(name);
+    return comptime PubSearch.columnIndex(name).?;
 }
 
 /// Publication search result (internal)

@@ -158,7 +158,7 @@ pub fn fetch(alloc: Allocator, view: View, window: Window) ![]const u8 {
             var jw: json.Stringify = .{ .writer = &output.writer };
             try jw.beginArray();
             for (res.rows) |row| {
-                const r = PublicationsQuery.fromRow(PubRow, row);
+                const r = PublicationsQuery.fromRow(row, PubRow);
                 const url = if (r.base_path.len > 0)
                     try std.fmt.allocPrint(alloc, "https://{s}", .{r.base_path})
                 else
@@ -186,7 +186,7 @@ pub fn fetch(alloc: Allocator, view: View, window: Window) ![]const u8 {
             var jw: json.Stringify = .{ .writer = &output.writer };
             try jw.beginArray();
             for (res.rows) |row| {
-                const r = PeopleQuery.fromRow(PeopleRow, row);
+                const r = PeopleQuery.fromRow(row, PeopleRow);
                 try jw.write(PeopleJsonRow{
                     .did = r.owner_did,
                     .subscriberCount = r.subscriber_count,

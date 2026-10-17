@@ -466,7 +466,7 @@ pub fn fetch(alloc: Allocator, window: Window, sort: Sort, filter: Filter) ![]co
     for (res.rows) |row| {
         // Both queries share the column projection (asserted at comptime
         // above), so either one's fromRow works.
-        const r = TopQuery.fromRow(Row, row);
+        const r = TopQuery.fromRow(row, Row);
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(JsonRow{
             .type = doc_type,
@@ -580,7 +580,7 @@ fn fetchTopAuthorCascadeTurso(alloc: Allocator, window: Window, pool_size: i64) 
     var jw: json.Stringify = .{ .writer = &output.writer };
     try jw.beginArray();
     for (res.rows) |row| {
-        const r = TopQuery.fromRow(Row, row);
+        const r = TopQuery.fromRow(row, Row);
         const doc_type: []const u8 = if (r.has_publication) "article" else "looseleaf";
         try jw.write(JsonRow{
             .type = doc_type,

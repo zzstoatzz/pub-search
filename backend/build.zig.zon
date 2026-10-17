@@ -9,8 +9,8 @@
             .hash = "websocket-0.2.0-alpha.3-ZPISdTdhBQCfitS39hRrh-l0dHYA1OFBj4TYKlujpcet",
         },
         .zql = .{
-            .url = "https://tangled.org/zzstoatzz.io/zql/archive/b21f02e28943b4e161e08a251a027c2f410f0ea9.tar.gz",
-            .hash = "zql-0.0.1-alpha-xNRI4BtLAAAcBirCJWvTMCVK-u4a8abVi1zN8rUnlqQu",
+            .url = "https://tangled.org/zzstoatzz.io/zql/archive/v0.1.0-alpha.0.tar.gz",
+            .hash = "zql-0.1.0-alpha.0-xNRI4M5pAADicpkog_e5t4VlTW_zkraxV-wP0BF2NsPC",
         },
         .zat = .{
             .url = "https://tangled.org/zat.dev/zat/archive/v0.6.0-alpha.3.tar.gz",
