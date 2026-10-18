@@ -78,7 +78,7 @@ section { margin-bottom: 2rem; }
 
 .metrics > div { flex: 1 1 85px; min-width: min-content; max-width: 100%; }
 .metrics .metric-value { overflow-wrap: normal; }
-.metrics .metric-sub { max-width: 18ch; overflow-wrap: anywhere; }
+.metrics .metric-sub { overflow-wrap: anywhere; }
 .metric-status { display: flex; flex-wrap: wrap; gap: 6px 1.25rem; padding-top: 0.75rem; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-secondary); }
 .metric-status > div { min-width: 0; }
 .metric-status .metric-value { font-size: inherit; }
