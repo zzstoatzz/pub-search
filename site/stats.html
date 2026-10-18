@@ -15,7 +15,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="dashboard.css?v=1782991000">
+  <link rel="stylesheet" href="dashboard.css?v=20261017">
   <link rel="stylesheet" href="components.css?v=1782991000">
 </head>
 <body>
@@ -98,11 +98,11 @@
       <div class="ranged-header">
         <div class="section-title">documents over time</div>
         <div class="ranged-controls">
-          <span class="range-btns" id="timeline-field">
+          <span class="range-btns" id="timeline-field" role="group" aria-label="Document date">
             <button data-field="indexed" class="active">indexed</button>
             <button data-field="created">created</button>
           </span>
-          <span class="range-btns" id="timeline-range">
+          <span class="range-btns" id="timeline-range" role="group" aria-label="Document time range">
             <button data-range="7d">7d</button>
             <button data-range="30d" class="active">30d</button>
             <button data-range="90d">90d</button>
@@ -136,7 +136,7 @@
   <script>
   </script>
   <script src="loading.js"></script>
-  <script src="dashboard.js"></script>
+  <script src="dashboard.js?v=20261017"></script>
   <script src="clients.js"></script>
   <script src="ui.js"></script>
   <script>

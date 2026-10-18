@@ -15,7 +15,7 @@ function formatAge(ms) {
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
-  if (d > 0) return d + 'd ' + h + 'h ' + m + 'm ' + sec + 's';
+  if (d > 0) return d + 'd ' + h + 'h';
   if (h > 0) return h + 'h ' + m + 'm ' + sec + 's';
   return m + 'm ' + sec + 's';
 }
@@ -71,46 +71,161 @@ function formatBucketLabel(date, bucket) {
   return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
-function renderTimeline(timeline, bucket) {
+function timelinePoints(points, bucket) {
+  const sorted = [...points].sort((a, b) => a.date.localeCompare(b.date));
+  if (!sorted.length) return sorted;
+  const counts = new Map(sorted.map(point => [point.date, point.count]));
+  const cursor = new Date(sorted[0].date + 'T00:00:00Z');
+  const end = sorted[sorted.length - 1].date;
+  const filled = [];
+  while (cursor.toISOString().slice(0, 10) <= end) {
+    const date = cursor.toISOString().slice(0, 10);
+    filled.push({ date, count: counts.get(date) || 0 });
+    if (bucket === 'yearly') cursor.setUTCFullYear(cursor.getUTCFullYear() + 1);
+    else if (bucket === 'monthly') cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    else cursor.setUTCDate(cursor.getUTCDate() + (bucket === 'weekly' ? 7 : 1));
+  }
+  return filled;
+}
+
+function renderTimeline(timeline, bucket = 'daily') {
   const el = document.getElementById('timeline');
-  el.innerHTML = '';
-  bucket = bucket || 'daily';
-  if (!timeline || timeline.length === 0) {
-    el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;text-align:center;width:100%;align-self:center">no data in this range</div>';
+  el.replaceChildren();
+  if (!timeline?.length) {
+    el.innerHTML = '<p class="timeline-status">No documents in this range.</p>';
     return;
   }
-
-  const max = Math.max(...timeline.map(d => d.count));
-  [...timeline].reverse().forEach(d => {
-    const totalH = max > 0 ? (d.count / max * 100) : 0;
-
-    const stack = document.createElement('div');
-    stack.className = 'bar-stack';
-    stack.style.height = Math.max(totalH, 3) + '%';
-    stack.title = formatBucketLabel(d.date, bucket) + ': ' + d.count;
-
-    const normalDiv = document.createElement('div');
-    normalDiv.className = 'bar-normal';
-    normalDiv.style.height = '100%';
-    stack.appendChild(normalDiv);
-
-    el.appendChild(stack);
+  const points = timelinePoints(timeline, bucket);
+  const max = Math.max(...points.map(point => point.count), 1);
+  const magnitude = 10 ** Math.floor(Math.log10(max / 4));
+  const step = Math.max(1, Math.ceil(max / 4 / magnitude) * magnitude);
+  const ceiling = step * 4;
+  const unit = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[bucket];
+  const total = points.reduce((sum, point) => sum + point.count, 0);
+  const summary = document.createElement('p');
+  summary.className = 'timeline-summary';
+  summary.textContent = total.toLocaleString() + ' documents ' + timelineField + ' · per ' + unit + ' · UTC';
+  el.appendChild(summary);
+  const plot = document.createElement('div');
+  plot.className = 'timeline-plot';
+  for (let i = 0; i <= 4; i++) {
+    const line = document.createElement('div');
+    line.className = 'timeline-gridline';
+    line.style.bottom = (i * 25) + '%';
+    const tick = document.createElement('span');
+    tick.className = 'timeline-tick';
+    tick.textContent = (step * i).toLocaleString();
+    line.appendChild(tick);
+    plot.appendChild(line);
+  }
+  const bars = document.createElement('div');
+  bars.className = 'timeline-bars';
+  bars.style.gap = 'min(2px, ' + (20 / points.length) + '%)';
+  bars.setAttribute('role', 'group');
+  bars.setAttribute('aria-label', 'Documents per ' + unit + '. Use left and right arrow keys to explore.');
+  const detail = document.createElement('div');
+  detail.className = 'timeline-detail';
+  detail.setAttribute('aria-live', 'polite');
+  detail.setAttribute('aria-atomic', 'true');
+  const navigation = document.createElement('div');
+  navigation.className = 'timeline-navigation';
+  const previous = document.createElement('button');
+  const next = document.createElement('button');
+  previous.type = next.type = 'button';
+  previous.textContent = '←';
+  next.textContent = '→';
+  previous.setAttribute('aria-label', 'Previous ' + unit);
+  next.setAttribute('aria-label', 'Next ' + unit);
+  let selected = points.length - 1;
+  const select = index => {
+    selected = index;
+    previous.disabled = index === 0;
+    next.disabled = index === points.length - 1;
+    [...bars.children].forEach((bar, i) => {
+      bar.setAttribute('aria-pressed', String(i === index));
+      bar.tabIndex = i === index ? 0 : -1;
+    });
+    const point = points[index];
+    const date = document.createElement('span');
+    date.textContent = formatBucketLabel(point.date, bucket);
+    const count = document.createElement('strong');
+    count.textContent = point.count.toLocaleString() + ' ' + timelineField;
+    detail.replaceChildren(date, count);
+  };
+  points.forEach((point, index) => {
+    const bar = document.createElement('button');
+    bar.type = 'button';
+    bar.className = 'timeline-bar';
+    bar.style.setProperty('--height', (point.count / ceiling * 100) + '%');
+    bar.setAttribute('aria-label', formatBucketLabel(point.date, bucket) + ': ' + point.count.toLocaleString() + ' documents ' + timelineField);
+    bar.appendChild(document.createElement('span'));
+    bar.addEventListener('click', () => select(index));
+    bar.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') select(index); });
+    bar.addEventListener('focus', () => select(index));
+    bars.appendChild(bar);
   });
+  bars.addEventListener('keydown', event => {
+    let index = selected;
+    if (event.key === 'ArrowLeft') index = Math.max(0, selected - 1);
+    else if (event.key === 'ArrowRight') index = Math.min(points.length - 1, selected + 1);
+    else if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = points.length - 1;
+    else return;
+    event.preventDefault();
+    bars.children[index].focus();
+  });
+  plot.appendChild(bars);
+  el.appendChild(plot);
+  const dates = document.createElement('div');
+  dates.className = 'timeline-dates';
+  for (const point of [points[0], points[points.length - 1]]) {
+    const label = document.createElement('span');
+    label.textContent = formatBucketLabel(point.date, bucket);
+    dates.appendChild(label);
+  }
+  previous.addEventListener('click', () => select(Math.max(0, selected - 1)));
+  next.addEventListener('click', () => select(Math.min(points.length - 1, selected + 1)));
+  navigation.append(previous, detail, next);
+  el.append(dates, navigation);
+  const help = document.createElement('p');
+  help.className = 'timeline-help';
+  help.textContent = 'Tap or hover to inspect · arrow keys to step';
+  el.appendChild(help);
+  select(selected);
 }
 
 let timelineRange = '30d';
 let timelineField = 'indexed';
+let timelineRequest = 0;
 
 async function loadTimeline(range, field) {
   if (range) timelineRange = range;
   if (field) timelineField = field;
+  const request = ++timelineRequest;
+  const el = document.getElementById('timeline');
+  el.setAttribute('aria-busy', 'true');
+  el.innerHTML = '<p class="timeline-status" role="status">Loading documents…</p>';
+  for (const [id, value] of [['timeline-range', timelineRange], ['timeline-field', timelineField]]) {
+    document.querySelectorAll('#' + id + ' button').forEach(button => {
+      const active = (button.dataset.range || button.dataset.field) === value;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
   try {
     const r = await fetch(API_BASE + '/api/timeline?range=' + encodeURIComponent(timelineRange) +
       '&field=' + encodeURIComponent(timelineField));
+    if (!r.ok) throw new Error('Timeline request failed: ' + r.status);
     const data = await r.json();
+    if (request !== timelineRequest) return;
     renderTimeline(data.points, data.bucket);
   } catch (e) {
+    if (request !== timelineRequest) return;
+    el.innerHTML = '<div class="timeline-status" role="status">Couldn’t load documents.<button type="button">Try again</button></div>';
+    el.querySelector('button').addEventListener('click', () => loadTimeline());
     console.error('failed to load timeline:', e);
+  } finally {
+    if (request === timelineRequest) el.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -510,9 +625,9 @@ async function fetchDashboard() {
     startedAt = data.startedAt * 1000;
     updateAge();
 
-    document.getElementById('searches').textContent = data.searches;
-    document.getElementById('publications').textContent = data.publications;
-    document.getElementById('embeddings').textContent = data.embeddings ?? '--';
+    document.getElementById('searches').textContent = data.searches.toLocaleString();
+    document.getElementById('publications').textContent = data.publications.toLocaleString();
+    document.getElementById('embeddings').textContent = data.embeddings?.toLocaleString() ?? '--';
 
     // embedding coverage + backlog, derived from the counts we already have.
     // backlog = docs the embedder hasn't reached yet; coverage is the headline.
@@ -543,7 +658,7 @@ async function fetchDashboard() {
     renderPlatforms(data.platforms);
     renderTiming(data.timing);
     renderTrafficSparkline(data.trafficHistory);
-    renderTimeline(data.timeline);
+
     renderPubs(data.topPubs);
     renderTags(data.tags);
 
@@ -568,8 +683,11 @@ async function pollLive() {
   } catch (e) {}
 }
 
+new ResizeObserver(drawTrafficSvg).observe(document.getElementById('traffic-sparkline'));
+
 // init
 fetchDashboard();
+loadTimeline();
 setInterval(updateAge, 1000);
 setInterval(updateFreshness, 1000);
 pollLive();
