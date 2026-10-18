@@ -21,6 +21,16 @@ for (const engine of [chromium, webkit]) {
     const label = await selected.getAttribute('aria-label');
     assert.ok(label.includes((await detail.locator('strong').innerText()).replace(' indexed', ' documents indexed').replace(' created', ' documents created')));
   };
+  const previousDay = page.getByRole('button', { name: 'Previous day' });
+  await previousDay.scrollIntoViewIfNeeded();
+  const scale = await page.evaluate(() => visualViewport.scale);
+  const count = await bars.count();
+  await previousDay.tap();
+  await previousDay.tap();
+  assert.equal(await bars.nth(count - 3).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(() => visualViewport.scale), scale);
+  assert.equal(await previousDay.evaluate(node => getComputedStyle(node).touchAction), 'manipulation');
+  assert.equal(await selected.evaluate(node => getComputedStyle(node).outlineStyle), 'none');
   for (const field of ['indexed', 'created']) {
     await page.locator(`#timeline-field [data-field=${field}]`).tap();
     await bars.first().waitFor();
@@ -67,6 +77,16 @@ for (const engine of [chromium, webkit]) {
   assert.equal(await bars.nth(1).locator('span').evaluate(node => node.getBoundingClientRect().height), 0);
   await page.evaluate(() => renderTimeline([], 'daily'));
   assert.equal(await page.locator('.timeline-status').innerText(), 'No documents in this range.');
+  await page.evaluate(() => {
+    for (const id of ['searches', 'publications', 'embeddings']) document.getElementById(id).textContent = '1,234,567,890';
+    document.getElementById('embeddings-sub').textContent = '98.7% covered · 123,456,789 pending';
+    document.getElementById('relay').textContent = 'a-very-long-relay-hostname.with-several-subdomains.example.org';
+  });
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    assert.ok(await page.locator('.metrics .metric-value').evaluateAll(nodes => nodes.every(node => node.scrollWidth <= node.clientWidth)));
+  }
   await page.context().setOffline(true);
   await page.locator('#timeline-range [data-range="7d"]').click();
   await page.getByRole('button', { name: 'Try again' }).waitFor();

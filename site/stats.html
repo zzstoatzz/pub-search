@@ -15,7 +15,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="dashboard.css?v=20261017">
+  <link rel="stylesheet" href="dashboard.css?v=20261017b">
   <link rel="stylesheet" href="components.css?v=1782991000">
 </head>
 <body>
@@ -24,10 +24,6 @@
 
     <section>
       <div class="metrics">
-        <div>
-          <div class="metric-value" id="age">--</div>
-          <div class="metric-label">uptime</div>
-        </div>
         <div>
           <div class="metric-value" id="searches">--</div>
           <div class="metric-label">searches</div>
@@ -41,15 +37,11 @@
           <div class="metric-label">embeddings</div>
           <div class="metric-sub" id="embeddings-sub"></div>
         </div>
-        <div>
-          <div class="metric-value" id="freshness">--</div>
-          <div class="metric-label">last indexed</div>
-          <div class="metric-sub" id="freshness-sub"></div>
-        </div>
-        <div>
-          <div class="metric-value" id="relay">--</div>
-          <div class="metric-label">relay</div>
-        </div>
+      </div>
+      <div class="metric-status">
+        <div><span class="metric-label">uptime</span> <span id="age">--</span></div>
+        <div><span class="metric-label">last indexed</span> <span class="metric-value" id="freshness">--</span> <span class="metric-sub" id="freshness-sub"></span></div>
+        <div class="metric-relay"><span class="metric-label">relay</span> <span id="relay">--</span></div>
       </div>
       <div class="live" id="live"></div>
     </section>
@@ -136,7 +128,7 @@
   <script>
   </script>
   <script src="loading.js"></script>
-  <script src="dashboard.js?v=20261017"></script>
+  <script src="dashboard.js?v=20261017b"></script>
   <script src="clients.js"></script>
   <script src="ui.js"></script>
   <script>
