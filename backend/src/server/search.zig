@@ -489,7 +489,11 @@ pub fn search(alloc: Allocator, query: []const u8, tag_filter: ?[]const u8, plat
 
     switch (effectiveMode(query, mode)) {
         .hybrid => return searchHybrid(alloc, query, tag_filter, platform_filter, since_filter, author_filter, options),
-        .semantic => return searchSemantic(alloc, query, platform_filter, since_filter, author_filter, options),
+        .semantic => return searchSemantic(alloc, query, platform_filter, since_filter, author_filter, options) catch |err| {
+            if (err == error.QueryBudgetExhausted)
+                return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter, options);
+            return err;
+        },
         .keyword => return searchKeyword(alloc, query, tag_filter, platform_filter, since_filter, author_filter, options),
     }
 }
@@ -1940,6 +1944,7 @@ fn searchSemantic(alloc: Allocator, query: []const u8, platform_filter: ?[]const
 
     // embed query (input_type="query" for asymmetric search)
     const vector = tpuf.embedQuery(alloc, query) catch |err| {
+        if (err == error.QueryBudgetExhausted) return err;
         logfire.warn("search.semantic: embed failed: {}", .{err});
         return try alloc.dupe(u8, "{\"error\":\"embedding failed\"}");
     };

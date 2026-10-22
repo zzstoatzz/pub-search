@@ -38,6 +38,10 @@ pub fn start(allocator: Allocator, io: Io) void {
         logfire.info("embedder: VOYAGE_API_KEY not set, embeddings disabled", .{});
         return;
     };
+    if (!tpuf.isEnabled()) {
+        logfire.info("embedder: turbopuffer not configured, embeddings disabled", .{});
+        return;
+    }
 
     const thread = std.Thread.spawn(.{}, worker, .{ allocator, api_key, io }) catch |err| {
         logfire.err("embedder: failed to start thread: {}", .{err});
@@ -107,6 +111,8 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8, io: Io) !usize {
     const span = logfire.span("embedder.process_batch", .{});
     defer span.end();
 
+    // Check before selecting documents or making a paid Voyage request.
+    if (!tpuf.isEnabled()) return error.TpufNotConfigured;
     const client = db.getClient() orelse return error.NoClient;
 
     var result = try client.query(
@@ -138,11 +144,6 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8, io: Io) !usize {
     }
 
     // upsert to turbopuffer (sole vector store)
-    if (!tpuf.isEnabled()) {
-        logfire.warn("embedder: tpuf not configured, skipping batch", .{});
-        return 0;
-    }
-
     var tpuf_docs = try allocator.alloc(tpuf.VectorDoc, docs.items.len);
     defer allocator.free(tpuf_docs);
 
@@ -167,10 +168,20 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8, io: Io) !usize {
         };
     }
 
-    tpuf.upsert(allocator, tpuf_docs) catch |err| {
-        logfire.warn("embedder: tpuf upsert failed: {}, will retry", .{err});
-        return error.TpufUpsertFailed;
-    };
+    // Keep the paid vectors alive through an outage. The worker is the only
+    // writer, so it can wait here without losing another batch's progress.
+    var retries: u32 = 0;
+    while (true) {
+        tpuf.upsert(allocator, tpuf_docs) catch |err| {
+            retries +|= 1;
+            const backoff: u64 = @min(ERROR_BACKOFF_SECS * @as(u64, retries), 3600);
+            logfire.warn("embedder: tpuf upsert failed: {}, retrying same vectors in {d}s", .{ err, backoff });
+            logfire.counter("embedder.tpuf_upsert_retries", 1);
+            io.sleep(Io.Duration.fromSeconds(@intCast(backoff)), .awake) catch {};
+            continue;
+        };
+        break;
+    }
 
     // mark docs as embedded in turso
     // generate timestamp in Zig (avoids any strftime/pipeline API quirks)
@@ -187,12 +198,20 @@ fn processNextBatch(allocator: Allocator, api_key: []const u8, io: Io) !usize {
     }) catch "1970-01-01T00:00:00";
 
     for (docs.items) |doc| {
-        client.exec(
-            "UPDATE documents SET embedded_at = ? WHERE uri = ?",
-            &.{ ts, doc.uri },
-        ) catch |err| {
-            logfire.warn("embedder: failed to mark {s}: {}", .{ doc.uri, err });
-        };
+        var mark_retries: u32 = 0;
+        while (true) {
+            client.exec(
+                "UPDATE documents SET embedded_at = ? WHERE uri = ?",
+                &.{ ts, doc.uri },
+            ) catch |err| {
+                mark_retries +|= 1;
+                const backoff: u64 = @min(ERROR_BACKOFF_SECS * @as(u64, mark_retries), 3600);
+                logfire.warn("embedder: failed to mark {s}: {}, retrying in {d}s", .{ doc.uri, err, backoff });
+                io.sleep(Io.Duration.fromSeconds(@intCast(backoff)), .awake) catch {};
+                continue;
+            };
+            break;
+        }
     }
 
     return docs.items.len;
@@ -261,6 +280,7 @@ fn callVoyageApi(allocator: Allocator, api_key: []const u8, docs: []const DocToE
     var response_body: std.Io.Writer.Allocating = .init(allocator);
     errdefer response_body.deinit();
 
+    logfire.counter("embedder.voyage_requests", 1);
     const res = http_client.fetch(.{
         .location = .{ .url = "https://api.voyageai.com/v1/embeddings" },
         .method = .POST,
@@ -326,14 +346,24 @@ fn parseVoyageResponse(allocator: Allocator, response: []const u8, expected_coun
     const data = parsed.value.object.get("data") orelse return error.MissingData;
     if (data != .array) return error.InvalidData;
 
+    if (parsed.value.object.get("usage")) |usage| {
+        if (usage == .object) {
+            if (usage.object.get("total_tokens")) |tokens| {
+                if (tokens == .integer and tokens.integer >= 0)
+                    logfire.counter("embedder.voyage_tokens", @intCast(tokens.integer));
+            }
+        }
+    }
+
     if (data.array.items.len != expected_count) {
         logfire.err("embedder: expected {d} embeddings, got {d}", .{ expected_count, data.array.items.len });
         return error.CountMismatch;
     }
 
     const embeddings = try allocator.alloc([]f32, expected_count);
+    var initialized: usize = 0;
     errdefer {
-        for (embeddings) |e| allocator.free(e);
+        for (embeddings[0..initialized]) |e| allocator.free(e);
         allocator.free(embeddings);
     }
 
@@ -357,7 +387,18 @@ fn parseVoyageResponse(allocator: Allocator, response: []const u8, expected_coun
             };
         }
         embeddings[i] = embedding;
+        initialized += 1;
     }
 
     return embeddings;
+}
+
+test "disabled turbopuffer prevents a Voyage request" {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    try std.testing.expect(!tpuf.isEnabled());
+    try std.testing.expectError(
+        error.TpufNotConfigured,
+        processNextBatch(std.testing.allocator, "unused-key", threaded.io()),
+    );
 }

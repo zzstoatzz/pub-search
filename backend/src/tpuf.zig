@@ -15,6 +15,7 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const Io = std.Io;
 const logfire = @import("logfire");
+const query_budget = @import("query_budget.zig");
 
 var global_io: ?Io = null;
 
@@ -24,6 +25,7 @@ const API_BASE = "https://api.turbopuffer.com/v2/namespaces/";
 
 var api_key: ?[]const u8 = null;
 var voyage_api_key: ?[]const u8 = null;
+var budget: query_budget.Budget = .{};
 var namespace: []const u8 = "leaflet-search";
 
 // pre-formatted URL paths (built at init)
@@ -67,6 +69,9 @@ pub const QueryResult = struct {
 /// Read config from environment. Call once at startup.
 pub fn init(io: Io) void {
     global_io = io;
+    if (std.c.getenv("VOYAGE_QUERY_DAILY_LIMIT")) |raw| {
+        budget.limit = std.fmt.parseInt(u32, std.mem.span(raw), 10) catch query_budget.DEFAULT_LIMIT;
+    }
     api_key = if (std.c.getenv("TURBOPUFFER_API_KEY")) |p| std.mem.span(p) else null;
     if (if (std.c.getenv("TURBOPUFFER_NAMESPACE")) |p| std.mem.span(p) else null) |ns| {
         namespace = ns;
@@ -107,6 +112,18 @@ pub fn isSemanticEnabled() bool {
 /// Returns a 1024-dim f32 vector. Caller owns the returned slice.
 pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     const vk = voyage_api_key orelse return error.NotConfigured;
+    const io = global_io orelse return error.NotConfigured;
+    const normalized = try query_budget.normalize(allocator, text);
+    defer allocator.free(normalized);
+    if (budget.lookup(io, allocator, normalized)) |cached| {
+        logfire.counter("tpuf.voyage_query_cache_hits", 1);
+        return cached;
+    }
+    const now_s: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
+    if (!budget.take(io, now_s)) {
+        logfire.counter("tpuf.voyage_query_budget_exhausted", 1);
+        return error.QueryBudgetExhausted;
+    }
 
     const span = logfire.span("tpuf.embed_query", .{});
     defer span.end();
@@ -125,7 +142,7 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     try jw.write(1024);
     try jw.objectField("input");
     try jw.beginArray();
-    try jw.write(text);
+    try jw.write(normalized);
     try jw.endArray();
     try jw.endObject();
 
@@ -133,7 +150,7 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     defer allocator.free(body);
 
     // make request
-    var http_client: http.Client = .{ .allocator = allocator, .io = global_io.? };
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
     defer http_client.deinit();
 
     var auth_buf: [256]u8 = undefined;
@@ -143,6 +160,7 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     var response_body: std.Io.Writer.Allocating = .init(allocator);
     errdefer response_body.deinit();
 
+    logfire.counter("tpuf.voyage_query_requests", 1);
     const res = http_client.fetch(.{
         .location = .{ .url = "https://api.voyageai.com/v1/embeddings" },
         .method = .POST,
@@ -177,6 +195,15 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
     const data = parsed.value.object.get("data") orelse return error.ParseError;
     if (data != .array or data.array.items.len == 0) return error.ParseError;
 
+    if (parsed.value.object.get("usage")) |usage| {
+        if (usage == .object) {
+            if (usage.object.get("total_tokens")) |tokens| {
+                if (tokens == .integer and tokens.integer >= 0)
+                    logfire.counter("tpuf.voyage_query_tokens", @intCast(tokens.integer));
+            }
+        }
+    }
+
     const embedding_val = data.array.items[0].object.get("embedding") orelse return error.ParseError;
     if (embedding_val != .array) return error.ParseError;
 
@@ -192,6 +219,7 @@ pub fn embedQuery(allocator: Allocator, text: []const u8) ![]f32 {
         };
     }
 
+    budget.remember(io, normalized, vector);
     return vector;
 }
 
