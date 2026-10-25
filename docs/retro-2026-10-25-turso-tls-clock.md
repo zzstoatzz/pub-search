@@ -33,7 +33,8 @@ errors. HTTP 200 responses containing Hrana statement failures also fail
 persistence. Timestamp-to-sequence anchor failures retain the recovery
 position rather than silently starting at the live tip. Exhausted archive
 transport or decode failures also stop the consumer instead of skipping
-unread data.
+unread data. Removing the custom error callback uses the SDK defaults:
+archive failures propagate, while recoverable live errors reconnect normally.
 
 `/health/freshness` now requires a recent successful Turso request as well as
 cursor progress, and exposes `turso_reachable` and `turso_age_seconds`.

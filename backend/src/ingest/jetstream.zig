@@ -312,11 +312,6 @@ const EventHandler = struct {
         return true;
     }
 
-    pub fn onError(_: *EventHandler, err: anyerror) bool {
-        logfire.err("jetstream: stream error: {s} — retaining cursor for replay", .{@errorName(err)});
-        return false;
-    }
-
     pub fn onInfo(_: *EventHandler, info: jetstream.livedecode.Info) void {
         logfire.info("jetstream: server info {s}: {s}", .{ info.name, info.message });
     }
