@@ -313,8 +313,8 @@ const EventHandler = struct {
     }
 
     pub fn onError(_: *EventHandler, err: anyerror) bool {
-        logfire.warn("jetstream: recoverable stream error: {s}", .{@errorName(err)});
-        return true;
+        logfire.err("jetstream: stream error: {s} — retaining cursor for replay", .{@errorName(err)});
+        return false;
     }
 
     pub fn onInfo(_: *EventHandler, info: jetstream.livedecode.Info) void {

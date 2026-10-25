@@ -42,7 +42,7 @@ pub const RuntimeValue = union(enum) {
 const URL_BUF_SIZE = 512;
 const AUTH_BUF_SIZE = 512;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 180;
-const FETCH_TICK_MS: u64 = 250;
+const FETCH_TICK_MS: u64 = 25;
 
 /// Wall-clock second of the most recent turso request COMPLETION (success or
 /// error — either proves the connection isn't hung). The builder's stall
@@ -365,7 +365,7 @@ pub fn fetchBounded(
         return fetchEvictRetry(http_client, io, options);
     };
 
-    // Clock, not tick count: a 250ms sleep is not 250ms under load, so summing
+    // Clock, not tick count: a sleep can overshoot under load, so summing
     // nominal ticks inflates the bound exactly when it matters.
     const started = Io.Timestamp.now(io, .awake);
     const timeout_ns = timeout_s * std.time.ns_per_s;

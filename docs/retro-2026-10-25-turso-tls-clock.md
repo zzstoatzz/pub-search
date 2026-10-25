@@ -31,7 +31,9 @@ the consumer without advancing that cursor. Deliberately ignored records
 still advance it. Publication side effects and delete operations propagate
 errors. HTTP 200 responses containing Hrana statement failures also fail
 persistence. Timestamp-to-sequence anchor failures retain the recovery
-position rather than silently starting at the live tip.
+position rather than silently starting at the live tip. Exhausted archive
+transport or decode failures also stop the consumer instead of skipping
+unread data.
 
 `/health/freshness` now requires a recent successful Turso request as well as
 cursor progress, and exposes `turso_reachable` and `turso_age_seconds`.
@@ -45,10 +47,19 @@ The six-hour freshness alert correctly remained active.
 
 ## Recovery
 
-Back up the durable sequence cursor before rewinding. Stop the app machine
-while replacing its cursor so the running consumer cannot overwrite it.
+The bounded HTTP helper used a 250 ms completion poll. Production Turso
+spans had a 250 ms minimum despite much faster network completion, making
+serial replay pay that delay for every read and write. The poll is now
+25 ms; the elapsed-clock deadline and joined cancellation are unchanged.
+
+Back up the durable sequence cursor before rewinding. Pause the app process
+while replacing its cursor so the running consumer cannot overwrite it,
+then restart it.
 A legacy microsecond timestamp before the failure is accepted at startup
 and translated to an archive sequence, followed by the normal archive/live
-cutover. Keep the worker at exactly one machine. Replayed writes are
+cutover. For this recovery, authenticated archive metadata located segment
+7569; its checksum-matched block index narrowed the replay floor to
+`25540896952` (the next block starts at `06:59:53Z`), before both the last
+known update and the first recorded TLS failure. Keep the worker at exactly one machine. Replayed writes are
 idempotent; verify new Turso timestamps, overlay rows, stream progress,
 and successful searches before removing temporary recovery files.
