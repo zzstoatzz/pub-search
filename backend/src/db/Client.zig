@@ -51,6 +51,7 @@ const FETCH_TICK_MS: u64 = 250;
 /// request write blocks doRequest indefinitely (2026-08-06: export sat silent
 /// for 94min at 35k docs until the wall-clock watchdog killed the build).
 pub var last_request_completed_s: std.atomic.Value(i64) = .init(0);
+pub var last_request_succeeded_s: std.atomic.Value(i64) = .init(0);
 
 fn nowSeconds(io: Io) i64 {
     return @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
@@ -62,9 +63,10 @@ token: []const u8,
 io: Io,
 // std.http.Client is internally thread-safe at the connection-pool level
 // (see stdlib's http/Client.zig:3) so concurrent fetches share the pool but
-// each acquires its own connection. nothing else on this struct is mutable
-// after init, so no caller-side serialization is needed.
+// each acquires its own connection. The outer lock protects validation-time
+// refreshes from concurrent TLS handshakes.
 http_client: http.Client,
+http_clock_lock: Io.RwLock = .init,
 /// Per-request wall-clock bound in seconds (TURSO_REQUEST_TIMEOUT_SECS,
 /// default 180, 0 disables). Generous on purpose: degraded-but-alive turso
 /// has served pages in ~85s; only a hung connection should ever hit this.
@@ -238,7 +240,7 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
         var response_body: std.Io.Writer.Allocating = .init(self.allocator);
         defer response_body.deinit();
 
-        const res = fetchBounded(&self.http_client, self.io, .{
+        const res = self.fetch(.{
             .location = .{ .url = url },
             .method = .POST,
             .headers = .{
@@ -251,13 +253,15 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
             // HTTP client has no read timeout, so a silently-dead pooled socket can
             // accept the request write and then wait forever for a response.
             .keep_alive = std.c.getenv("TURSO_DISABLE_KEEPALIVE") == null,
-        }, self.request_timeout_s) catch |err| {
+        }) catch |err| {
             if (err == error.RequestTimeout and attempt == 0) {
                 // the hung request's own connection was closed by the cancel;
                 // evict idle pool mates that shared its fate, then one fresh try
                 // (fresh response_body each iteration, so no duplicated bytes)
                 logfire.err("{s} request exceeded {d}s — canceled hung connection, retrying | sql: {s}", .{ span_name, self.request_timeout_s, truncated });
+                self.http_clock_lock.lockSharedUncancelable(self.io);
                 evictIdleConnections(&self.http_client, self.io);
+                self.http_clock_lock.unlockShared(self.io);
                 continue;
             }
             logfire.err("{s} http failed: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
@@ -284,8 +288,45 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
             return error.TursoError;
         }
 
+        validatePipelineResponse(self.allocator, response_body.written()) catch |err| {
+            logfire.err("{s} rejected pipeline response: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
+            span.recordError(err);
+            return err;
+        };
+        last_request_succeeded_s.store(nowSeconds(self.io), .monotonic);
         return try response_body.toOwnedSlice();
     }
+}
+
+fn validatePipelineResponse(allocator: Allocator, body: []const u8) !void {
+    const parsed = try json.parseFromSlice(json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidTursoResponse;
+    const results = parsed.value.object.get("results") orelse return error.InvalidTursoResponse;
+    if (results != .array or results.array.items.len == 0) return error.InvalidTursoResponse;
+    for (results.array.items) |item| {
+        if (item != .object) return error.InvalidTursoResponse;
+        const kind = item.object.get("type") orelse return error.InvalidTursoResponse;
+        if (kind != .string) return error.InvalidTursoResponse;
+        if (mem.eql(u8, kind.string, "error")) return error.TursoStatementError;
+        if (!mem.eql(u8, kind.string, "ok")) return error.InvalidTursoResponse;
+    }
+}
+
+fn fetch(self: *Client, options: http.Client.FetchOptions) (http.Client.FetchError || error{RequestTimeout})!http.Client.FetchResult {
+    self.http_clock_lock.lockSharedUncancelable(self.io);
+    const first = fetchBounded(&self.http_client, self.io, options, self.request_timeout_s);
+    self.http_clock_lock.unlockShared(self.io);
+    return first catch |err| {
+        if (err != error.TlsInitializationFailed) return err;
+        self.http_clock_lock.lockUncancelable(self.io);
+        self.http_client.now = Io.Clock.real.now(self.io);
+        self.http_clock_lock.unlock(self.io);
+        logfire.warn("turso: refreshing TLS certificate validation time after handshake failure", .{});
+        self.http_clock_lock.lockSharedUncancelable(self.io);
+        defer self.http_clock_lock.unlockShared(self.io);
+        return fetchBounded(&self.http_client, self.io, options, self.request_timeout_s);
+    };
 }
 
 /// `fetchEvictRetry` under a wall-clock bound. Zig's HTTP client exposes no
@@ -830,4 +871,33 @@ test "fetchBounded cancels a hung request instead of blocking forever" {
     try std.testing.expectError(error.RequestTimeout, bounded);
     // the whole point: bounded, not kernel-forever. generous margin for CI.
     try std.testing.expect(elapsed_ns < 30 * std.time.ns_per_s);
+}
+
+test "Turso TLS recovers after a certificate becomes valid after client startup" {
+    const url = if (std.c.getenv("TURSO_TLS_TEST_URL")) |p| mem.span(p) else return error.SkipZigTest;
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var client: Client = .{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .url = "",
+        .token = "",
+        .http_client = .{ .allocator = std.testing.allocator, .io = io },
+        .request_timeout_s = 10,
+    };
+    defer client.deinit();
+    const options: http.Client.FetchOptions = .{ .location = .{ .url = url }, .keep_alive = false };
+    _ = try client.fetch(options);
+    client.http_client.now = .{ .nanoseconds = 0 };
+    try std.testing.expectError(error.TlsInitializationFailed, fetchBounded(&client.http_client, io, options, 10));
+    _ = try client.fetch(options);
+    try std.testing.expect(client.http_client.now.?.nanoseconds > 0);
+}
+
+test "HTTP 200 does not hide rejected Turso statements or malformed responses" {
+    try validatePipelineResponse(std.testing.allocator, "{\"results\":[{\"type\":\"ok\"},{\"type\":\"ok\"}]}");
+    try std.testing.expectError(error.TursoStatementError, validatePipelineResponse(std.testing.allocator, "{\"results\":[{\"type\":\"ok\"},{\"type\":\"error\",\"error\":{\"code\":\"SQL_INPUT_ERROR\"}}]}"));
+    try std.testing.expectError(error.InvalidTursoResponse, validatePipelineResponse(std.testing.allocator, "{}"));
+    try std.testing.expectError(error.InvalidTursoResponse, validatePipelineResponse(std.testing.allocator, "{\"results\":[]}"));
 }

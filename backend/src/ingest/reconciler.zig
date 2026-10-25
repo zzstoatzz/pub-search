@@ -500,7 +500,7 @@ fn runCycle(allocator: Allocator, pds_cache: *std.StringHashMap([]const u8), las
         for (docs.items, outcomes) |doc, outcome| {
             if (outcome != .checked or outcome.checked != .deleted) continue;
             if (vectors_deleted) {
-                indexer.deleteDocument(doc.uri);
+                try indexer.deleteDocument(doc.uri);
                 deleted += 1;
                 logfire.info("reconcile: deleted stale document: {s}", .{doc.uri});
             } else {

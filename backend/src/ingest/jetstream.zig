@@ -272,7 +272,8 @@ const EventHandler = struct {
                 count, self.last_seq, self.gate.lookups, self.gate.bridged_dropped,
             });
         }
-        defer self.advanceCursor(event.seq);
+        var succeeded = true;
+        defer if (succeeded) self.advanceCursor(event.seq);
 
         const commit = switch (event.payload) {
             .commit => |c| c,
@@ -303,7 +304,11 @@ const EventHandler = struct {
             .object => |o| o,
             else => null,
         } else null;
-        ingester.dispatchRecord(self.allocator, self.io, rec, inner);
+        ingester.dispatchRecord(self.allocator, self.io, rec, inner) catch |err| {
+            succeeded = false;
+            logfire.err("jetstream: persistence failed at seq {d}: {s} — retaining cursor for replay", .{ event.seq, @errorName(err) });
+            return false;
+        };
         return true;
     }
 
@@ -363,7 +368,7 @@ const Watchdog = struct {
 /// Resolve the replay start seq. Persisted seq → use it directly (the SDK's
 /// dedup makes exact resume safe). Persisted v1 time_us, or nothing → derive
 /// a seq from the archive's segment metadata for (value|now) − rewind.
-fn resolveAfterSeq(allocator: Allocator, io: Io, host: []const u8, path: [:0]const u8, key: ?[]const u8) ?u64 {
+fn resolveAfterSeq(allocator: Allocator, io: Io, host: []const u8, path: [:0]const u8, key: ?[]const u8) !?u64 {
     const persisted = readCursor(path);
     if (persisted) |v| {
         if (v < TIME_US_THRESHOLD) return @intCast(v);
@@ -371,8 +376,8 @@ fn resolveAfterSeq(allocator: Allocator, io: Io, host: []const u8, path: [:0]con
     const now_us: i64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_us));
     const floor_us = (persisted orelse now_us - 60 * std.time.us_per_s) - REWIND_US;
     const anchor = jetstream.ArchiveBackfill.fetchAnchor(io, allocator, host, floor_us, key) catch |err| {
-        logfire.err("jetstream: seq anchor fetch failed ({s}) — starting live from the tip", .{@errorName(err)});
-        return null;
+        logfire.err("jetstream: seq anchor fetch failed ({s}) — retaining cursor for retry", .{@errorName(err)});
+        return err;
     };
     logfire.info("jetstream: anchored floor_us={d} → after_seq={?d}", .{ floor_us, anchor.after_seq });
     return anchor.after_seq;
@@ -387,7 +392,9 @@ pub fn consumer(allocator: Allocator, io: Io) void {
         logfire.warn("jetstream: no JETSTREAM_API_KEY — archive sweep/anchor unavailable, gap recovery degrades to the live replay window", .{});
     }
 
-    const after_seq = resolveAfterSeq(allocator, io, hosts[0], path, key);
+    const after_seq = resolveAfterSeq(allocator, io, hosts[0], path, key) catch {
+        std.process.exit(1);
+    };
 
     logfire.info("jetstream: consumer starting, {d} host(s), primary={s}, after_seq={?d} ({s})", .{
         hosts.len, hosts[0], after_seq, path,
@@ -474,4 +481,36 @@ test "health observes durable cursor progress and missing cursor" {
     try std.testing.expect(cursorAgeSeconds(io, path, written).? < 2);
     try std.testing.expect(cursorAgeSeconds(io, path, written + 901 * std.time.ns_per_s).? >= 900);
     try std.testing.expect(cursorAgeSeconds(io, path, written - 120 * std.time.ns_per_s) == null);
+}
+
+test "failed durable delete stops the consumer without advancing its cursor" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var path_buf: [96]u8 = undefined;
+    const path = try std.mem.printSentinel(&path_buf, "/tmp/pub-write-failure-{d}", .{std.c.getpid()}, 0);
+    defer _ = std.c.unlink(path.ptr);
+    persistCursor(path, 41);
+    var gate = BridgeGate{ .allocator = std.testing.allocator, .io = io };
+    var handler = EventHandler{ .allocator = std.testing.allocator, .io = io, .gate = &gate, .cursor_path = path, .last_seq = 41 };
+    const event = jetstream.livedecode.Event{
+        .seq = 42,
+        .time_us = 1755230000000000,
+        .did = "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
+        .payload = .{ .commit = .{
+            .operation = .delete,
+            .collection = "site.standard.document",
+            .rkey = "3mn3z7u7jgsgl",
+            .rev = "3m",
+        } },
+    };
+    try std.testing.expect(!handler.onEvent(event));
+    try std.testing.expectEqual(@as(u64, 41), handler.last_seq);
+    try std.testing.expectEqual(@as(?i64, 41), readCursor(path));
+    var ignored = event;
+    ignored.seq = 43;
+    ignored.did = "invalid";
+    try std.testing.expect(handler.onEvent(ignored));
+    try std.testing.expectEqual(@as(u64, 43), handler.last_seq);
+    try std.testing.expectEqual(@as(?i64, 43), readCursor(path));
 }

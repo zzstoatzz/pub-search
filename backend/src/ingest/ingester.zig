@@ -97,7 +97,7 @@ const LeafletPublication = struct {
 /// Shared record dispatch: both wire protocols (/channel frames and jetstream
 /// events) normalize into an IngesterRecord + optional inner record value and
 /// land here, so the two ingest sources index identically by construction.
-pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: ?json.ObjectMap) void {
+pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: ?json.ObjectMap) !void {
     // validate DID
     const did = zat.Did.parse(rec.did) orelse {
         logfire.span("ingest.dropped", .{ .reason = "invalid_did", .collection = rec.collection }).end();
@@ -136,38 +136,28 @@ pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: 
                 }
             }
 
-            processDocument(allocator, io, uri, did.raw, rec.rkey, inner_record, rec.collection, rec.cid) catch |err| {
-                logfire.err("document processing error: {}", .{err});
-            };
+            try processDocument(allocator, io, uri, did.raw, rec.rkey, inner_record, rec.collection, rec.cid);
         } else if (isPublicationCollection(rec.collection)) {
-            processPublication(allocator, uri, did.raw, rec.rkey, inner_record) catch |err| {
-                logfire.err("publication processing error: {}", .{err});
-            };
+            try processPublication(allocator, uri, did.raw, rec.rkey, inner_record);
         } else if (mem.eql(u8, rec.collection, PCKT_PUBLICATION)) {
-            processPcktPublication(inner_record) catch |err| {
-                logfire.err("pckt publication processing error: {}", .{err});
-            };
+            try processPcktPublication(inner_record);
         } else if (isRecommendCollection(rec.collection)) {
-            processRecommend(uri, did.raw, rec.rkey, rec.collection, inner_record) catch |err| {
-                logfire.err("recommend processing error: {}", .{err});
-            };
+            try processRecommend(uri, did.raw, rec.rkey, rec.collection, inner_record);
         } else if (isSubscriptionCollection(rec.collection)) {
-            processSubscription(uri, did.raw, rec.rkey, inner_record) catch |err| {
-                logfire.err("subscription processing error: {}", .{err});
-            };
+            try processSubscription(uri, did.raw, rec.rkey, inner_record);
         }
     } else if (rec.isDelete()) {
         if (isDocumentCollection(rec.collection)) {
-            indexer.deleteDocument(uri);
+            try indexer.deleteDocument(uri);
             // also clean up turbopuffer vector (deleteDocument only handles turso)
             const hashed = tpuf.hashId(uri);
             tpuf.delete(allocator, &.{&hashed}) catch {};
         } else if (isPublicationCollection(rec.collection)) {
-            indexer.deletePublication(uri);
+            try indexer.deletePublication(uri);
         } else if (isRecommendCollection(rec.collection)) {
-            indexer.deleteRecommend(uri);
+            try indexer.deleteRecommend(uri);
         } else if (isSubscriptionCollection(rec.collection)) {
-            indexer.deleteSubscription(uri);
+            try indexer.deleteSubscription(uri);
         }
     }
 }
@@ -474,7 +464,7 @@ pub fn applyDocumentReconciliation(
     switch (fetched) {
         .missing => {
             if (action == .upsert) return .{ .outcome = .source_absent };
-            indexer.deleteDocument(uri);
+            try indexer.deleteDocument(uri);
             const hashed = tpuf.hashId(uri);
             // A vector failure makes the item retryable. The Turso delete is
             // idempotent, so the next attempt safely finishes vector cleanup.

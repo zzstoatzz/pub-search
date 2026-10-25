@@ -12,6 +12,8 @@ pub const Report = struct {
     ingest_fresh: bool,
     ingest_age_seconds: ?i64,
     overlay_ready: bool,
+    turso_reachable: bool,
+    turso_age_seconds: ?i64,
 };
 
 fn env(name: [*:0]const u8) ?[]const u8 {
@@ -59,6 +61,11 @@ fn overlayReady() bool {
     return rows.inner.err == null;
 }
 
+fn tursoAge(now: i64, succeeded: i64) ?i64 {
+    if (succeeded <= 0 or succeeded > now + 60) return null;
+    return @max(0, now - succeeded);
+}
+
 pub fn probe(io: std.Io) Report {
     const now: i64 = @intCast(@divFloor(std.Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
     var created: i64 = 0;
@@ -69,7 +76,9 @@ pub fn probe(io: std.Io) Report {
     }
     const fresh = snapshotFresh(created, now, promote.enabled(), env("PROMOTE_ADOPT_UTC_HOURS"));
     const age = jetstream.progressAgeSeconds(io);
-    const ingest_fresh = if (age) |a| a < jetstream.staleSeconds() else false;
+    const turso_age = tursoAge(now, db.Client.last_request_succeeded_s.load(.monotonic));
+    const turso_reachable = if (turso_age) |a| a < jetstream.staleSeconds() else false;
+    const ingest_fresh = (if (age) |a| a < jetstream.staleSeconds() else false) and turso_reachable;
     const overlay_ready = overlayReady();
     return .{
         .ok = fresh and fts_ok and ingest_fresh and overlay_ready,
@@ -80,6 +89,8 @@ pub fn probe(io: std.Io) Report {
         .ingest_fresh = ingest_fresh,
         .ingest_age_seconds = age,
         .overlay_ready = overlay_ready,
+        .turso_reachable = turso_reachable,
+        .turso_age_seconds = turso_age,
     };
 }
 
@@ -120,4 +131,11 @@ test "snapshot probe reads real SQLite metadata and detects empty or missing FTS
     if (ftsWorks(&local)) |_| return error.ExpectedProbeFailure else |_| {}
     try conn.exec("UPDATE sync_meta SET value = 'invalid'", .{});
     try std.testing.expectError(error.InvalidCharacter, snapshotTime(&local));
+}
+
+test "Turso health requires recent successful requests" {
+    try std.testing.expect(tursoAge(2000, 0) == null);
+    try std.testing.expectEqual(@as(i64, 5), tursoAge(2000, 1995).?);
+    try std.testing.expect(tursoAge(2000, 1000).? >= jetstream.staleSeconds());
+    try std.testing.expect(tursoAge(2000, 2061) == null);
 }

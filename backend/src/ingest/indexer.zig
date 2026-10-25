@@ -340,7 +340,7 @@ pub fn insertDocument(
     // deleteDocument covers turso + FTS + tags + overlay tombstone; the
     // vector delete matches the firehose delete path (ingester.zig).
     if (supersede_uri.len > 0) {
-        deleteDocument(supersede_uri);
+        try deleteDocument(supersede_uri);
         const hashed = tpuf.hashId(supersede_uri);
         if (tpuf.isEnabled()) tpuf.delete(c.allocator, &.{&hashed}) catch {};
         logfire.counter("ingest.republish_superseded", 1);
@@ -548,17 +548,17 @@ pub fn insertPublication(
     }
 
     // dedupe: if (did, rkey) exists with different uri, clean up old record first
-    if (c.query("SELECT uri FROM publications WHERE did = ? AND rkey = ?", &.{ did, rkey })) |result_val| {
-        var result = result_val;
+    {
+        var result = try c.query("SELECT uri FROM publications WHERE did = ? AND rkey = ?", &.{ did, rkey });
         defer result.deinit();
         if (result.first()) |row| {
             const old_uri = row.text(0);
             if (!std.mem.eql(u8, old_uri, uri)) {
-                c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{old_uri}) catch {};
-                c.exec("DELETE FROM publications WHERE uri = ?", &.{old_uri}) catch {};
+                try c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{old_uri});
+                try c.exec("DELETE FROM publications WHERE uri = ?", &.{old_uri});
             }
         }
-    } else |_| {}
+    }
 
     try c.exec(
         \\INSERT INTO publications (uri, did, rkey, name, description, base_path, show_in_discover, indexed_at)
@@ -578,24 +578,22 @@ pub fn insertPublication(
     // backfill: update documents whose base_path is empty or stale (differs from publication)
     if (base_path) |bp| {
         if (bp.len > 0) {
-            c.exec(
+            try c.exec(
                 \\UPDATE documents SET
                 \\  base_path = ?,
                 \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
                 \\WHERE publication_uri = ?
                 \\  AND (base_path IS NULL OR base_path = '' OR base_path != ?)
-            , &.{ bp, uri, bp }) catch |err| {
-                logfire.warn("indexer: base_path backfill failed for pub {s}: {}", .{ uri, err });
-            };
+            , &.{ bp, uri, bp });
         }
     }
 
     // update FTS index (includes base_path for subdomain search)
-    c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
-    c.exec(
+    try c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri});
+    try c.exec(
         "INSERT INTO publications_fts (uri, name, description, base_path) VALUES (?, ?, ?, ?)",
         &.{ uri, name, description orelse "", base_path orelse "" },
-    ) catch {};
+    );
 }
 
 /// Tag a publication (and its already-indexed docs) as platform pckt, from the
@@ -603,20 +601,16 @@ pub fn insertPublication(
 /// Idempotent; the `<> 'pckt'` guard keeps replays from churning indexed_at.
 pub fn markPublicationPckt(publication_uri: []const u8) !void {
     const c = db.getClient() orelse return error.NotInitialized;
-    c.exec(
+    try c.exec(
         "UPDATE publications SET platform = 'pckt' WHERE uri = ? AND platform <> 'pckt'",
         &.{publication_uri},
-    ) catch |err| {
-        logfire.warn("indexer: pckt publication tag failed for {s}: {}", .{ publication_uri, err });
-    };
-    c.exec(
+    );
+    try c.exec(
         \\UPDATE documents SET
         \\  platform = 'pckt',
         \\  indexed_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
         \\WHERE publication_uri = ? AND platform <> 'pckt'
-    , &.{publication_uri}) catch |err| {
-        logfire.warn("indexer: pckt document tag failed for {s}: {}", .{ publication_uri, err });
-    };
+    , &.{publication_uri});
 }
 
 fn currentTimestamp(io: Io) i64 {
@@ -661,21 +655,21 @@ test "cidGateSkips: match + hydrated skips; failure/mismatch/empty heal" {
     try std.testing.expect(!cidGateSkips("bafyreiaaa", "", 5000, 120));
 }
 
-pub fn deleteDocument(uri: []const u8) void {
-    const c = db.getClient() orelse return;
+pub fn deleteDocument(uri: []const u8) !void {
+    const c = db.getClient() orelse return error.NotInitialized;
 
     // record tombstone
     var ts_buf: [20]u8 = undefined;
     const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
-    c.exec(
+    try c.exec(
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'document', ?)",
         &.{ uri, ts },
-    ) catch {};
+    );
     // delete record. FTS is keyed by documents.rowid, so drop the FTS row
     // BEFORE the documents row (the rowid lookup needs it to still exist).
-    c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{uri}) catch {};
-    c.exec("DELETE FROM documents WHERE uri = ?", &.{uri}) catch {};
-    c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{uri}) catch {};
+    try c.exec("DELETE FROM documents_fts WHERE rowid = (SELECT rowid FROM documents WHERE uri = ?)", &.{uri});
+    try c.exec("DELETE FROM documents WHERE uri = ?", &.{uri});
+    try c.exec("DELETE FROM document_tags WHERE document_uri = ?", &.{uri});
 
     // overlay tombstone suppresses any snapshot hit for this uri until a
     // snapshot built after the delete is adopted
@@ -710,17 +704,17 @@ pub fn insertRecommend(
     );
 }
 
-pub fn deleteRecommend(uri: []const u8) void {
-    const c = db.getClient() orelse return;
+pub fn deleteRecommend(uri: []const u8) !void {
+    const c = db.getClient() orelse return error.NotInitialized;
 
     // record tombstone
     var ts_buf: [20]u8 = undefined;
     const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
-    c.exec(
+    try c.exec(
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'recommend', ?)",
         &.{ uri, ts },
-    ) catch {};
-    c.exec("DELETE FROM recommends WHERE uri = ?", &.{uri}) catch {};
+    );
+    try c.exec("DELETE FROM recommends WHERE uri = ?", &.{uri});
 }
 
 pub fn insertSubscription(
@@ -754,32 +748,32 @@ pub fn insertSubscription(
     );
 }
 
-pub fn deleteSubscription(uri: []const u8) void {
-    const c = db.getClient() orelse return;
+pub fn deleteSubscription(uri: []const u8) !void {
+    const c = db.getClient() orelse return error.NotInitialized;
 
     // record tombstone
     var ts_buf: [20]u8 = undefined;
     const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
-    c.exec(
+    try c.exec(
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'subscription', ?)",
         &.{ uri, ts },
-    ) catch {};
-    c.exec("DELETE FROM subscriptions WHERE uri = ?", &.{uri}) catch {};
+    );
+    try c.exec("DELETE FROM subscriptions WHERE uri = ?", &.{uri});
 }
 
-pub fn deletePublication(uri: []const u8) void {
-    const c = db.getClient() orelse return;
+pub fn deletePublication(uri: []const u8) !void {
+    const c = db.getClient() orelse return error.NotInitialized;
 
     // record tombstone
     var ts_buf: [20]u8 = undefined;
     const ts = std.fmt.bufPrint(&ts_buf, "{d}", .{currentTimestamp(c.io)}) catch "0";
-    c.exec(
+    try c.exec(
         "INSERT OR REPLACE INTO tombstones (uri, record_type, deleted_at) VALUES (?, 'publication', ?)",
         &.{ uri, ts },
-    ) catch {};
+    );
     // delete record
-    c.exec("DELETE FROM publications WHERE uri = ?", &.{uri}) catch {};
-    c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri}) catch {};
+    try c.exec("DELETE FROM publications WHERE uri = ?", &.{uri});
+    try c.exec("DELETE FROM publications_fts WHERE uri = ?", &.{uri});
 }
 
 test "httpSiteRootHost: root URL → host, deep link → null" {
