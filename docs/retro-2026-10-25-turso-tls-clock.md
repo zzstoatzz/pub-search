@@ -64,3 +64,35 @@ cutover. For this recovery, authenticated archive metadata located segment
 known update and the first recorded TLS failure. Keep the worker at exactly one machine. Replayed writes are
 idempotent; verify new Turso timestamps, overlay rows, stream progress,
 and successful searches before removing temporary recovery files.
+
+## Verification
+
+- 190 backend tests passed locally, including the real TLS clock regression,
+  failed-delete cursor preservation, rejected Hrana statements, and hung-request
+  cancellation. Python checks passed: 67 tests and four subtests.
+- [Production deployment](https://github.com/zzstoatzz/pub-search/actions/runs/40246455557)
+  passed against `45b49eb`; both Fly process groups run that image.
+- A document created at `08:51Z`, during the outage, was recovered and found
+  through both the origin keyword API and the site's `/api/search` route.
+- The persistence and six-hour freshness alerts cleared. Scheduled ingestion
+  watchdog runs at `23:45Z` and `00:01Z` passed.
+
+## Active-tail recovery bottleneck
+
+The retained live tail exposed a separate Stream performance problem. Its
+active-region cold reader restarts at the file header for each 1,024-row
+batch (`stream/src/internal/storage/cold.zig`). Pub-search's cursor kept
+advancing, but remained about twenty minutes behind the source. An independent
+read-only WebSocket probe reproduced slow delivery from that cursor.
+
+The upstream Go reader seeks to the containing flushed block through
+`ActiveFlushedRange(startSeq)` (`internal/ingest/writer.go:741` and
+`internal/subscribe/replay.go:264`, inspected at `289b032`). Stream's
+`ColdSnapshot` currently carries the active length but no starting offset.
+This is a port gap, not an inherent replay cost.
+
+A dry run verified that a temporary `JETSTREAM_SUBSCRIBE_READ_BATCH=32768`
+override preserves the running admitted image and all three production
+Compose files. Applying and restoring it restarts shared Stream, affecting
+its other listeners; approval was requested before that broader operation.
+No Stream production setting was changed during diagnosis.
