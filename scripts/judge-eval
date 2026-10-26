@@ -145,6 +145,20 @@ def excerpt_index(total: int, j: int, vote: int) -> int:
     return (base + vote) % total
 
 
+def retained_material(did: str, vote: int) -> str | None:
+    fixture = json.loads((Path(__file__).parent / "tests/fixtures/judge-festivus.json").read_text())
+    if fixture["did"] != did:
+        return None
+    records = fixture["records"]
+    picked = records[vote::VOTES]
+    out = [f"Account sample: {len(records)} published native records; full account statistics unavailable.",
+           "Titles from the retained sample:"]
+    out += [f"- {record['title']}" for record in picked]
+    excerpt = records[vote]
+    out += ["\nDocument description excerpt:", f"- title: {excerpt['title']}\n  content: {excerpt['description_excerpt']}"]
+    return "\n".join(out)
+
+
 async def vote_material(client, st, did: str, vote: int) -> str:
     """Mirrors classifier.zig fetchVoteMaterial (turso instead of the replica)."""
     facts = (await rows(client, st,
@@ -152,6 +166,9 @@ async def vote_material(client, st, did: str, vote: int) -> str:
         [did]))[0]
     total = int(facts[0])
     if total == 0:
+        retained = retained_material(did, vote)
+        if retained is not None:
+            return retained
         raise RuntimeError(f"no documents for {did}")
     out = [f"Account facts: {total} documents, first {facts[1]}, latest {facts[2]}\n\nTitles across the account's history:"]
 
@@ -184,13 +201,13 @@ async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]
     prompt = PROMPT_HEAD + material + PROMPT_TAIL
     timeout = float(os.environ.get("JUDGE_TIMEOUT", "90"))
     if PROVIDER == "anthropic":
-        from anthropic import AsyncAnthropic
+        from anthropic import NOT_GIVEN, AsyncAnthropic
 
         anthropic = AsyncAnthropic(api_key=st.anthropic_api_key or None, timeout=timeout)
         message = await anthropic.messages.create(
             model=model,
             max_tokens=4096,
-            output_config={"effort": "low"},
+            output_config={"effort": os.environ.get("JUDGE_EFFORT", "medium")} if model == "claude-haiku-5-5" else NOT_GIVEN,
             messages=[{"role": "user", "content": prompt}],
         )
         content = "".join(block.text for block in message.content if block.type == "text")
@@ -297,6 +314,8 @@ async def main() -> None:
         print()
         for model, s in scores.items():
             print(f"{model}: {s}/{len(materials)}")
+        if len(materials) != len(KNOWN) or any(scores.get(model, 0) != len(KNOWN) for model in models):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,160 @@
+{
+  "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+  "source": "https://calocybe.us-west.host.bsky.network/xrpc/com.atproto.repo.listRecords?repo=did:plc:4z33k5fjzw2ew3u373pg7ku5&collection=site.standard.document&limit=30",
+  "captured_on": "2026-10-25",
+  "records": [
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bx5omcvvo2k77",
+      "cid": "bafyreib26bhum7mn4vwqqnkwizppjavb5jru6lgxatx4cdu6uqnygg62xe",
+      "title": "S05E09: The Masseuse",
+      "description_excerpt": "Jerry's masseuse girlfriend refuses to give him a massage no matter how"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/btfow5gz52rgu",
+      "cid": "bafyreic3jpijn52frets6mdwakssxz7dwlmdyxvk37q2ib7jehy3fipmqi",
+      "title": "S09E20: The Puerto Rican Day",
+      "description_excerpt": "The gang gets stuck in Puerto Rican Day Parade traffic and splits"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/btbyonb3s7mnj",
+      "cid": "bafyreideambs65l2toafhgxjooeruolrwtbb5oar5nq73xbj7d3ur6qeey",
+      "title": "S07E18: The Friars Club",
+      "description_excerpt": "Jerry accidentally takes a Friars Club jacket and Kramer gets it dirty,"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bq22cwjslpbcd",
+      "cid": "bafyreiagmvvtcjhqfxjwh2rdodlucbekgtbq5mi4jyzqh3uhrnxlfwj4vu",
+      "title": "S06E15: The Highlights of 100, Part 2"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bp56g6qb2syxe",
+      "cid": "bafyreifx24g63t2u35m5ulzvot7rlnssykzckohc7bof453jynh5qy5oom",
+      "title": "S08E21: The Muffin Tops"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bkqmlxo5ktc3s",
+      "cid": "bafyreic4ezbjbz4p4v5x3heym3sle3mcyngzjfnycvoluncqvfvka7vkly",
+      "title": "S03E13: The Subway"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bjy3cwvtgc5h6",
+      "cid": "bafyreib2ssbpk2bw3xf4upakhnpjzayizvh2dsmilviggv6f55sddnwha4",
+      "title": "S04E03: The Pitch"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bi6tssexh7oe2",
+      "cid": "bafyreidccalrnj5umbi6r7xmtm7jrujprzsl3f5aanzccu7pzbe2abfypa",
+      "title": "S06E13: The Scofflaw"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bhsizxmbcvakj",
+      "cid": "bafyreie3jkidbbjvfigbqmo7wgysry2bbkhgg7rx5ire7cvlisdbpzogey",
+      "title": "S09E08: The Betrayal"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bf2l44r2k3x7x",
+      "cid": "bafyreihjdvppvvwngrpxeuqhzsj5rvxvuxsz7r2sblkheaz4ynqsroemy4",
+      "title": "S05E22: The Opposite"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bcp5oshplqtuw",
+      "cid": "bafyreiaiiajdpay46jl7kuwvs6gy22lwttwfabcuoidyv2jhrj32l2pyxq",
+      "title": "S03E22: The Parking Space"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bbrcrelshzgc2",
+      "cid": "bafyreigarmqcklj3kljdsocyno72dsx6aewgyfanny4stmrrobedjnweo4",
+      "title": "S08E11: The Little Jerry"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/bbo4z73dkqomb",
+      "cid": "bafyreife774jf3ltza4owqewpducy4bpbnem6vi77c26qaxymeld2cldjy",
+      "title": "S09E11: The Dealership"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/babr56xzdz2ax",
+      "cid": "bafyreihucsgip6yozkyf6ylnnrc7bitrotysi46rxcktgy7nz42rloxyty",
+      "title": "S03E19: The Limo"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/b7xqnzhuj6apq",
+      "cid": "bafyreidj2zytkztexda35pf3gcfxghnmxb3elnpdyhjo3fdwaeebvejcsy",
+      "title": "S03E02: The Truth"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/b6g35dwxjqo6n",
+      "cid": "bafyreihc3nqnaadcuygmuz7e3amhayamw7mygzxk37lz4lanvfyu7zvjsa",
+      "title": "S06E20: The Doodle"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/b56mw2cwhewqd",
+      "cid": "bafyreibv7vl6lkrow4hnu65n3htd4eia3xlbklu3b24xgdfav6njkvc6we",
+      "title": "S02E12: The Busboy"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/b4gbxyfnvdsfv",
+      "cid": "bafyreidx55us36jjrnnwtdihslwh5qav2loakljtfrxhnpblhtb6egssle",
+      "title": "S09E23: The Finale (1)"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/azisrip4mir2n",
+      "cid": "bafyreifbkypox5mamv63rzmhnxyte3ijjb2oup3sdg6utetzcubrgflqea",
+      "title": "S05E19: The Raincoats (2)"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/axomcbokxu5bo",
+      "cid": "bafyreid34k55dhx35pfj6kaq2ac2r4mcf33aqufi3c6zb2l7v7gglnc5nq",
+      "title": "S05E15: The Pie"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/axkkgkhmhmsdo",
+      "cid": "bafyreibu7hrqbqepdull5qosbj5h3uddxf7fu2hwhuzv7qbhdqoea6ghr4",
+      "title": "S08E04: The Little Kicks"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/axhmaslhsmsmg",
+      "cid": "bafyreihsrosdgrizrllc6g5vp5cooidb65tfgvmyplj7utehbezcyoezhu",
+      "title": "S07E23: The Wait Out"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/ax75cid27s3a7",
+      "cid": "bafyreicefdgpvqjxiaavrg7oz5wj5kayzooiftkjat2lfz6p76j2vggw44",
+      "title": "S08E03: The Bizarro Jerry"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/ax4qlurqy33w4",
+      "cid": "bafyreihpc3ykcwi37pjpkngyv5sp7bs5ri6lace6hiuidaazii2wxzfjwq",
+      "title": "S09E14: The Strongbox"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/aucfzriu7trfj",
+      "cid": "bafyreidytunsdkv74enj67lvftkzwsvzvknc3373uqj26qva6r2szhxyiu",
+      "title": "S09E16: The Burning"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/asr4pz6o2na4l",
+      "cid": "bafyreifi7ziysaj4klvtmsouovbk4jhthtgv3etr57353ku5momskek224",
+      "title": "S01E05: The Stock Tip"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/aowtyg5fbavqv",
+      "cid": "bafyreichx6o4d3fmpfoqilut62ppqmqgvmyzgvdmk3peot3zqiwgna2cme",
+      "title": "S04E10: The Virgin"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/aoj7x4gv5lbue",
+      "cid": "bafyreiaxbw5qwbzk5m7pnazonqfr7sah6p7yal7j3sqlde5meryidgwa2q",
+      "title": "S06E07: The Soup"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/ao42fkfvyy7tv",
+      "cid": "bafyreiaikmosnvsfsaunihemmb6nl7luvsikzx5jrsjk56zzuxoo4asq2u",
+      "title": "S09E13: The Cartoon"
+    },
+    {
+      "uri": "at://did:plc:4z33k5fjzw2ew3u373pg7ku5/site.standard.document/anpomkyjkocbs",
+      "cid": "bafyreiepzn33tmkkt6oj2ddahna7rv5ksm2chnmytud3vyi3ktvofdansu",
+      "title": "S03E03: The Pen"
+    }
+  ]
+}

@@ -24,6 +24,15 @@ loader.exec_module(judge)
 
 
 class JudgeEvalTest(unittest.TestCase):
+    def test_retained_account_material_covers_real_source_records(self):
+        did = "did:plc:4z33k5fjzw2ew3u373pg7ku5"
+        materials = [judge.retained_material(did, vote) for vote in range(judge.VOTES)]
+        fixture = json.loads((Path(__file__).parent / "fixtures/judge-festivus.json").read_text())
+        for record in fixture["records"]:
+            self.assertEqual(sum(f"- {record['title']}\n" in material for material in materials), 1)
+        self.assertTrue(all("full account statistics unavailable" in material for material in materials))
+        self.assertIsNone(judge.retained_material("did:plc:unrelated", 0))
+
     def test_missing_settings_do_not_expose_other_credentials(self):
         with self.assertRaises(ValueError) as caught:
             judge.Settings(_env_file=None, cocore_api_key="private-test-marker", turso_url=None, turso_token=None)
