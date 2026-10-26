@@ -12,7 +12,7 @@ A usable judge must get ALL known cases right on a majority of votes.
 
 Usage:
   scripts/judge-eval                                   # OpenAI-compatible endpoint, default candidate set
-  JUDGE_PROVIDER=anthropic scripts/judge-eval claude-haiku-4-5  # named model
+  JUDGE_PROVIDER=anthropic scripts/judge-eval claude-haiku-5-5  # named model
   JUDGE_PROVIDER=openai scripts/judge-eval google/gemma-4-12b   # co/core (chat-completions)
   JUDGE_PROVIDER=openai JUDGE_API_URL=https://api.openai.com/v1/chat/completions scripts/judge-eval <model>
   JUDGE_API_URL=http://127.0.0.1:18081/v1/chat/completions JUDGE_API_KEY='' JUDGE_CONCURRENCY=1 scripts/judge-eval deepseek-local
@@ -44,7 +44,7 @@ KNOWN = {
 
 PROVIDER = os.environ.get("JUDGE_PROVIDER", "openai")
 DEFAULT_MODELS = {
-    "anthropic": ["claude-haiku-4-5"],  # 9/9 on 2026-09-05
+    "anthropic": ["claude-haiku-5-5"],
     "openai": [
         "gpt-5.6-luna",  # the judge since 2026-09-05 (9/9), with JUDGE_API_URL=https://api.openai.com/v1/chat/completions
         "mlx-community/Qwen2.5-7B-Instruct-4bit",  # the original judge (baseline)
@@ -189,7 +189,8 @@ async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]
         anthropic = AsyncAnthropic(api_key=st.anthropic_api_key or None, timeout=timeout)
         message = await anthropic.messages.create(
             model=model,
-            max_tokens=2000,
+            max_tokens=4096,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )
         content = "".join(block.text for block in message.content if block.type == "text")
