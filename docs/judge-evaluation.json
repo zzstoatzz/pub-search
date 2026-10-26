@@ -1,0 +1,1982 @@
+{
+  "reviewed_on": "2026-10-25",
+  "runs": {
+    "original_prompt": {
+      "provider": "anthropic",
+      "skipped": [],
+      "votes": [
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account is a personal technical blog by an author sharing original insights and tutorials about design software, where each document exists because the author had specific knowledge or tips to communicate, not because a data record triggered its creation.",
+          "seconds": 2.4534981250180863
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "These are composed blog posts and tutorials where the author chose what technical topics to cover and how to explain them, not templated documents generated one-per-database-record.",
+          "seconds": 1.303317625017371
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "Each document represents a specific software technique or problem the author encountered and chose to write about (e.g., a particular InDesign workflow, a script solution, a discovered tip), not templated output generated from a database of records.",
+          "seconds": 1.53271062503336
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "Each document corresponds to a fundraising campaign record in a database, where a template combines campaign metadata (organizer, year, beneficiary) with boilerplate content, rather than representing independent authorial choices to write about distinct topics.",
+          "seconds": 1.5310733750229701
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "Each document corresponds to a specific fundraising campaign or event record in a database (one per supporter group, year, and charity combination), with templates generating titles and content from campaign data rather than an author composing each piece because they had something to say.",
+          "seconds": 1.5972139589721337
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "Each document is generated from a fundraiser campaign record (one per SG/event combination) with templated structure, not written because an author had something to say.",
+          "seconds": 1.2789314580149949
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "These are episode summaries from a TV series catalog, where each document corresponds to one episode record and is generated from a template applied to episode metadata rather than composed as original writing.",
+          "seconds": 1.2354966669809073
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "Each document corresponds to one episode in a TV series catalog, with titles and descriptions generated from episode metadata rather than composed for independent reasons.",
+          "seconds": 1.247118125029374
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "These are episode summaries from a TV series indexed one-per-episode, where the season/episode number and template-generated summary are determined by the underlying broadcast dataset rather than original authorial composition.",
+          "seconds": 1.3394897499820217
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account contains 931 documents mixing concert setlists, movie/show summaries, and technical articles\u2014a pattern consistent with aggregating multiple data sources (concert databases, IMDb/streaming catalogs, technical feeds) rather than an author choosing what to say about topics of personal interest.",
+          "seconds": 1.5871828339877538
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account shows consistent authorial voice across diverse, original compositions (technical essays, personal reviews, music commentary, and creative writing) where each document exists because the author chose to write about something, not because a database record was templated into text.",
+          "seconds": 1.535948125005234
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account shows genuine authorial composition across diverse topics (personal essays, technology criticism, movie reviews, creative fiction, technical tutorials) where each document exists because the author had something to say, not because a data record exists.",
+          "seconds": 1.4570286250091158
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "This is a personal Japanese tech blog of Adobe InDesign/Illustrator tips, with an individual author's own voice and experiences in the excerpts; the branded, templated-looking titles and the prolific posting do not make the documents one-per-record outputs of a data source.",
+          "seconds": 1.6498556250007823
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The titles and excerpts are varied, hand-written tips, event announcements, and essays by one illustrator (e.g., the 'Adobe CC anthology' posts and the Illustrator tutorial series intro), not template output stamped from a dataset, so each document exists because its author had something to say.",
+          "seconds": 1.7639036670443602
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The titles and excerpts show a single author's personal illustration-site blog writing original tips, script explanations, and personal anecdotes (e.g., 'I got stuck here', 'I got tired of customizing'), so each post exists because the author had something to say rather than being generated from a data record.",
+          "seconds": 1.47758345794864
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": true,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The excerpts show individually written prose (group stories, organizer notices like the Slack-to-Discord migration and dashboard announcements) rather than text stamped from campaign records, so the documents appear composed by authors who chose what to say, despite the templated titles.",
+          "seconds": 4.341712417022791
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "The account publishes roughly one templated fundraiser announcement per supporter group and campaign year (\"<Group> Prideraiser <year> presented by <Group>\"), with boilerplate excerpts and a dashboard page, so the documents appear to be stamped from campaign records rather than composed for their own sake.",
+          "seconds": 2.2845107920002192
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": true,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The excerpts show original prose written by supporter groups announcing their own campaigns (e.g., 'Hey y'all, welcome to the 2026 Detroit Prideraiser campaign'), so the templated titles wrap authored content rather than being generated from database records.",
+          "seconds": 2.490324749960564
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "Each document is a one-per-episode summary keyed to a season/episode number (S05E09, S06E15, etc.), matching the TV-episode catalog pattern: the document exists because a record exists in the dataset, not because the author chose to say something.",
+          "seconds": 1.458844750013668
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "The titles follow a rigid SxxExx episode-catalog template with one document per TV episode, and the excerpt is a plot summary of a record in a dataset rather than an author's own essay or argument, so it is generated from a data source.",
+          "seconds": 1.3365630840416998
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "Each document is a one-per-episode summary keyed to a season/episode code (S07E18, S03E13, and so on), matching the TV-episode catalog pattern where the existence of each document follows from a dataset record rather than from an author choosing to write it.",
+          "seconds": 1.3555640420527197
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account mixes personal essays and technical posts (\"Check in to your personal site\", \"A year of blocking AI crawlers\") with logs of films and concerts over 17 years, which reads as a personal blog rather than one document generated per database record.",
+          "seconds": 3.442296791996341
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The titles and excerpts read as a personal blog: essays, opinions, self-hosting and music-workflow posts, and film and concert entries with the author's own commentary, rather than one document per database record, though some movie entries appear to paste catalog synopses.",
+          "seconds": 3.4168134999927133
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account is predominantly a personal blog with essays and reflections (\"Throwing together a blog\", \"2023 in review\", tooling posts), and although the film entries read like synopsis-based log records, the author's own writing dominates the account.",
+          "seconds": 4.565585749980528
+        }
+      ]
+    },
+    "clarified_prompt": {
+      "provider": "anthropic",
+      "prompt_sha256": "496cd5eaf41a827f77d676754c9b41d8e01b1973641cddfeeebb7b717d987afa",
+      "materials_sha256": "98db52fc90e6e4b5a63b92d2bc04c40e09e0b72d1daae8bc23ba83bbbd3d5d67",
+      "effort": "medium",
+      "skipped": [],
+      "votes": [
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "This is a personal technical blog where the author shares original insights, tips, and solutions about design software (InDesign, Illustrator, Photoshop) based on their own experience and problem-solving, not generated content from a database of records.",
+          "seconds": 2.113381457980722,
+          "usage": {
+            "input_tokens": 3333,
+            "output_tokens": 77,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "This is a personal technical blog by an author sharing original tips, tutorials, and scripts about Adobe Creative Suite tools, where each post represents the author's chosen insights rather than templated generation from a data source.",
+          "seconds": 1.2928063750150613,
+          "usage": {
+            "input_tokens": 3031,
+            "output_tokens": 66,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "Content shows original authorial voice with personal explanations, problem-solving narratives, and subjective choices (\"\u79c1\u306e\u5834\u5408\u306f\", \"\u75b2\u308c\u679c\u3066\u307e\u3057\u305f\") rather than templated generation from a data source.",
+          "seconds": 1.217975125007797,
+          "usage": {
+            "input_tokens": 3448,
+            "output_tokens": 68,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 0,
+          "verdict": true,
+          "reason": "Each document is generated from a campaign record in a fundraising platform database\u2014one document per Prideraiser campaign entry\u2014where a template combines organization name, year, and beneficiary details rather than each author composing independent writing.",
+          "seconds": 1.3867214999627322,
+          "usage": {
+            "input_tokens": 1345,
+            "output_tokens": 66,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 1,
+          "verdict": true,
+          "reason": "Each document exists because a fundraising campaign record exists in a dataset (one per supporter group/year combination), with titles and descriptions stamped from a template pattern rather than composed individually by an author with something unique to say.",
+          "seconds": 1.527728584012948,
+          "usage": {
+            "input_tokens": 1370,
+            "output_tokens": 63,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 2,
+          "verdict": true,
+          "reason": "Each document is generated from a fundraiser campaign record (one per supporter group + year combination) using a template structure, not composed because the author had something unique to say about that specific campaign.",
+          "seconds": 1.3026210419484414,
+          "usage": {
+            "input_tokens": 1412,
+            "output_tokens": 63,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "Titles follow a rigid season-episode numbering pattern with standardized formatting (S##E##: [Episode Title]), which combined with the templated structure of publishing one document per episode indicates these are generated from a broadcast database rather than original compositions chosen by an author.",
+          "seconds": 1.3901574590126984,
+          "usage": {
+            "input_tokens": 600,
+            "output_tokens": 73,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "Each document is generated from a database record (one per episode) where the template (season/episode number and title) plus episode data determines the published text, rather than an author composing each entry because they had something to say.",
+          "seconds": 1.2596009169938043,
+          "usage": {
+            "input_tokens": 599,
+            "output_tokens": 65,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "These are episode summaries from a TV show indexed one-per-episode, where the season/episode number and template structure indicate generation from a database record rather than original composition.",
+          "seconds": 1.1313643750036135,
+          "usage": {
+            "input_tokens": 591,
+            "output_tokens": 54,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account contains 931 documents mixing concert setlists, movie/show plot summaries, and technical articles\u2014a pattern consistent with aggregating data from multiple sources (concert databases, IMDb, technical feeds) rather than original composition by a single author with things to say.",
+          "seconds": 1.362521332979668,
+          "usage": {
+            "input_tokens": 1042,
+            "output_tokens": 75,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account shows original composition across diverse topics (technical tutorials, personal essays, music reviews, social commentary) with substantive middle-content excerpts that reflect an author's voice and choices, not templated generation from a data source.",
+          "seconds": 1.231274499965366,
+          "usage": {
+            "input_tokens": 1343,
+            "output_tokens": 71,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account shows consistent original authorship across diverse topics (personal technical posts, political commentary, film reviews, music criticism) with distinct voices and perspectives rather than templated generation from a data source.",
+          "seconds": 1.2278844580287114,
+          "usage": {
+            "input_tokens": 1163,
+            "output_tokens": 57,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account contains original composition across diverse topics (Mozilla policy work, local politics analysis, personal essays, manga reviews, system administration notes) where the author clearly had something to say in each piece, rather than documents generated from database records with templates.",
+          "seconds": 1.4254062499967404,
+          "usage": {
+            "input_tokens": 1906,
+            "output_tokens": 67,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account displays original authorial voice across diverse topics (eMusic, Mozilla, Howard County politics, local architecture, personal updates) with distinctive perspectives and arguments, consistent with a personal blog rather than templated generation from data sources.",
+          "seconds": 1.3490170830045827,
+          "usage": {
+            "input_tokens": 1882,
+            "output_tokens": 64,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "This is a personal blog with original authorial voice\u2014the author writes essays on diverse topics (Mozilla policy, local politics, music industry, personal reflections) chosen because they had something to say, not because records in a database exist.",
+          "seconds": 1.3762406670139171,
+          "usage": {
+            "input_tokens": 2066,
+            "output_tokens": 66,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account contains original compositions on diverse technical topics reflecting an author's genuine expertise and perspective choices, rather than templated documents generated from a structured data source.",
+          "seconds": 0.9484905829885975,
+          "usage": {
+            "input_tokens": 1162,
+            "output_tokens": 49,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The titles show diverse, original topics chosen by an author (Windows Phone development, personal projects, PM philosophy, security analysis) rather than records generated from a dataset, and content excerpts demonstrate substantive original writing with personal perspective rather than templated summaries of database entries.",
+          "seconds": 1.476529625011608,
+          "usage": {
+            "input_tokens": 1131,
+            "output_tokens": 79,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account shows consistent original authorship across 16 years with varied technical essays, tutorials, and opinion pieces that reflect individual research and perspective rather than templated generation from a data source.",
+          "seconds": 1.08744083304191,
+          "usage": {
+            "input_tokens": 1177,
+            "output_tokens": 56,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "Each of the 555 documents is a transit alert generated from a service event record (train delay, stopped train, reroute), with templated structure (train ID + status + reason + boilerplate) where the document exists because a Metra operational event occurred, not because an author chose what to communicate.",
+          "seconds": 1.7246567080146633,
+          "usage": {
+            "input_tokens": 1266,
+            "output_tokens": 90,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "Each document is generated from a transit alert database record (one per service event/train status), with templated structure and content determined by incident data rather than authored composition.",
+          "seconds": 1.1957638339954428,
+          "usage": {
+            "input_tokens": 1278,
+            "output_tokens": 52,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "Each document corresponds to a specific transit event (train number, service line, or incident) where a template fills in the train/line identifier, scheduled arrival, current status, and reason for delay from a real-time operations database.",
+          "seconds": 1.2193587920046411,
+          "usage": {
+            "input_tokens": 1231,
+            "output_tokens": 65,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "This is a personal daily journal where the author describes subjective experiences and emotional states (brunch, work progress, personal relationships, home repairs) with original narrative details, not a templated generation from structured data records.",
+          "seconds": 1.2038838749867864,
+          "usage": {
+            "input_tokens": 896,
+            "output_tokens": 62,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "Despite the templated titles, the content excerpts show genuine personal reflection with specific, varied details about daily life (cooking choices, work incidents, social interactions, physical sensations) that reflect an author composing entries about their experiences rather than generating documents from a data source.",
+          "seconds": 1.4286091669928282,
+          "usage": {
+            "input_tokens": 942,
+            "output_tokens": 73,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "These are personal journal entries with varied, specific, and contextual reflections on the author's daily experiences, not database records templated from a data source.",
+          "seconds": 1.0252973340102471,
+          "usage": {
+            "input_tokens": 900,
+            "output_tokens": 50,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The titles share a site-branded template, but the sampled bodies are original first-person tips, opinions, and tutorial narrative written by the author, not text generated from database records.",
+          "seconds": 1.5803959590266459,
+          "usage": {
+            "input_tokens": 3613,
+            "output_tokens": 220,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The titles and excerpts show a personal illustrator's blog with varied, hand-written tips, tutorials, event announcements, and a series, not one document per data record generated from a template.",
+          "seconds": 1.6471102089853957,
+          "usage": {
+            "input_tokens": 3302,
+            "output_tokens": 243,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The titles and excerpts show a single author's personal Japanese blog of InDesign/Photoshop tips and script write-ups, with original first-person explanations, opinions, and narrative (e.g., 'I learned it this way', 'I got stuck here'), not one document per database record or template-generated output.",
+          "seconds": 1.0600084589677863,
+          "usage": {
+            "input_tokens": 3713,
+            "output_tokens": 110,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The sampled excerpts contain original organizer narrative and opinion (e.g., the Third Rail and The Center descriptions) rather than text filled from a record, and the shared 'Prideraiser presented by X' title pattern alone is not evidence of templated bodies, so the documents are composed rather than generated.",
+          "seconds": 2.485713709029369,
+          "usage": {
+            "input_tokens": 1913,
+            "output_tokens": 427,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The sampled excerpts contain original organizer-authored prose (e.g., Barton St Battalion's partnership statement, the Iowa Safe Schools campaign description, and the 'MLS is Back' announcement) rather than text stamped from database fields, and the shared title pattern alone does not prove generation.",
+          "seconds": 2.655942583049182,
+          "usage": {
+            "input_tokens": 1906,
+            "output_tokens": 545,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The sampled excerpts are original organizer-authored narrative and opinion (e.g., the Detroit campaign's welcome and the Wolf's Ridge and American Outlaws descriptions), so the documents exist because authors had something to say, not because a database record was stamped into a template, despite the shared title pattern.",
+          "seconds": 3.03560920804739,
+          "usage": {
+            "input_tokens": 1995,
+            "output_tokens": 485,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The documents are one-per-episode entries keyed by season and episode number (S05E09, S06E15, and so on), with episode summaries republished from a TV episode dataset rather than composed because the author had something to say, which matches the excluded TV-episode catalog pattern.",
+          "seconds": 1.7605999580118805,
+          "usage": {
+            "input_tokens": 813,
+            "output_tokens": 200,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "The account publishes one summary per TV episode, with titles following a season-episode pattern across the whole series, so each document exists because an episode record exists rather than because the author chose to write it.",
+          "seconds": 1.936431417008862,
+          "usage": {
+            "input_tokens": 822,
+            "output_tokens": 239,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "The titles follow a season-episode numbering scheme and the excerpt is a plot summary of one TV episode, so the account republishes one document per episode record rather than composing documents from the author's own choice of what to say.",
+          "seconds": 1.3670228340197355,
+          "usage": {
+            "input_tokens": 811,
+            "output_tokens": 179,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account reads as a personal blog with original essays and opinions (net neutrality commentary, AI-crawler blocking, personal site tinkering), and the setlist and film-synopsis pages look like the author's own logs rather than one-per-record database output, though some of that content may be record-derived.",
+          "seconds": 3.9821056249784306,
+          "usage": {
+            "input_tokens": 1499,
+            "output_tokens": 664,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account reads as a personal blog: it has original essays and opinion (tech, music workflow, self-hosting), and the record-like pages (concert setlist, film entries) are the author's own posts with chosen content rather than one-per-record generation from a dataset.",
+          "seconds": 2.751583083998412,
+          "usage": {
+            "input_tokens": 1896,
+            "output_tokens": 408,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account reads as a personal blog: it has opinion pieces, music and concert write-ups, a site-history post, and a year-in-review, and the film entries contain original hooks alongside plot summaries. Nothing shows one document per database record, and the prolific volume alone doesn't make it generated.",
+          "seconds": 2.4868094580015168,
+          "usage": {
+            "input_tokens": 1586,
+            "output_tokens": 371,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The titles and excerpts show a prolific personal blog with original essays, opinions, and narrative (Mozilla activity reports written by the author, Howard County analysis, yuri manga recommendations, personal reflections), not one document per database record.",
+          "seconds": 1.5823959590052254,
+          "usage": {
+            "input_tokens": 2668,
+            "output_tokens": 91,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account's titles and excerpts show original personal writing (blog posts on eMusic, Howard County politics, Symphony Woods opinions, weight loss updates) with authored opinions and narrative, not template-plus-record generation, despite some templated 'Mozilla Foundation activities, week ending' titles and a long prolific history.",
+          "seconds": 1.104148707992863,
+          "usage": {
+            "input_tokens": 2651,
+            "output_tokens": 121,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The sampled titles and excerpts show original authored writing (weekly activity reports with opinions and next actions, personal blog posts on Howard County politics, analysis of Patreon earnings, and reader comments), not documents stamped one-per-record from a dataset, so this is a personal/professional blog rather than a generated feed.",
+          "seconds": 1.089773082989268,
+          "usage": {
+            "input_tokens": 2843,
+            "output_tokens": 118,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The titles and excerpts are varied, original first-person-style technical writing, tutorials, and personal career notes that reflect authorial choices rather than one-document-per-record output from a data source, so this is a personal blog and should be indexed.",
+          "seconds": 1.0113996660220437,
+          "usage": {
+            "input_tokens": 1749,
+            "output_tokens": 89,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The titles and excerpts are original blog posts (opinions, project announcements, technical write-ups, and essays) composed by an author with something to say, with no sign of one-document-per-record generation from a data source; the prolific volume and varied topics fit a personal blog.",
+          "seconds": 1.0989115829579532,
+          "usage": {
+            "input_tokens": 1665,
+            "output_tokens": 98,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The titles and sampled excerpts are varied, original first-person-style technical writing (walkthroughs, opinions, tips, and a curated list) with no shared template body or per-record data generation, so each document reflects an author choosing what to say, consistent with a personal tech blog.",
+          "seconds": 1.9911511660320684,
+          "usage": {
+            "input_tokens": 1740,
+            "output_tokens": 102,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account publishes one transit-alert document per Metra train service event, with titles and bodies filled from a template plus per-train data (train number, station, scheduled time, delay minutes, cause), so each document exists because a service record exists rather than because an author chose to say something.",
+          "seconds": 0.8796212919987738,
+          "usage": {
+            "input_tokens": 1752,
+            "output_tokens": 97,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "This account publishes one service-alert document per Metra train event (e.g., 'UPW train #516 scheduled to arrive... at 9:53 PM... 15 to 20 minutes behind schedule'), with titles and bodies stamped from operational records using a fixed template, so each document exists because a record exists rather than because an author chose to say something.",
+          "seconds": 0.9250301670399494,
+          "usage": {
+            "input_tokens": 1736,
+            "output_tokens": 124,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "The account publishes transit service alerts (Metra and CTA train delays, reroutes, and stoppages) with near-identical titles and templated bodies filled from operational data such as train numbers, scheduled times, and delay minutes, so each document exists because a service event record exists rather than because an author chose to say something.",
+          "seconds": 1.0226408340386115,
+          "usage": {
+            "input_tokens": 1671,
+            "output_tokens": 112,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The titles follow a daily mood-log template ('I felt rad/good/meh'), but the excerpts contain original personal narrative about brunch, work, wedding drama, and friends, so the documents exist because the author had something to say, not because a dataset record exists; a daily journal is not a data source.",
+          "seconds": 0.8525572090293281,
+          "usage": {
+            "input_tokens": 1219,
+            "output_tokens": 108,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The 'I felt ___' titles are a mood-journal schedule, and the excerpts contain personal, original narrative (meals, work frustrations, outings with friends), so each document reflects the author's own chosen content rather than a data record.",
+          "seconds": 1.1536947920103557,
+          "usage": {
+            "input_tokens": 1256,
+            "output_tokens": 132,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The titles follow a repeated 'I felt X' mood template, but the sampled bodies contain original first-person diary-style writing about personal experiences, opinions, and daily life, which indicates a personal journal authored for its own sake rather than output generated from a data source.",
+          "seconds": 0.9840622500050813,
+          "usage": {
+            "input_tokens": 1221,
+            "output_tokens": 98,
+            "stop_reason": "end_turn"
+          }
+        }
+      ]
+    },
+    "repeat_55": {
+      "provider": "anthropic",
+      "prompt_sha256": "496cd5eaf41a827f77d676754c9b41d8e01b1973641cddfeeebb7b717d987afa",
+      "materials_sha256": "98db52fc90e6e4b5a63b92d2bc04c40e09e0b72d1daae8bc23ba83bbbd3d5d67",
+      "effort": "medium",
+      "skipped": [],
+      "votes": [
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "This is a personal tips blog of about 100 posts spanning over a decade, with original tutorials, opinions, and narrative in the sampled excerpts. The shared title suffix is a branding template, not evidence that the bodies are generated from records.",
+          "seconds": 2.8219859169912525,
+          "usage": {
+            "input_tokens": 3613,
+            "output_tokens": 225,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "This is a personal blog of design and scripting tips, doujin anthology announcements, and tutorials, with original descriptions and opinions in the sampled content. The shared title pattern and the 'skskSketch' branding do not indicate that documents are generated from a dataset.",
+          "seconds": 2.015086875006091,
+          "usage": {
+            "input_tokens": 3302,
+            "output_tokens": 267,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "This is a personal illustrator's blog with numbered-free but consistently branded titles, and the sampled excerpts contain original first-person writing (explanations of how the author learned concepts, tips, opinions, and workflow anecdotes) rather than text generated from database records, so the templated title pattern does not make it machine-generated.",
+          "seconds": 1.2850917499745265,
+          "usage": {
+            "input_tokens": 3713,
+            "output_tokens": 118,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The sampled bodies contain original organizer-written narrative (group descriptions, fundraising appeals) and platform announcements, so the documents were composed by people rather than stamped one-per-record from campaign data despite the templated titles.",
+          "seconds": 3.4067604160518385,
+          "usage": {
+            "input_tokens": 1913,
+            "output_tokens": 574,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The sampled excerpts contain original organizer and platform prose (e.g., 'Barton St Battalion is proud to partner...', 'Join us as we support Iowa Safe Schools...'), so the documents are composed by authors rather than generated one-per-campaign-record from a template, even though the titles follow a shared pattern.",
+          "seconds": 3.129151166009251,
+          "usage": {
+            "input_tokens": 1906,
+            "output_tokens": 571,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The shared 'Prideraiser ... presented by' title pattern is a template, but the sampled bodies contain original organizer narrative and opinion (e.g., 'Hey y'all, welcome to the 2026 Detroit Prideraiser campaign...', 'Wolf's Ridge XII is thrilled to support...'), so the documents were composed by their authors rather than stamped from database records.",
+          "seconds": 2.5800863329786807,
+          "usage": {
+            "input_tokens": 1995,
+            "output_tokens": 439,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The titles follow a per-episode catalog pattern (SxxEyy: title) spanning many seasons, and the sampled content is a plot summary of a TV episode, so each document exists because a record exists rather than because an author chose to say something.",
+          "seconds": 2.0526461249683052,
+          "usage": {
+            "input_tokens": 813,
+            "output_tokens": 247,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "The account publishes one episode summary per record, with each title following a SxxEyy catalog pattern and a brief plot line, so each document exists because an episode record exists rather than because the author chose to write it.",
+          "seconds": 1.674899000034202,
+          "usage": {
+            "input_tokens": 822,
+            "output_tokens": 189,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "Each document is one per Seinfeld episode, titled by season and episode number, with a plot summary; this is a per-record catalog of an existing dataset rather than writing composed because the author had something to say.",
+          "seconds": 1.6337882920051925,
+          "usage": {
+            "input_tokens": 811,
+            "output_tokens": 177,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account is predominantly a personal blog with original essays and opinion (net neutrality commentary, a personal-site tutorial, tech posts), and the movie and concert entries look like the author's own logs of what they watched or attended rather than one document per database record, though the copied setlist and synopsis excerpts make this uncertain.",
+          "seconds": 5.600795040954836,
+          "usage": {
+            "input_tokens": 1499,
+            "output_tokens": 893,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account is a personal blog with original essays and opinions on tech, self-hosting, and music (e.g., the Navidrome and Last.fm posts), and its film and book entries are authored posts rather than one-per-record database output, even though some excerpts read like pasted synopses.",
+          "seconds": 3.1634131660102867,
+          "usage": {
+            "input_tokens": 1896,
+            "output_tokens": 499,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account reads as a personal blog, with a retrospective on the author's own site, a year-in-review, self-hosting notes, and opinion pieces on net neutrality and streaming, spanning 17 years. The film entries with plot synopses are the only record-like content, and the blog as a whole is not one document per database record.",
+          "seconds": 4.442825249978341,
+          "usage": {
+            "input_tokens": 1586,
+            "output_tokens": 713,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The titles and excerpts show a prolific personal blog with original essays, opinions, and narrative (Mozilla activity reports written in the author's voice, Howard County analysis, yuri manga recommendations), not documents generated one-per-record from a dataset.",
+          "seconds": 2.3643181669758633,
+          "usage": {
+            "input_tokens": 2668,
+            "output_tokens": 97,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "Titles and excerpts show varied, original personal writing across a long blog history (opinions, narratives, political analysis, and essays on Howard County and eMusic), not documents generated one-per-record from a dataset; the templated 'Mozilla Foundation activities, week ending' titles are a recurring series of authored weekly reports rather than database-driven output.",
+          "seconds": 1.0602689170045778,
+          "usage": {
+            "input_tokens": 2651,
+            "output_tokens": 128,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The sampled titles and excerpts show original authored writing (weekly activity notes, opinion and analysis pieces, personal blog posts with reasoning and narrative), not documents generated one-per-record from a data source, so this is a personal/professional blog written by a human author.",
+          "seconds": 0.9943742500036024,
+          "usage": {
+            "input_tokens": 2843,
+            "output_tokens": 100,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account is a personal technical blog with varied, original titles and excerpts that are first-person narrative, tutorials, and opinions (e.g., joining Developer Relations, a scam-page walkthrough, RFC walkthroughs) rather than one document per database record or feed event.",
+          "seconds": 1.0299805829999968,
+          "usage": {
+            "input_tokens": 1749,
+            "output_tokens": 103,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The titles and excerpts are original blog posts with opinions, tutorials, and narrative (e.g., on PM principles, MCP security, and project releases) that the author chose to write, with no evidence of template-plus-record generation; the varied topics across 16 years fit a personal blog.",
+          "seconds": 1.7220398749923334,
+          "usage": {
+            "input_tokens": 1665,
+            "output_tokens": 105,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The titles and sampled excerpts are original, varied blog-style writing (tutorials, opinions, guides, and personal reflections) with no evidence of a template plus data source generating one document per record, so this is a personal blog and should be indexed.",
+          "seconds": 1.1420267919893377,
+          "usage": {
+            "input_tokens": 1740,
+            "output_tokens": 91,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account publishes one transit alert per Metra train or service event, and the excerpts follow a fixed template (train number, scheduled arrival, delay minutes, cause, 'Visit metratracker.com') filled from operational records rather than composed by an author with something to say.",
+          "seconds": 1.338122832996305,
+          "usage": {
+            "input_tokens": 1752,
+            "output_tokens": 99,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "This account publishes one service-alert document per Metra train event, stamped from operational records (train number, station, scheduled time, delay minutes) with a fixed phrasing template, so the documents exist because a record exists rather than because an author chose what to say.",
+          "seconds": 0.9721335840295069,
+          "usage": {
+            "input_tokens": 1736,
+            "output_tokens": 92,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "The account publishes transit service alerts whose titles follow fixed train-number patterns and whose bodies are templated from schedule and delay records (train number, scheduled arrival, delay minutes, cause, fixed URL), so each document is generated from an operational data source rather than composed by an author choosing what to say.",
+          "seconds": 1.2068945840001106,
+          "usage": {
+            "input_tokens": 1671,
+            "output_tokens": 112,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The titles follow a fixed 'I felt [mood]' pattern, but the sampled bodies are personal, first-person journal-style entries with original narrative (brunch with friends, work progress, wedding drama, frustrations), which indicates a personal diary written because the author had something to say rather than records generated from a dataset.",
+          "seconds": 1.7708377089584246,
+          "usage": {
+            "input_tokens": 1219,
+            "output_tokens": 116,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account is a personal mood-journal of daily entries whose titles follow a simple 'I felt ___' pattern, but the sampled bodies contain original first-person writing about meals, work, friends, and health, so each document exists because the author had something to say rather than because a data record exists.",
+          "seconds": 1.9588956669904292,
+          "usage": {
+            "input_tokens": 1256,
+            "output_tokens": 102,
+            "stop_reason": "end_turn"
+          }
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The shared 'I felt ___' title is a templated pattern, but the sampled bodies are original first-person diary entries about work, friends, and daily life, so the documents exist because the author had something to say rather than because a dataset record was rendered.",
+          "seconds": 1.205688999965787,
+          "usage": {
+            "input_tokens": 1221,
+            "output_tokens": 135,
+            "stop_reason": "end_turn"
+          }
+        }
+      ]
+    },
+    "previous_production": {
+      "provider": "openai",
+      "prompt_sha256": "496cd5eaf41a827f77d676754c9b41d8e01b1973641cddfeeebb7b717d987afa",
+      "materials_sha256": "98db52fc90e6e4b5a63b92d2bc04c40e09e0b72d1daae8bc23ba83bbbd3d5d67",
+      "effort": null,
+      "skipped": [],
+      "votes": [
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account contains original, experience-based tutorials, tips, opinions, and personal posts about Adobe tools rather than one generated document per database record or event.",
+          "seconds": 1.6042053749551997,
+          "usage": {
+            "prompt_tokens": 2711,
+            "completion_tokens": 63,
+            "total_tokens": 2774,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 2708,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 16,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account contains original tutorials, personal technical advice, and project descriptions authored by the site owner rather than one generated document per dataset record.",
+          "seconds": 1.5961959999985993,
+          "usage": {
+            "prompt_tokens": 2456,
+            "completion_tokens": 61,
+            "total_tokens": 2517,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 2453,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 17,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:u5kk4h7tr4s3ntskbmhl5z7d",
+          "account": "sksksketch.net",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account contains original, first-person technical articles and tutorials with personal explanations, opinions, and problem-solving narratives rather than one document generated per dataset record.",
+          "seconds": 1.6274712499580346,
+          "usage": {
+            "prompt_tokens": 2778,
+            "completion_tokens": 65,
+            "total_tokens": 2843,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 2775,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 18,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account publishes one document per Prideraiser campaign or platform record, making it a record-driven fundraiser catalog even when individual campaign descriptions contain original writing.",
+          "seconds": 3.1024840410100296,
+          "usage": {
+            "prompt_tokens": 1149,
+            "completion_tokens": 199,
+            "total_tokens": 1348,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1146,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 152,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The sampled campaign pages contain original organizer descriptions and narrative rather than text mechanically generated from one record per dataset entry.",
+          "seconds": 2.775852249993477,
+          "usage": {
+            "prompt_tokens": 1159,
+            "completion_tokens": 171,
+            "total_tokens": 1330,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1156,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 132,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:5swhfspkrynnbidlkrkch3lh",
+          "account": "prideraiser.org",
+          "truth": false,
+          "vote": 2,
+          "verdict": true,
+          "reason": "The account publishes one document per fundraiser campaign, with a recurring Prideraiser title pattern and campaign-specific record descriptions, so the documents exist because campaign records exist rather than because the account is composing independent writing.",
+          "seconds": 2.2573376249638386,
+          "usage": {
+            "prompt_tokens": 1192,
+            "completion_tokens": 153,
+            "total_tokens": 1345,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1189,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 95,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account publishes one document per TV episode, with season/episode titles and synopsis-style content indicating records generated from an episode catalog.",
+          "seconds": 1.632300249999389,
+          "usage": {
+            "prompt_tokens": 552,
+            "completion_tokens": 69,
+            "total_tokens": 621,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 26,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "The account publishes one templated summary per TV episode, so its documents exist because catalog records exist rather than because the author is composing original writing.",
+          "seconds": 1.6179800409590825,
+          "usage": {
+            "prompt_tokens": 548,
+            "completion_tokens": 70,
+            "total_tokens": 618,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 24,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:4z33k5fjzw2ew3u373pg7ku5",
+          "account": "festivus (episode catalog)",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "The account publishes one templated record per TV episode, with episode titles and plot-summary text determined by the catalog entry rather than original author-driven writing.",
+          "seconds": 1.691815541998949,
+          "usage": {
+            "prompt_tokens": 546,
+            "completion_tokens": 73,
+            "total_tokens": 619,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 26,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account is a long-running personal blog with diverse original essays, commentary, technical writing, and reviews, so its documents exist because the author chose topics to write about rather than being generated one-per-dataset record.",
+          "seconds": 2.347494582994841,
+          "usage": {
+            "prompt_tokens": 935,
+            "completion_tokens": 132,
+            "total_tokens": 1067,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 72,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account is a personal blog containing original essays, opinions, project notes, reviews, and journal-like posts rather than one document generated per database record or feed event.",
+          "seconds": 1.7879945829627104,
+          "usage": {
+            "prompt_tokens": 1197,
+            "completion_tokens": 77,
+            "total_tokens": 1274,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1194,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 27,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:sttgf52vkk46f6yuknvqxvgh",
+          "account": "coryd.dev (942-doc human)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account is a personal blog containing original essays, commentary, technical writing, and reviews, even though some film posts use plot-summary-style content.",
+          "seconds": 2.8144418329466134,
+          "usage": {
+            "prompt_tokens": 1047,
+            "completion_tokens": 144,
+            "total_tokens": 1191,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1044,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 98,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account contains varied, author-driven blog posts, essays, reports, opinions, and recommendations whose substantive excerpts show original narrative and analysis rather than one-document-per-dataset-record generation.",
+          "seconds": 1.5286491659935564,
+          "usage": {
+            "prompt_tokens": 1754,
+            "completion_tokens": 76,
+            "total_tokens": 1830,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1751,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 23,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account contains original personal blog posts, political analysis, reports, opinions, and narrative writing across varied topics rather than one document generated per dataset record.",
+          "seconds": 1.6353949590120465,
+          "usage": {
+            "prompt_tokens": 1725,
+            "completion_tokens": 71,
+            "total_tokens": 1796,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1722,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 24,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:77mn3ult3b72tpvtqqva6tat",
+          "account": "frankhecker.com",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account is a long-running personal blog containing original commentary, analysis, reporting, and narrative across varied topics, rather than one templated document per database record or event.",
+          "seconds": 1.5827861669822596,
+          "usage": {
+            "prompt_tokens": 1837,
+            "completion_tokens": 79,
+            "total_tokens": 1916,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1834,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 28,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "The account contains original technical articles, personal career reflections, event commentary, and project narratives whose sampled content reflects an author choosing what to say rather than one document being generated per dataset record.",
+          "seconds": 1.4676051249844022,
+          "usage": {
+            "prompt_tokens": 1018,
+            "completion_tokens": 65,
+            "total_tokens": 1083,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 11,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The account contains original technical, product, and opinion writing across varied topics, indicating documents exist because the author had something to say rather than because records were being converted into pages.",
+          "seconds": 1.2808380839996971,
+          "usage": {
+            "prompt_tokens": 1012,
+            "completion_tokens": 46,
+            "total_tokens": 1058,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:rkjxbatkiros6f7pwtgsir54",
+          "account": "den.dev",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account contains original essays, technical guides, opinions, and personal project narratives rather than one document generated per database record or feed event.",
+          "seconds": 1.2508358330233023,
+          "usage": {
+            "prompt_tokens": 1033,
+            "completion_tokens": 59,
+            "total_tokens": 1092,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1030,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 15,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 0,
+          "verdict": true,
+          "reason": "The account publishes one templated transit-alert document per service disruption or train event, indicating dataset-driven generation rather than original writing.",
+          "seconds": 1.1275205840356648,
+          "usage": {
+            "prompt_tokens": 1114,
+            "completion_tokens": 36,
+            "total_tokens": 1150,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1111,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 1,
+          "verdict": true,
+          "reason": "The account publishes one templated document per transit service event, with titles and bodies mechanically reporting individual train delays, reroutes, and status updates.",
+          "seconds": 1.1630386660108343,
+          "usage": {
+            "prompt_tokens": 1137,
+            "completion_tokens": 40,
+            "total_tokens": 1177,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1134,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:jgg4dtdflzzemyvnybucnzdw",
+          "account": "chicagotransitalerts.app",
+          "truth": true,
+          "vote": 2,
+          "verdict": true,
+          "reason": "The account publishes one templated transit-alert document per service event or delay record, with titles and bodies determined by incident data rather than original authorial writing.",
+          "seconds": 1.114552957995329,
+          "usage": {
+            "prompt_tokens": 1102,
+            "completion_tokens": 42,
+            "total_tokens": 1144,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 1099,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 0,
+          "verdict": false,
+          "reason": "This is an original personal daily journal with varied first-person experiences and reflections, where the date supplies the schedule rather than a dataset record generating each document.",
+          "seconds": 1.395659458998125,
+          "usage": {
+            "prompt_tokens": 831,
+            "completion_tokens": 41,
+            "total_tokens": 872,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 1,
+          "verdict": false,
+          "reason": "The documents are personal daily journal entries containing original experiences, opinions, and narrative rather than one generated document per dataset record.",
+          "seconds": 1.3252945420099422,
+          "usage": {
+            "prompt_tokens": 875,
+            "completion_tokens": 35,
+            "total_tokens": 910,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "did": "did:plc:esvvys4mvoclui34shb23l5w",
+          "account": "eligundry.com (mood journal)",
+          "truth": false,
+          "vote": 2,
+          "verdict": false,
+          "reason": "The account is a personal daily journal with original reflections and experiences, where entries exist because the author had something to say rather than because they were generated from dataset records.",
+          "seconds": 1.4275502499658614,
+          "usage": {
+            "prompt_tokens": 840,
+            "completion_tokens": 64,
+            "total_tokens": 904,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 14,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        }
+      ]
+    }
+  }
+}

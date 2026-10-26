@@ -23,6 +23,12 @@ excluded when **all** of these hold:
 3. **no curation signal lost** — nobody recommends them; excluding them
    removes noise, not voices
 
+Original campaign descriptions, personal reviews, and diary entries remain
+composed writing even when their titles or publishing interface use a template.
+A directory structure does not establish that its bodies are generated.
+The 2026-10-25 judge review corrected the Prideraiser fixture on this basis;
+see [judge evaluation](judge-evaluation.md).
+
 an author is NOT excluded for: low quality, controversial content, high
 volume, self-promotion, or being an AI. the line is how the documents come
 to exist, not taste and not the author's species.

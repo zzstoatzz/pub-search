@@ -69,27 +69,14 @@ const STATE_LABELED: i64 = 2; // model confirmed bulk-generated → emitted
 const STATE_REJECTED: i64 = 3; // model said human → not labeled
 const STATE_VETOED: i64 = 4; // had curation → never labeled
 const MAX_REVIEW_ATTEMPTS: i64 = 5; // give up after this many inconclusive reviews
-// the model-pass is a single chat turn against a hosted model. two providers
-// are understood, selected by REVIEW_PROVIDER: `anthropic` (the Messages API,
-// default) and `openai` (any chat-completions-compatible endpoint, which is
-// how co/core was reached). REVIEW_API_URL / REVIEW_MODEL / REVIEW_API_KEY
-// override the provider's defaults with a secrets change, no deploy of code.
-//
-// history: the judge ran on co/core's gemma-4-12B from 2026-07-02 (19/19
-// conclusive votes correct on the composed-vs-generated prompt; Qwen2.5-7B
-// was 0/3, confidently inverted). twice the model left co/core's roster —
-// 2026-08-13 and 2026-09-04, when the catalog was renamed — and each time the
-// review queue paused in ten-minute loops with nothing judged. a labeler that
-// depends on a marketplace serving one model id is not a labeler, so the
-// default moved to a first-party model on 2026-09-05: OpenAI's gpt-5.6-luna
-// (9/9 votes correct on scripts/judge-eval; claude-haiku-4-5 also 9/9 and one
-// REVIEW_PROVIDER=anthropic away). reasoning-style + slow is fine either way:
-// the worker is a durable queue.
+// Provider settings can be overridden with REVIEW_PROVIDER / REVIEW_MODEL /
+// REVIEW_API_URL / REVIEW_API_KEY. Haiku 5.5 is the default after the corrected
+// eight-account evaluation; see docs/judge-evaluation.md.
 const Provider = enum { anthropic, openai };
-const DEFAULT_REVIEW_PROVIDER: Provider = .openai;
-const DEFAULT_REVIEW_MODEL = "gpt-5.6-luna";
-const DEFAULT_REVIEW_URL = "https://api.openai.com/v1/chat/completions";
-const ANTHROPIC_MODEL = "claude-haiku-4-5";
+const DEFAULT_REVIEW_PROVIDER: Provider = .anthropic;
+const OPENAI_MODEL = "gpt-5.6-luna";
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const ANTHROPIC_MODEL = "claude-haiku-5-5";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
 const ReviewCfg = struct {
@@ -709,7 +696,7 @@ const Stats = struct {
 // ── model-pass gate (background review worker) ──────────────────────────────
 
 /// Start the review worker if a provider key is set (REVIEW_API_KEY, falling
-/// back to COCORE_API_KEY). Without one, flagged authors stay PENDING
+/// back to the selected provider's API key). Without one, flagged authors stay PENDING
 /// (unlabeled) — emission is paused, not faked.
 pub fn startReview(allocator: Allocator, io: Io) void {
     const provider: Provider = if (std.c.getenv("REVIEW_PROVIDER")) |p| blk: {
@@ -732,11 +719,11 @@ pub fn startReview(allocator: Allocator, io: Io) void {
     const cfg = ReviewCfg{
         .provider = provider,
         .url = if (std.c.getenv("REVIEW_API_URL")) |p| std.mem.span(p) else switch (provider) {
-            .openai => DEFAULT_REVIEW_URL,
+            .openai => OPENAI_URL,
             .anthropic => ANTHROPIC_URL,
         },
         .model = if (std.c.getenv("REVIEW_MODEL")) |p| std.mem.span(p) else switch (provider) {
-            .openai => DEFAULT_REVIEW_MODEL,
+            .openai => OPENAI_MODEL,
             .anthropic => ANTHROPIC_MODEL,
         },
         .key = key,
@@ -947,40 +934,9 @@ fn reviewAuthor(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, m
 
 /// One vote: ask the model once using the prepared evidence slice.
 fn reviewVote(allocator: Allocator, cfg: ReviewCfg, io: Io, did: []const u8, samples: []const u8) !?Verdict {
-    // the line is COMPOSED vs GENERATED, not human vs machine: most banned
-    // content was human-written at the source (patents, recall notices,
-    // transcripts) and original AI writing is welcome. Keep this text in
-    // lockstep with scripts/judge-eval PROMPT_HEAD, and re-validate any change
-    // there against the known-truth set before shipping (19/19 conclusive
-    // votes correct on gemma-4-12B + Qwen3.6-35B, 2026-07-02).
     var prompt: std.Io.Writer.Allocating = .init(allocator);
     defer prompt.deinit();
-    try prompt.writer.writeAll(
-        \\A search engine indexes writing: documents COMPOSED by an author — a person or
-        \\an AI — who chose what to say. It must EXCLUDE accounts that GENERATE
-        \\documents from a data source: one document per database row, feed event,
-        \\catalog entry, or result, where a template plus the data determines the text.
-        \\
-        \\The test is NOT whether the text is fluent, and NOT whether a human once wrote
-        \\the underlying material — patents, recall notices, episode summaries, and
-        \\transcripts were all written by people, but republishing them one-per-record
-        \\is still generation. The test: does each document exist because its author had
-        \\something to say, OR because a record exists in some dataset?
-        \\
-        \\machine=true examples: a patent-database mirror, vehicle-recall summaries (one
-        \\per recall), a TV-episode catalog (one per episode), transit alerts (one per
-        \\service event), chart/stats dumps (one per chart-day), tournament results (one
-        \\per event), fundraiser announcements stamped from campaign records — even when
-        \\the underlying data belongs to the account itself.
-        \\machine=false examples: a personal blog or essay series (even branded,
-        \\numbered, templated-looking titles, or extremely prolific), a daily journal
-        \\(the date is a schedule, not a data source), original writing by an AI agent.
-        \\
-        \\Evidence from ONE account (facts, a title sample spanning its whole
-        \\history, and excerpts from the middle of several documents):
-        \\
-        \\
-    );
+    try prompt.writer.writeAll(@embedFile("review_prompt.txt"));
     try prompt.writer.writeAll(samples);
     try prompt.writer.writeAll(
         \\
@@ -1079,14 +1035,7 @@ fn utf8Excerpt(s: []const u8, max: usize) []const u8 {
     return s[0..end];
 }
 
-/// One user turn against the configured provider: the Anthropic Messages API
-/// (`x-api-key` + `anthropic-version`) or an OpenAI-compatible
-/// /chat/completions endpoint (bearer token). The request body is the same
-/// shape for both.
-fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) ![]const u8 {
-    var client: http.Client = .{ .allocator = allocator, .io = io };
-    defer client.deinit();
-
+fn modelRequest(allocator: Allocator, cfg: ReviewCfg, prompt: []const u8) ![]const u8 {
     var body: std.Io.Writer.Allocating = .init(allocator);
     defer body.deinit();
     var jw: json.Stringify = .{ .writer = &body.writer, .options = .{} };
@@ -1106,7 +1055,11 @@ fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) !
         try jw.write(6000);
     } else {
         try jw.objectField("max_tokens");
-        try jw.write(2000);
+        try jw.write(if (cfg.provider == .anthropic) @as(u32, 4096) else @as(u32, 2000));
+        if (cfg.provider == .anthropic and std.mem.eql(u8, cfg.model, "claude-haiku-5-5")) {
+            try jw.objectField("output_config");
+            try jw.write(.{ .effort = "medium" });
+        }
         if (cfg.provider == .openai) {
             try jw.objectField("temperature");
             try jw.write(0);
@@ -1122,7 +1075,18 @@ fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) !
     try jw.endObject();
     try jw.endArray();
     try jw.endObject();
-    const payload = try body.toOwnedSlice();
+    return body.toOwnedSlice();
+}
+
+/// One user turn against the configured provider: the Anthropic Messages API
+/// (`x-api-key` + `anthropic-version`) or an OpenAI-compatible
+/// /chat/completions endpoint (bearer token). The request body is the same
+/// shape for both.
+fn callModel(allocator: Allocator, cfg: ReviewCfg, io: Io, prompt: []const u8) ![]const u8 {
+    var client: http.Client = .{ .allocator = allocator, .io = io };
+    defer client.deinit();
+
+    const payload = try modelRequest(allocator, cfg, prompt);
     defer allocator.free(payload);
 
     var auth_buf: [256]u8 = undefined;
@@ -1741,4 +1705,19 @@ test "unavailable evidence preserves budget and attempts without starving ready 
     const retried = nextPending(std.testing.allocator, conn, 1600).?;
     defer std.testing.allocator.free(retried);
     try std.testing.expectEqualStrings("did:missing", retried);
+}
+
+test "Haiku 5.5 request includes reasoning budget without sampling parameters" {
+    const a = std.testing.allocator;
+    const body = try modelRequest(a, .{ .provider = .anthropic, .url = ANTHROPIC_URL, .model = ANTHROPIC_MODEL, .key = "unused" }, "evidence");
+    defer a.free(body);
+    const parsed = try json.parseFromSlice(json.Value, a, body, .{});
+    defer parsed.deinit();
+    const fields = parsed.value.object;
+    try std.testing.expectEqualStrings("claude-haiku-5-5", fields.get("model").?.string);
+    try std.testing.expectEqual(@as(i64, 4096), fields.get("max_tokens").?.integer);
+    try std.testing.expectEqualStrings("medium", fields.get("output_config").?.object.get("effort").?.string);
+    try std.testing.expect(fields.get("temperature") == null);
+    try std.testing.expect(fields.get("max_completion_tokens") == null);
+    try std.testing.expectEqualStrings("evidence", fields.get("messages").?.array.items[0].object.get("content").?.string);
 }

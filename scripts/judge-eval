@@ -11,7 +11,7 @@ then runs each candidate model over each vote slice for every known account.
 A usable judge must get ALL known cases right on a majority of votes.
 
 Usage:
-  scripts/judge-eval                                   # OpenAI-compatible endpoint, default candidate set
+  scripts/judge-eval                                   # Anthropic, Haiku 5.5
   JUDGE_PROVIDER=anthropic scripts/judge-eval claude-haiku-5-5  # named model
   JUDGE_PROVIDER=openai scripts/judge-eval google/gemma-4-12b   # co/core (chat-completions)
   JUDGE_PROVIDER=openai JUDGE_API_URL=https://api.openai.com/v1/chat/completions scripts/judge-eval <model>
@@ -21,9 +21,11 @@ Needs .env with turso_url/turso_token, and ANTHROPIC_API_KEY (or COCORE_API_KEY
 for the openai provider) in the env or .env. ENV_FILE points at another file.
 JUDGE_API_KEY overrides provider credentials; an empty value sends no auth header.
 JUDGE_OUTPUT writes a JSON report with per-vote reasons, timings, and skipped cases.
+JUDGE_MATERIALS saves the evidence used; an existing file replays it without database reads.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -33,20 +35,23 @@ from pathlib import Path
 import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# ground truth, established by hand-review (docs/spam-detection-plan.md +
-# the 2026-06-30/07-01 label history)
+# Reviewed policy cases and corrections: docs/judge-evaluation.md.
 KNOWN = {
     "did:plc:u5kk4h7tr4s3ntskbmhl5z7d": ("sksksketch.net", False),  # human illustrator
-    "did:plc:5swhfspkrynnbidlkrkch3lh": ("prideraiser.org", True),  # fundraiser feed bot
+    "did:plc:5swhfspkrynnbidlkrkch3lh": ("prideraiser.org", False),  # original organizer writing
     "did:plc:4z33k5fjzw2ew3u373pg7ku5": ("festivus (episode catalog)", True),
     "did:plc:sttgf52vkk46f6yuknvqxvgh": ("coryd.dev (942-doc human)", False),  # volume trap
+    "did:plc:77mn3ult3b72tpvtqqva6tat": ("frankhecker.com", False),
+    "did:plc:rkjxbatkiros6f7pwtgsir54": ("den.dev", False),
+    "did:plc:jgg4dtdflzzemyvnybucnzdw": ("chicagotransitalerts.app", True),
+    "did:plc:esvvys4mvoclui34shb23l5w": ("eligundry.com (mood journal)", False),
 }
 
-PROVIDER = os.environ.get("JUDGE_PROVIDER", "openai")
+PROVIDER = os.environ.get("JUDGE_PROVIDER", "anthropic")
 DEFAULT_MODELS = {
     "anthropic": ["claude-haiku-5-5"],
     "openai": [
-        "gpt-5.6-luna",  # the judge since 2026-09-05 (9/9), with JUDGE_API_URL=https://api.openai.com/v1/chat/completions
+        "gpt-5.6-luna",  # previous production judge; use api.openai.com via JUDGE_API_URL
         "mlx-community/Qwen2.5-7B-Instruct-4bit",  # the original judge (baseline)
         "mlx-community/Qwen3.5-9B-MLX-4bit",
         "google/gemma-4-12b",  # the judge 2026-07-02 → 2026-09-05
@@ -61,30 +66,7 @@ EXCERPT_LEN = 800
 
 OPENAI_COMPAT_URL = os.environ.get("JUDGE_API_URL", "https://console.cocore.dev/api/v1/chat/completions")
 
-PROMPT_HEAD = """A search engine indexes writing: documents COMPOSED by an author — a person or
-an AI — who chose what to say. It must EXCLUDE accounts that GENERATE
-documents from a data source: one document per database row, feed event,
-catalog entry, or result, where a template plus the data determines the text.
-
-The test is NOT whether the text is fluent, and NOT whether a human once wrote
-the underlying material — patents, recall notices, episode summaries, and
-transcripts were all written by people, but republishing them one-per-record
-is still generation. The test: does each document exist because its author had
-something to say, OR because a record exists in some dataset?
-
-machine=true examples: a patent-database mirror, vehicle-recall summaries (one
-per recall), a TV-episode catalog (one per episode), transit alerts (one per
-service event), chart/stats dumps (one per chart-day), tournament results (one
-per event), fundraiser announcements stamped from campaign records — even when
-the underlying data belongs to the account itself.
-machine=false examples: a personal blog or essay series (even branded,
-numbered, templated-looking titles, or extremely prolific), a daily journal
-(the date is a schedule, not a data source), original writing by an AI agent.
-
-Evidence from ONE account (facts, a title sample spanning its whole
-history, and excerpts from the middle of several documents):
-
-"""
+PROMPT_HEAD = (Path(__file__).resolve().parents[1] / "backend/src/ingest/review_prompt.txt").read_text()
 
 PROMPT_TAIL = """
 
@@ -134,10 +116,13 @@ async def rows(client, st, sql, args=None) -> list[list]:
 
 
 def middle(s: str, max_len: int) -> str:
-    if len(s) <= max_len:
+    data = s.encode("utf-8")
+    if len(data) <= max_len:
         return s
-    start = (len(s) - max_len) // 2
-    return s[start : start + max_len]
+    start = (len(data) - max_len) // 2
+    while data[start] & 0xC0 == 0x80:
+        start += 1
+    return data[start : start + max_len].decode("utf-8", errors="ignore")
 
 
 def excerpt_index(total: int, j: int, vote: int) -> int:
@@ -190,27 +175,34 @@ async def vote_material(client, st, did: str, vote: int) -> str:
     return "\n".join(out)
 
 
-async def ask(client, st, model: str, material: str) -> tuple[bool | None, str]:
+async def ask(client, st, model: str, material: str, usage: dict | None = None) -> tuple[bool | None, str]:
     try:
-        return await _ask(client, st, model, material)
+        return await _ask(client, st, model, material, usage)
     except httpx.HTTPError as e:
         return None, f"transport: {type(e).__name__}"
 
 
-async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]:
+async def _ask(client, st, model: str, material: str, usage: dict | None = None) -> tuple[bool | None, str]:
     prompt = PROMPT_HEAD + material + PROMPT_TAIL
     timeout = float(os.environ.get("JUDGE_TIMEOUT", "90"))
     if PROVIDER == "anthropic":
-        from anthropic import NOT_GIVEN, AsyncAnthropic
+        from anthropic import NOT_GIVEN, APIError, AsyncAnthropic
 
         anthropic = AsyncAnthropic(api_key=st.anthropic_api_key or None, timeout=timeout)
-        message = await anthropic.messages.create(
-            model=model,
-            max_tokens=4096,
-            output_config={"effort": os.environ.get("JUDGE_EFFORT", "medium")} if model == "claude-haiku-5-5" else NOT_GIVEN,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        async with anthropic:
+            try:
+                message = await anthropic.messages.create(
+                    model=model,
+                    max_tokens=4096,
+                    output_config={"effort": os.environ.get("JUDGE_EFFORT", "medium")} if model == "claude-haiku-5-5" else NOT_GIVEN,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            except APIError as exc:
+                return None, f"anthropic: {type(exc).__name__}"
         content = "".join(block.text for block in message.content if block.type == "text")
+        if usage is not None:
+            usage.update(input_tokens=message.usage.input_tokens, output_tokens=message.usage.output_tokens,
+                         stop_reason=message.stop_reason)
     else:
         body = {"model": model, "messages": [{"role": "user", "content": prompt}]}
         # openai's newer models reject `max_tokens` (it is `max_completion_tokens`,
@@ -230,7 +222,10 @@ async def _ask(client, st, model: str, material: str) -> tuple[bool | None, str]
         )
         if r.status_code != 200:
             return None, f"http {r.status_code}"
-        content = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
+        response = r.json()
+        content = (response.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        if usage is not None:
+            usage.update(response.get("usage") or {})
     # the verdict is the LAST json object with a "machine" key — reasoning models
     # emit a thought stream (with stray braces) before it
     if not isinstance(content, str):
@@ -256,23 +251,29 @@ async def main() -> None:
     models = sys.argv[1:] or DEFAULT_MODELS
     async with httpx.AsyncClient() as client:
         # build all vote materials once (same evidence for every model)
-        materials = {}
-        for did in KNOWN:
-            try:
-                materials[did] = [await vote_material(client, st, did, v) for v in range(VOTES)]
-            except RuntimeError as exc:
-                # an account whose rows left turso (purged, or dropped by a
-                # later policy) cannot be judged; say so and score the rest
-                print(f"skipping {KNOWN[did][0]}: {exc}")
+        material_path = Path(os.environ["JUDGE_MATERIALS"]) if os.environ.get("JUDGE_MATERIALS") else None
+        if material_path is not None and material_path.exists():
+            materials = load_materials(material_path)
+        else:
+            materials = {}
+            for did in KNOWN:
+                try:
+                    materials[did] = [await vote_material(client, st, did, v) for v in range(VOTES)]
+                except RuntimeError as exc:
+                    print(f"skipping {KNOWN[did][0]}: {exc}")
+            if material_path is not None:
+                material_path.write_text(json.dumps(materials, indent=2) + "\n")
         # every (model, account, vote) call is independent, but cocore's
         # decentralized serving drowns under a full burst — bound concurrency
         sem = asyncio.Semaphore(int(os.environ.get("JUDGE_CONCURRENCY", "12")))
         timings = {}
+        usage = {}
 
         async def bounded(model, did, v):
             async with sem:
                 started = time.monotonic()
-                result = await ask(client, st, model, materials[did][v])
+                usage[(model, did, v)] = {}
+                result = await ask(client, st, model, materials[did][v], usage[(model, did, v)])
                 timings[(model, did, v)] = time.monotonic() - started
                 return result
 
@@ -286,10 +287,14 @@ async def main() -> None:
         if output := os.environ.get("JUDGE_OUTPUT"):
             Path(output).write_text(json.dumps({
                 "provider": PROVIDER,
+                "prompt_sha256": hashlib.sha256((PROMPT_HEAD + PROMPT_TAIL).encode()).hexdigest(),
+                "materials_sha256": hashlib.sha256(json.dumps(materials, sort_keys=True).encode()).hexdigest(),
+                "effort": os.environ.get("JUDGE_EFFORT", "medium") if PROVIDER == "anthropic" else None,
                 "skipped": [did for did in KNOWN if did not in materials],
                 "votes": [{"model": model, "did": did, "account": KNOWN[did][0],
                            "truth": KNOWN[did][1], "vote": vote, "verdict": verdict,
-                           "reason": reason, "seconds": timings[(model, did, vote)]}
+                           "reason": reason, "seconds": timings[(model, did, vote)],
+                           "usage": usage[(model, did, vote)]}
                           for (model, did, vote), (verdict, reason) in results.items()],
             }, indent=2) + "\n")
 
@@ -316,6 +321,17 @@ async def main() -> None:
             print(f"{model}: {s}/{len(materials)}")
         if len(materials) != len(KNOWN) or any(scores.get(model, 0) != len(KNOWN) for model in models):
             raise SystemExit(1)
+
+
+def load_materials(path: Path) -> dict[str, list[str]]:
+    materials = json.loads(path.read_text())
+    if not isinstance(materials, dict) or any(
+        did not in KNOWN or not isinstance(slices, list) or len(slices) != VOTES
+        or any(not isinstance(s, str) or not s.strip() for s in slices)
+        for did, slices in materials.items()
+    ):
+        raise ValueError("invalid saved vote materials")
+    return materials
 
 
 if __name__ == "__main__":

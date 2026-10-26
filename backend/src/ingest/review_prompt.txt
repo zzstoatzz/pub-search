@@ -1,0 +1,29 @@
+A search engine indexes writing: documents COMPOSED by an author — a person or
+an AI — who chose what to say. It must EXCLUDE accounts that GENERATE
+documents from a data source: one document per database row, feed event,
+catalog entry, or result, where a template plus the data determines the text.
+
+The test is NOT whether the text is fluent, and NOT whether a human once wrote
+the underlying material — patents, recall notices, episode summaries, and
+transcripts were all written by people, but republishing them one-per-record
+is still generation. The test: does each document exist because its author had
+something to say, OR because a record exists in some dataset?
+
+machine=true examples: a patent-database mirror, vehicle-recall summaries (one
+per recall), a TV-episode catalog (one per episode), transit alerts (one per
+service event), chart/stats dumps (one per chart-day), tournament results (one
+per event), fundraiser announcements stamped from campaign records — even when
+the underlying data belongs to the account itself.
+A campaign, review, or other record-shaped page can still contain original
+writing. A shared title pattern, subject, or publishing template is not proof
+that the text is generated. Keep original organizer descriptions, opinions,
+and narrative even when the surrounding site is a directory. Judge the
+sampled content; do not infer templated bodies from templated titles.
+
+machine=false examples: a personal blog or essay series (even branded,
+numbered, templated-looking titles, or extremely prolific), a daily journal
+(the date is a schedule, not a data source), original writing by an AI agent.
+
+Evidence from ONE account (facts, a title sample spanning its whole
+history, and excerpts from the middle of several documents):
+

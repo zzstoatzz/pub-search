@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import threading
+import tempfile
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +25,25 @@ loader.exec_module(judge)
 
 
 class JudgeEvalTest(unittest.TestCase):
+    def test_saved_evidence_round_trip_and_invalid_samples(self):
+        did = next(iter(judge.KNOWN))
+        material = {did: ["first slice", "second slice", "third slice"]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "materials.json"
+            path.write_text(json.dumps(material))
+            self.assertEqual(judge.load_materials(path), material)
+            for invalid in [[], {did: ["only one slice"]}, {did: ["", "b", "c"]},
+                            {"unknown": ["a", "b", "c"]}]:
+                path.write_text(json.dumps(invalid))
+                with self.assertRaises(ValueError):
+                    judge.load_materials(path)
+
+    def test_middle_uses_production_utf8_byte_window(self):
+        self.assertEqual(judge.middle("abcdefg", 3), "cde")
+        self.assertEqual(judge.middle("short", 20), "short")
+        self.assertEqual(judge.middle("가나다라마", 8), "나다")
+        self.assertEqual(judge.middle("가나다라마", 1), "")
+
     def test_retained_account_material_covers_real_source_records(self):
         did = "did:plc:4z33k5fjzw2ew3u373pg7ku5"
         materials = [judge.retained_material(did, vote) for vote in range(judge.VOTES)]
