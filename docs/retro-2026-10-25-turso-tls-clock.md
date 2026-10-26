@@ -96,3 +96,38 @@ override preserves the running admitted image and all three production
 Compose files. Applying and restoring it restarts shared Stream, affecting
 its other listeners; approval was requested before that broader operation.
 No Stream production setting was changed during diagnosis.
+
+## Recovery completed
+
+Pub-search caught up after the old active segment naturally rotated at
+`2026-10-26T01:17Z`, before the Stream deployment. Stream's permanent block
+seek fix, `3f7d356`, was subsequently admitted through all 21 suites and
+deployed at `02:02:24Z`. It prevents the prefix-rescan bottleneck recurring
+as the next active segment grows. A fixed-cursor production probe advanced
+357,436 sequence positions in 25 seconds versus 1,925 before deployment;
+an extended probe reached live traffic. Artifact binding, tests, deployment,
+and replay evidence are retained in the relay repository at
+`docs/incidents/2026-10-25-stream-active-replay/README.md`.
+
+Final independent checks at `02:13–02:15Z` established:
+
+- The pub-search cursor advanced from `25569377238` to `25569416670`,
+  passing the earlier Stream head `25569381891`. The subsequently sampled
+  head was `25569418409`, a gap of 1,739 sequence positions. These are
+  non-atomic samples and are not an exact time-lag measurement.
+- Turso contained 149,265 documents, with newest `indexed_at=02:11:08Z`.
+  “Zen and the Art of Open Source Maintenance,” indexed at `02:09:06Z`,
+  was present in Turso and returned by both origin and public site searches.
+- Freshness health was green, the persistence, consumer, and watchdog alerts
+  were clear, and there were no error-level backend records since `02:00Z`.
+  The latest three scheduled ingestion watchdog runs passed.
+- Both Fly machines were started at their original 1,024 MB, with exactly
+  one app and one worker. The recovery cursor backups and local temporary
+  scripts were removed after these checks; unrelated workspace files remain.
+
+The health endpoint proves recent cursor progress and successful Turso
+requests; it does not independently measure distance from the producer's
+head. Recovery completion therefore used direct cursor/head comparison and
+database/search checks. A separate search-latency alert reflected one
+5.57-second request at `01:39Z`; all measured searches from `01:40Z` through
+the final audit were below 1.34 seconds.
