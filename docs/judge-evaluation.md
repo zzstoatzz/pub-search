@@ -99,3 +99,22 @@ JUDGE_PROVIDER=anthropic JUDGE_MATERIALS=/path/to/materials.json \
   JUDGE_OUTPUT=/path/to/comparison.json \
   scripts/judge-eval claude-haiku-4-5 claude-haiku-5-5
 ```
+
+## Deployment verification
+
+[Backend deployment](https://github.com/zzstoatzz/pub-search/actions/runs/40254689008)
+passed for commit `b134a2e1d43238fe15ba614a320cf769e56658b2`. Both Fly machines
+run that source. The app's startup log confirms
+`claude-haiku-5-5 @ https://api.anthropic.com/v1/messages`; the configured API-key
+hash matches the canonical Anthropic credential without exposing the value.
+The health endpoint and a Prideraiser author-scoped search pass after deployment.
+
+Prideraiser's existing `bulk-generated` label was retracted at sequence 197
+(`2026-10-26T01:33:51Z`). The public label stream confirms `neg=true`; classifier
+state is REJECTED with `label negated by operator`, preventing automatic
+re-labeling. The mood journal's latest labels were already negated and needed
+no mutation.
+
+Local checks passed: 70 Python tests (plus four subtests), 190 backend tests
+(with one existing skip), 28 Node tests, and 37 MCP tests. CI's Python and backend
+checks also passed before deployment.
