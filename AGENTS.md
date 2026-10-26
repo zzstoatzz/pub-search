@@ -39,6 +39,7 @@
 - trigger a build now: `prefect deployment run 'pub-search-snapshot/pub-search-snapshot' --watch` (against prefect-server.waow.tech, tailnet)
 - channels: `staging` (default) → `staging/builds/…` + `latest.staging.json`; `prod` requires `BUILDER_ALLOW_PROD=1` and writes `builds/…` + `latest.json` (pointer uploaded LAST)
 - gates before publish: doc-count tolerance vs turso, FTS sentinel, quick_check; banned DIDs + bridgy rows excluded at build time (`policy.zig`)
+- transport failures on builder reads (keyset pages, count gates, watermark) retry in-process from the same cursor with 10s/30s/100s backoff (`Client.queryRetrying`); only a page that fails all four attempts exits the binary and falls to the prefect task retry, which restarts the whole build
 - completion signal: `builder: published <id> to <channel> channel` in the flow-run logs; fly promote watcher polls every 5 minutes but adopts during 08:00–08:59 UTC only (`PROMOTE_ADOPT_UTC_HOURS=8`). The overlay carries freshness between daily adoptions; a roughly 24-hour-old serving snapshot is expected before the next window.
 
 ## zig dependencies

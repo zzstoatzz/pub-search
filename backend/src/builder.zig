@@ -132,7 +132,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     // watermark BEFORE paging: docs indexed mid-build land in the next
     // snapshot; the overlay/promote side uses this as its freshness cutoff
     const watermark = blk: {
-        var result = try turso.query("SELECT COALESCE(MAX(indexed_at), '') FROM documents", &.{});
+        var result = try turso.queryRetrying("SELECT COALESCE(MAX(indexed_at), '') FROM documents", &.{});
         defer result.deinit();
         if (result.first()) |row| {
             break :blk try allocator.dupe(u8, row.text(0));
@@ -172,7 +172,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
     // tolerance for those deletes only.
     {
         logfire.info("builder: phase=verify_remote", .{});
-        var result = try turso.query(sync.BUILD_DOC_COUNT_SQL, &.{watermark});
+        var result = try turso.queryRetrying(sync.BUILD_DOC_COUNT_SQL, &.{watermark});
         defer result.deinit();
         const expected: usize = if (result.first()) |row| @intCast(row.int(0)) else 0;
         const tolerance = @max(expected / 1000, 10); // 0.1%, floor 10 — deletes mid-build only
@@ -190,7 +190,7 @@ pub fn run(allocator: Allocator, io: Io) !void {
         .{ sync.BUILD_REC_COUNT_SQL, "recommends" },
         .{ sync.BUILD_SUB_COUNT_SQL, "subscriptions" },
     }, .{ counts.recommends, counts.subscriptions }) |gate, built| {
-        var result = try turso.query(gate[0], &.{watermark});
+        var result = try turso.queryRetrying(gate[0], &.{watermark});
         defer result.deinit();
         const expected: usize = if (result.first()) |row| @intCast(row.int(0)) else 0;
         const tolerance = @max(expected / 1000, 10); // deletes mid-build only

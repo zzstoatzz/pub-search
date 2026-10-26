@@ -106,7 +106,7 @@ pub fn buildSnapshot(turso: *Client, local: *LocalDb, watermark: []const u8) !Bu
     var cursor_buf: [512]u8 = undefined;
     var cursor: []const u8 = "";
     while (true) {
-        var result = turso.query(BUILD_DOC_PAGE_SQL, &.{ cursor, watermark }) catch |err| {
+        var result = turso.queryRetrying(BUILD_DOC_PAGE_SQL, &.{ cursor, watermark }) catch |err| {
             logfire.err("build: turso document page failed at cursor {s}: {}", .{ cursor, err });
             return err;
         };
@@ -189,9 +189,9 @@ fn copyPaged(
     var cur2: []const u8 = "";
     while (true) {
         var result = (if (key_cols == 1)
-            (if (has_watermark) turso.query(page_sql, &.{ cur1, watermark }) else turso.query(page_sql, &.{cur1}))
+            (if (has_watermark) turso.queryRetrying(page_sql, &.{ cur1, watermark }) else turso.queryRetrying(page_sql, &.{cur1}))
         else
-            (if (has_watermark) turso.query(page_sql, &.{ cur1, cur2, watermark }) else turso.query(page_sql, &.{ cur1, cur2 }))) catch |err| {
+            (if (has_watermark) turso.queryRetrying(page_sql, &.{ cur1, cur2, watermark }) else turso.queryRetrying(page_sql, &.{ cur1, cur2 }))) catch |err| {
             logfire.err("build: turso " ++ label ++ " page failed at cursor {s}: {}", .{ cur1, err });
             return err;
         };

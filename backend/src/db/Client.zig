@@ -116,6 +116,40 @@ pub fn query(self: *Client, comptime sql: []const u8, args: anytype) !Result {
     return Result.parse(self.allocator, response);
 }
 
+/// Backoff before each re-issue in `queryRetrying`. Each attempt can itself
+/// spend up to 2 × request_timeout_s inside doRequest; failed attempts still
+/// stamp last_request_completed_s, so the builder's stall watchdog only fires
+/// if a single sleep outlasts it.
+const BULK_RETRY_DELAYS_MS = [_]i64{ 10_000, 30_000, 100_000 };
+
+/// `query` for idempotent bulk reads (snapshot keyset pages, count gates): a
+/// transport failure re-issues the same statement after a backoff instead of
+/// failing the walk. Without it, one stalled page restarted the whole
+/// ~12-minute export from scratch (2026-10-26). Statement errors and non-200
+/// responses are not retried.
+pub fn queryRetrying(self: *Client, comptime sql: []const u8, args: anytype) !Result {
+    const Call = struct {
+        client: *Client,
+        args: @TypeOf(args),
+        fn run(c: @This()) !Result {
+            return c.client.query(sql, c.args);
+        }
+    };
+    return retryTransport(Result, self.io, &BULK_RETRY_DELAYS_MS, Call{ .client = self, .args = args });
+}
+
+fn retryTransport(comptime T: type, io: Io, delays_ms: []const i64, call: anytype) !T {
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        return call.run() catch |err| {
+            if (err != error.HttpError or attempt >= delays_ms.len) return err;
+            logfire.warn("turso transport failure, retry {d}/{d} in {d}ms", .{ attempt + 1, delays_ms.len, delays_ms[attempt] });
+            io.sleep(Io.Duration.fromMilliseconds(delays_ms[attempt]), .awake) catch {};
+            continue;
+        };
+    }
+}
+
 pub fn exec(self: *Client, comptime sql: []const u8, args: anytype) !void {
     comptime validateArgs(sql, @TypeOf(args));
     const args_slice = try self.argsToSlice(args);
@@ -611,6 +645,46 @@ fn keepaliveLoop(self: *Client) void {
 }
 
 // --- tests ---
+
+const FlakyCall = struct {
+    calls: *usize,
+    failures: usize,
+    err: anyerror,
+    fn run(c: @This()) anyerror!u32 {
+        c.calls.* += 1;
+        if (c.calls.* <= c.failures) return c.err;
+        return 42;
+    }
+};
+
+// regression for the 2026-10-26 failed snapshot: a page that hit transport
+// timeouts failed the whole export instead of being re-read from its cursor
+test "retryTransport re-issues a read after transport failures" {
+    var threaded: Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var calls: usize = 0;
+    const got = try retryTransport(u32, threaded.io(), &.{ 0, 0, 0 }, FlakyCall{ .calls = &calls, .failures = 2, .err = error.HttpError });
+    try std.testing.expectEqual(@as(u32, 42), got);
+    try std.testing.expectEqual(@as(usize, 3), calls);
+}
+
+test "retryTransport gives up after the last backoff" {
+    var threaded: Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var calls: usize = 0;
+    const got = retryTransport(u32, threaded.io(), &.{ 0, 0, 0 }, FlakyCall{ .calls = &calls, .failures = 99, .err = error.HttpError });
+    try std.testing.expectError(error.HttpError, got);
+    try std.testing.expectEqual(@as(usize, 4), calls);
+}
+
+test "retryTransport does not retry statement errors" {
+    var threaded: Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var calls: usize = 0;
+    const got = retryTransport(u32, threaded.io(), &.{ 0, 0, 0 }, FlakyCall{ .calls = &calls, .failures = 99, .err = error.TursoError });
+    try std.testing.expectError(error.TursoError, got);
+    try std.testing.expectEqual(@as(usize, 1), calls);
+}
 
 test "toTypedValues: empty args returns empty slice" {
     const values = try toTypedValues(std.testing.allocator, &.{});
