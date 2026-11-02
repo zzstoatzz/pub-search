@@ -44,6 +44,7 @@ const Io = std.Io;
 const zat = @import("zat");
 const jetstream = @import("jetstream");
 const logfire = @import("logfire");
+const telemetry = @import("telemetry.zig");
 const ingester = @import("ingester.zig");
 const policy = @import("../policy.zig");
 
@@ -264,13 +265,12 @@ const EventHandler = struct {
     last_persist_ns: i96 = 0,
     // atomic: read by the staleness watchdog thread
     event_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    heartbeat: telemetry.Heartbeat = .{},
 
     pub fn onEvent(self: *EventHandler, event: jetstream.livedecode.Event) bool {
         const count = self.event_count.fetchAdd(1, .monotonic) + 1;
-        if (count % 1000 == 0) {
-            logfire.info("jetstream: recv {d}, seq {d}, pds lookups {d}, bridged dropped {d}", .{
-                count, self.last_seq, self.gate.lookups, self.gate.bridged_dropped,
-            });
+        if (self.heartbeat.shouldEmit(Io.Timestamp.now(self.io, .awake).nanoseconds)) {
+            telemetry.emitHeartbeat(count, self.last_seq);
         }
         var succeeded = true;
         defer if (succeeded) self.advanceCursor(event.seq);
@@ -282,14 +282,14 @@ const EventHandler = struct {
         };
 
         if (policy.isBanned(event.did)) {
-            logfire.span("ingest.dropped", .{ .reason = "banned_did", .collection = commit.collection }).end();
+            telemetry.recordDrop(.banned_did);
             return true;
         }
         // upserts only: deleting a bridged repo's leftovers is harmless, and
         // deletes shouldn't cost a PLC roundtrip
         if (commit.operation != .delete and self.gate.isBridged(event.did)) {
             self.gate.bridged_dropped += 1;
-            logfire.span("ingest.dropped", .{ .reason = "bridged_repo", .collection = commit.collection }).end();
+            telemetry.recordDrop(.bridged_repo);
             return true;
         }
 

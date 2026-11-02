@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const logfire = @import("logfire");
+const telemetry = @import("telemetry.zig");
 const policy = @import("../policy.zig");
 const db = @import("../db.zig");
 const pubkey = @import("../server/pubkey.zig");
@@ -66,7 +67,7 @@ pub fn insertDocument(
     // banned bulk-archive repos: second gate behind the ingester's ban —
     // nothing reinserts these, not even replays or backfills (policy.zig).
     if (policy.isBanned(did)) {
-        logfire.span("ingest.dropped", .{ .reason = "banned_did", .uri = uri }).end();
+        telemetry.recordDrop(.banned_did);
         return;
     }
 
@@ -138,7 +139,7 @@ pub fn insertDocument(
             .same_document => content_unchanged = true,
             .cross_platform_dupe => {
                 logfire.debug("indexer: skipping cross-platform dupe for {s} (existing: {s})", .{ uri, existing_uri });
-                logfire.span("ingest.dropped", .{ .reason = "content_hash_dupe", .uri = uri, .existing_uri = existing_uri }).end();
+                telemetry.recordDrop(.content_hash_dupe);
                 return;
             },
             .rename => {
@@ -225,7 +226,7 @@ pub fn insertDocument(
 
     // skip .test domains (dev/staging data)
     if (std.mem.endsWith(u8, base_path, ".test")) {
-        logfire.span("ingest.dropped", .{ .reason = "test_domain", .uri = uri, .base_path = base_path }).end();
+        telemetry.recordDrop(.test_domain);
         return;
     }
 
@@ -248,7 +249,7 @@ pub fn insertDocument(
             const other_rkey = row.text(1);
             switch (republishVerdict(other_rkey, rkey)) {
                 .drop_incoming => {
-                    logfire.span("ingest.dropped", .{ .reason = "republish_stale", .uri = uri, .existing_uri = other_uri }).end();
+                    telemetry.recordDrop(.republish_stale);
                     return;
                 },
                 .supersede_existing => {
@@ -543,7 +544,7 @@ pub fn insertPublication(
     // banned bulk-archive repos: second gate behind the ingester's ban —
     // nothing reinserts these, not even replays or backfills (policy.zig).
     if (policy.isBanned(did)) {
-        logfire.span("ingest.dropped", .{ .reason = "banned_did", .uri = uri }).end();
+        telemetry.recordDrop(.banned_did);
         return;
     }
 

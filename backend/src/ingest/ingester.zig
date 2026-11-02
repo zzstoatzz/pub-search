@@ -5,6 +5,7 @@ const json = std.json;
 const Allocator = mem.Allocator;
 const zat = @import("zat");
 const logfire = @import("logfire");
+const telemetry = @import("telemetry.zig");
 const indexer = @import("indexer.zig");
 const extractor = @import("extractor.zig");
 const classifier = @import("classifier.zig");
@@ -100,7 +101,7 @@ const LeafletPublication = struct {
 pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: ?json.ObjectMap) !void {
     // validate DID
     const did = zat.Did.parse(rec.did) orelse {
-        logfire.span("ingest.dropped", .{ .reason = "invalid_did", .collection = rec.collection }).end();
+        telemetry.recordDrop(.invalid_did);
         return;
     };
 
@@ -111,7 +112,7 @@ pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: 
     // build AT-URI string (no allocation - uses stack buffer)
     var uri_buf: [256]u8 = undefined;
     const uri = zat.AtUri.format(&uri_buf, did.raw, rec.collection, rec.rkey) orelse {
-        logfire.span("ingest.dropped", .{ .reason = "uri_too_long", .collection = rec.collection }).end();
+        telemetry.recordDrop(.uri_too_long);
         return;
     };
 
@@ -121,7 +122,7 @@ pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: 
 
     if (rec.isCreate() or rec.isUpdate()) {
         const inner_record = inner orelse {
-            logfire.span("ingest.dropped", .{ .reason = "no_inner_record", .collection = rec.collection, .uri = uri }).end();
+            telemetry.recordDrop(.no_inner_record);
             return;
         };
 
@@ -131,7 +132,7 @@ pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: 
                 const record_val: json.Value = .{ .object = inner_record };
                 const visibility = zat.json.getString(record_val, "visibility") orelse "public";
                 if (mem.eql(u8, visibility, "author")) {
-                    logfire.span("ingest.dropped", .{ .reason = "author_only", .collection = rec.collection, .uri = uri }).end();
+                    telemetry.recordDrop(.author_only);
                     return;
                 }
             }
@@ -165,11 +166,11 @@ pub fn dispatchRecord(allocator: Allocator, io: Io, rec: IngesterRecord, inner: 
 fn processDocument(allocator: Allocator, io: Io, uri: []const u8, did: []const u8, rkey: []const u8, record: json.ObjectMap, collection: []const u8, source_cid: ?[]const u8) !void {
     var doc = extractor.extractDocument(allocator, record, collection) catch |err| {
         if (err == error.MissingTitle) {
-            logfire.span("ingest.dropped", .{ .reason = "missing_title", .collection = collection, .uri = uri }).end();
+            telemetry.recordDrop(.missing_title);
         } else if (err == error.NoContent) {
-            logfire.span("ingest.dropped", .{ .reason = "no_content", .collection = collection, .uri = uri }).end();
+            telemetry.recordDrop(.no_content);
         } else {
-            logfire.span("ingest.dropped", .{ .reason = "extraction_error", .collection = collection, .uri = uri }).end();
+            telemetry.recordDrop(.extraction_error);
         }
         return;
     };
@@ -277,7 +278,7 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 
     // extract required field
     const name = zat.json.getString(record_val, "name") orelse {
-        logfire.span("ingest.dropped", .{ .reason = "pub_missing_name", .uri = uri }).end();
+        telemetry.recordDrop(.pub_missing_name);
         return;
     };
     const description = zat.json.getString(record_val, "description");
@@ -290,7 +291,7 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
     // skip .test domains (dev/staging data)
     if (base_path) |bp| {
         if (mem.endsWith(u8, bp, ".test")) {
-            logfire.span("ingest.dropped", .{ .reason = "test_domain", .uri = uri }).end();
+            telemetry.recordDrop(.test_domain);
             return;
         }
     }
@@ -309,7 +310,7 @@ fn processPublication(_: Allocator, uri: []const u8, did: []const u8, rkey: []co
 fn processPcktPublication(record: json.ObjectMap) !void {
     const record_val: json.Value = .{ .object = record };
     const target = zat.json.getString(record_val, "publication.uri") orelse {
-        logfire.span("ingest.dropped", .{ .reason = "pckt_pub_missing_ref" }).end();
+        telemetry.recordDrop(.pckt_pub_missing_ref);
         return;
     };
     try indexer.markPublicationPckt(target);
@@ -321,7 +322,7 @@ fn processRecommend(uri: []const u8, did: []const u8, rkey: []const u8, collecti
 
     const field = recommendDocFieldName(collection);
     const document_uri = zat.json.getString(record_val, field) orelse {
-        logfire.span("ingest.dropped", .{ .reason = "recommend_missing_document", .uri = uri, .collection = collection }).end();
+        telemetry.recordDrop(.recommend_missing_document);
         return;
     };
     const created_at = zat.json.getString(record_val, "createdAt");
@@ -334,7 +335,7 @@ fn processSubscription(uri: []const u8, did: []const u8, rkey: []const u8, recor
     const record_val: json.Value = .{ .object = record };
 
     const publication_uri = zat.json.getString(record_val, "publication") orelse {
-        logfire.span("ingest.dropped", .{ .reason = "subscription_missing_publication", .uri = uri }).end();
+        telemetry.recordDrop(.subscription_missing_publication);
         return;
     };
     // createdAt is optional on this lexicon and usually absent. Fall back to

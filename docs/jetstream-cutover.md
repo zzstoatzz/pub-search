@@ -52,3 +52,14 @@ add one as a fallback host.
 3. 2026-08-17 — after ~25h of clean soak: `leaflet-search-ingester` fly app
    + volume destroyed, `ingester/` deleted, `INGEST_SOURCE` switch removed
    (jetstream is the only live-ingest path).
+
+## Telemetry
+
+The consumer emits `ingest.heartbeat` at most once per minute of incoming
+stream activity, including identity and account events. It carries cumulative
+received-event and per-reason dropped-record counts plus the last durable seq.
+The heartbeat is a liveness signal; persistence failures retain their separate
+error logs and alert. Discarded records increment counters without creating
+individual spans. The liveness alert accepts legacy `ingest.dropped` and
+`ingest.index_record` spans during rollout, then uses the heartbeat on new
+releases. No per-document publication rate is required for liveness.
