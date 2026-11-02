@@ -642,11 +642,6 @@ fn endQuery(self: *LocalDb) void {
 /// nested/sibling queries, never across threads). The returned Rows holds the
 /// connection until deinit.
 pub fn query(self: *LocalDb, comptime sql: []const u8, args: anytype) !Rows {
-    const span = logfire.span("db.local.query", .{
-        .sql = truncateSql(sql),
-    });
-    defer span.end();
-
     const c = self.beginQuery();
     const rows = c.rows(sql, args) catch |e| {
         self.endQuery(); // unwind the depth bump; release if it was the outermost

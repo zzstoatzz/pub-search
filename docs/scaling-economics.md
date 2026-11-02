@@ -116,3 +116,9 @@ worker-exit path.
   means fly-side per-IP limiting or making the edge the only public door.
 - The site SPA + fly host both still answer `/search` unauthenticated;
   fine while public-read is the product, revisit if abuse appears.
+## Telemetry volume
+
+Successful local and Turso database queries do not emit individual spans.
+Database failures retain their error logs, including the messages used by
+the persistence alert. Request, reconciliation-cycle and ingestion spans
+remain available. Pending span copies are disabled in the application config.

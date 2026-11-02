@@ -219,46 +219,24 @@ fn argsToSlice(self: *Client, args: anytype) ![]const []const u8 {
 fn executeRaw(self: *Client, sql: []const u8, args: []const []const u8) ![]const u8 {
     const body = try self.buildRequestBody(sql, args);
     defer self.allocator.free(body);
-    const span = logfire.span("db.query", .{
-        .sql = truncateSql(sql),
-        .args_count = @as(i64, @intCast(args.len)),
-    });
-    return self.doRequest(span, "db.query", sql, body);
+    return self.doRequest("db.query", sql, body);
 }
 
 fn executeBatchRaw(self: *Client, statements: []const Statement) ![]const u8 {
     const body = try self.buildBatchRequestBody(statements);
     defer self.allocator.free(body);
     const first_sql = if (statements.len > 0) statements[0].sql else "";
-    // preserve the original batch span attribute names (`statement_count`,
-    // `first_sql`) so any existing logfire dashboards/alerts keep working
-    const span = logfire.span("db.batch", .{
-        .statement_count = @as(i64, @intCast(statements.len)),
-        .first_sql = truncateSql(first_sql),
-    });
-    return self.doRequest(span, "db.batch", first_sql, body);
+    return self.doRequest("db.batch", first_sql, body);
 }
 
 fn executeRawTyped(self: *Client, sql: []const u8, args: []const RuntimeValue) ![]const u8 {
     const body = try buildTypedRequestBody(self.allocator, sql, args);
     defer self.allocator.free(body);
-    const span = logfire.span("db.query", .{
-        .sql = truncateSql(sql),
-        .args_count = @as(i64, @intCast(args.len)),
-    });
-    return self.doRequest(span, "db.query", sql, body);
+    return self.doRequest("db.query", sql, body);
 }
 
-/// Shared HTTP path for all three execute variants.
-///
-/// The caller creates the span (with whatever attribute shape its dashboards
-/// expect) and passes it in; `doRequest` is responsible for `end()`,
-/// `recordError`, and decorating with the turso response details on failure.
-/// `span_name` is used only for log-message prefixes. `sql_for_log` is the
-/// already-untruncated SQL string used for log lines (truncated inside).
-fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_log: []const u8, body: []const u8) ![]const u8 {
+fn doRequest(self: *Client, span_name: []const u8, sql_for_log: []const u8, body: []const u8) ![]const u8 {
     const truncated = truncateSql(sql_for_log);
-    defer span.end();
     defer last_request_completed_s.store(nowSeconds(self.io), .monotonic);
 
     var url_buf: [URL_BUF_SIZE]u8 = undefined;
@@ -299,13 +277,12 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
                 continue;
             }
             logfire.err("{s} http failed: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
-            span.recordError(error.HttpError);
             return error.HttpError;
         };
 
         if (res.status != .ok) {
             // `catch ""` is intentional: response_body is only consumed here for
-            // the diagnostic log/span attribute. If OOM strikes during
+            // the diagnostic log. If OOM strikes during
             // toOwnedSlice we still want to surface the TursoError with whatever
             // context we have (empty preview is better than swallowing the
             // status code).
@@ -313,18 +290,11 @@ fn doRequest(self: *Client, span: logfire.Span, span_name: []const u8, sql_for_l
             defer if (resp_text.len > 0) self.allocator.free(resp_text);
             const resp_preview = if (resp_text.len > 200) resp_text[0..200] else resp_text;
             logfire.err("{s} turso error: {} | sql: {s} | response: {s}", .{ span_name, res.status, truncated, resp_preview });
-            span.recordError(error.TursoError);
-            span.setAttribute("turso.status", @backingInt(res.status));
-            // NEVER attach resp_preview to the span: it's freed by the defer
-            // above before `defer span.end()` (declared earlier, runs later)
-            // deep-copies attributes — use-after-free, segfault, process death.
-            // The log line above carries the preview; the span gets the status.
             return error.TursoError;
         }
 
         validatePipelineResponse(self.allocator, response_body.written()) catch |err| {
             logfire.err("{s} rejected pipeline response: {s} | sql: {s}", .{ span_name, @errorName(err), truncated });
-            span.recordError(err);
             return err;
         };
         last_request_succeeded_s.store(nowSeconds(self.io), .monotonic);
