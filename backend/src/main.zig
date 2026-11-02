@@ -38,6 +38,7 @@ pub fn main() !void {
     // configure logfire (reads LOGFIRE_WRITE_TOKEN from env)
     _ = logfire.configure(.{
         .service_name = "leaflet-search",
+        .pending_spans = false,
         .service_version = "0.1.0",
         .environment = if (std.c.getenv("FLY_APP_NAME")) |p| std.mem.span(p) else "development",
     }) catch |err| {
