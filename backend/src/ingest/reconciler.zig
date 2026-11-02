@@ -225,8 +225,6 @@ fn resolvePdsShared(ctx: *CheckCtx, did: []const u8) ?[]const u8 {
     ctx.cache_lock.unlock(ctx.io);
     if (cached) |pds| return pds;
 
-    const span = logfire.span("reconcile.resolve_pds", .{});
-    defer span.end();
     const pds = resolvePdsHttp(ctx.allocator, did) orelse return null;
 
     ctx.cache_lock.lockUncancelable(ctx.io);
@@ -681,8 +679,6 @@ fn formatTimestamp(ts: i64) TimestampBuf {
 const RecordStatus = enum { exists, deleted, error_skip };
 
 fn checkRecord(allocator: Allocator, pds: []const u8, did: []const u8, collection: []const u8, rkey: []const u8) RecordStatus {
-    const span = logfire.span("reconcile.check_record", .{});
-    defer span.end();
 
     // build URL: {pds}/xrpc/com.atproto.repo.getRecord?repo={did}&collection={collection}&rkey={rkey}
     var url_buf: [512]u8 = undefined;
