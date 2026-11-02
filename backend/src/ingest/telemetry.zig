@@ -38,10 +38,10 @@ pub const Heartbeat = struct {
     }
 };
 
-pub fn emitHeartbeat(received: usize, durable_seq: u64) void {
+pub fn emitHeartbeat(received: usize, processed_seq: u64) void {
     const span = logfire.span("ingest.heartbeat", .{
         .received = received,
-        .durable_seq = durable_seq,
+        .processed_seq = processed_seq,
     });
     defer span.end();
     inline for (@typeInfo(DropReason).@"enum".field_names, 0..) |name, i| {

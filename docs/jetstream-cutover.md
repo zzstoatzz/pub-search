@@ -57,7 +57,7 @@ add one as a fallback host.
 
 The consumer emits `ingest.heartbeat` at most once per minute of incoming
 stream activity, including identity and account events. It carries cumulative
-received-event and per-reason dropped-record counts plus the last durable seq.
+received-event and per-reason dropped-record counts plus the last processed seq.
 The heartbeat is a liveness signal; persistence failures retain their separate
 error logs and alert. Discarded records increment counters without creating
 individual spans. The liveness alert accepts legacy `ingest.dropped` and
