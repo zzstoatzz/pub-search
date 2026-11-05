@@ -35,7 +35,7 @@
 - tag queries: served from the local replica. Browse (empty query + tag) ranks by `months_old - RECOMMEND_LIFT·ln(1+recommenders)`; text within a tag ranks by the standard BM25 + recency
 
 ## snapshot builder (replica freshness)
-- runs OFF fly since 2026-07-25: prefect deployment `pub-search-snapshot` on heavypad (`my-prefect-server/flows/pub_search_snapshot.py`), every 2h — see `docs/builder-offbox-plan.md`
+- runs OFF fly since 2026-07-25: prefect deployment `pub-search-snapshot` on heavypad (`my-prefect-server/flows/pub_search_snapshot.py`), daily at 06:40 UTC ahead of the 08:00 UTC adoption window; schedule owned by `my-prefect-server/prefect.heavypad.yaml`
 - trigger a build now: `prefect deployment run 'pub-search-snapshot/pub-search-snapshot' --watch` (against prefect-server.waow.tech, tailnet)
 - channels: `staging` (default) → `staging/builds/…` + `latest.staging.json`; `prod` requires `BUILDER_ALLOW_PROD=1` and writes `builds/…` + `latest.json` (pointer uploaded LAST)
 - gates before publish: doc-count tolerance vs turso, FTS sentinel, quick_check; banned DIDs + bridgy rows excluded at build time (`policy.zig`)

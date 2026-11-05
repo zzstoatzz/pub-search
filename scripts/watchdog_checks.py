@@ -34,9 +34,9 @@ import tomllib
 FLY_TOML = Path(__file__).resolve().parents[1] / "backend" / "fly.toml"
 
 # Slack for "the build adopted during a window may predate that window's start".
-# The builder runs on its own cadence (2h heavypad cron), so the newest build
-# sitting in R2 when a window opens can be nearly one cadence old, plus the time
-# the build itself took. This is tolerance around the window-derived bound, not
+# The daily 06:40 UTC build predates the 08:00 UTC adoption window by 80 minutes.
+# Keep 150 minutes of tolerance for the build's creation timestamp. This is
+# tolerance around the window-derived bound, not
 # the bound -- cadence drift widens or narrows the margin, it can no longer
 # invert the check the way the old standalone constant did.
 ADOPTION_LAG_GRACE_MINUTES = 150
