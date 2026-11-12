@@ -1,69 +1,36 @@
-# pub-search notes
+# pub-search
 
-## deployment
-- **backend**: push to `main` touching `backend/**` → auto-deploys via GitHub Actions
-- **frontend**: manual deploy via `site/deploy.sh` — regenerates the workbox service worker (precache manifest embeds content hashes) then runs wrangler with `--branch=main`. Don't call wrangler directly or returning visitors get stale precached assets.
-  - ⚠️ `deploy.sh` ships whatever atlas datasets are on disk (likely stale) — **always pull the live ones first**: `for f in atlas.json.gz atlas-view.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json atlas-summaries-lite.json; do curl -sfo site/$f https://pub-search.waow.tech/$f; done`. Otherwise you regress prod atlas data until the next 6h `leaflet-atlas` prefect rebuild. (`/atlas.json` no longer exists on prod — the SPA serves a fake-200 HTML page for it; the dataset is `atlas.json.gz`.)
-- `--app` does NOT protect against deploying from the wrong directory — it only renames the target; the config (ports, env, mounts) still comes from that directory's `fly.toml`. Always `cd` into the app dir first. (2026-06-10: a root-dir deploy was stopped only by a volume-name mismatch.)
+## development
 
-## remotes
-- `origin`: tangled.sh:zzstoatzz.io/pub-search
-- `github`: github.com/zzstoatzz/pub-search (CI runs here)
-- push to both: `git push origin main && git push github main`
+Use the repository's build and test commands in [README.md](README.md).
+MCP tests run with `cd pub-search-mcp/server && uv run pytest`.
+Update Zig dependency hashes with `zig fetch --save <url>`.
 
-## architecture
-- **backend** (Zig): HTTP API, FTS5 search, vector similarity; same binary runs as the snapshot builder under `BUILDER_MODE=1`. Two fly process groups from one binary via `PROCESS_ROLE` (unset = everything, for dev): `app` = HTTP + ingest + labeler + promote (owns `/data`); `worker` = reconciler + embedder (stateless) — ⚠️ worker MUST stay at exactly 1 machine (single embedder writer), and `fly scale count` may keep a stopped standby while destroying the running one — check `fly machine list` state after scaling
-- **overlay** (`/data/overlay.db`): live freshness beside the frozen replica — ingest projects every doc upsert/delete after the turso commit; keyword/tag serving merges snapshot + overlay (overlay wins on uri, tombstones suppress); promote compacts to the adopted `source_watermark`. Flags `OVERLAY_WRITE`/`OVERLAY_SERVE` (both `1` in fly.toml); `?overlay=0/1` per-request; `/admin/overlay/status` for verification. See docs/overlay-serving.md
-- **edge**: the frontend AND the MCP server call same-origin `/api/*` (Pages function `site/functions/api/[[route]].js`) — 10min edge cache + 30min stale-while-revalidate on GET /search, ETag revalidation against the origin (304 = zero search work); `?edge=0` bypasses; `/admin` never proxied; the fly hostname still serves directly (rollback path). Zone WAF rate limit: 30 req/10s per IP on `/api/*` → 429. See docs/scaling-economics.md
-- **origin memo**: `/search` responses carry an ETag = (snapshot adoption generation, 5min bucket) and are memoized origin-side per URL (`backend/src/server/memo.zig`) — repeat queries cost a map lookup; hybrid pagination caps at 75 (fusion depth)
-- **ingest**: `backend/src/ingest/jetstream.zig` consumes stream.waow.tech via the zat.dev/jetstream SDK (archive sweep + gapless live cutover, seq cursor at `/data/jetstream-cursor`, `JETSTREAM_API_KEY` secret); verification happens at stream's ingest (Sync 1.1 sig+MST), banned/bridgy policy in-process — see docs/jetstream-cutover.md. (History: indigo Tap → own verified `/channel` ingester fly app → jetstream; the fly app was destroyed 2026-08-17.)
-- **site**: static frontend on Cloudflare Pages
-- **db**: Turso (source of truth) + local SQLite read replica (FTS queries; FROZEN by construction — in-place sync deleted 2026-06-26 — refreshed only by snapshot adoption, see docs/scaling-plan.md)
-- **R2**: `leaflet-search-index` bucket for builder snapshots (`INDEX_R2_*` secrets on the backend app)
+## publishing and operations
 
-## platforms
-- leaflet, pckt, offprint, greengale, whitewind, lemma: known platforms
-- leaflet/pckt/offprint/greengale/lemma detected via basePath; whitewind via `com.whtwnd.*` collection
-- other: site.standard.* documents not from a known platform
+- Push main to both Tangled `origin` and the `github` mirror. GitHub Actions
+  deploys backend changes under `backend/**`.
+- Frontend publishing follows [deployment](docs/deployment.md): refresh live Atlas
+  datasets first and use `site/deploy.sh`, which rebuilds the service worker.
+- Run Fly commands from the intended app directory; `--app` does not select its config.
+- Keep the embedder worker at exactly one machine. Verify the running machine
+  after scaling, not just the configured count.
+- Snapshot builds belong to my-prefect-server's `pub-search-snapshot` deployment.
+  Read [snapshot pipeline](docs/snapshot-pipeline.md) before building or promoting;
+  production publication requires the explicit production channel gate.
 
-## search ranking
-- hybrid BM25 + recency: `ORDER BY rank + (days_old / 30)`
-- unfiltered keyword queries take a bounded candidate pass: bm25 top-`CANDIDATE_PREFILTER_K` (2000) inside the FTS index first, covering-index probes only for that set (common words were corpus-proportional — "what" = 24.6k matches = 7-14s before). Author/since/platform-filtered queries keep the exhaustive shape
-- OR between terms for recall, prefix on the last word when it has 3+ letters
-- **one MATCH per keyword statement.** snippets come from the document text in Zig (`snippetFromContent`), never from FTS5's `snippet()` in an outer query: `MATCH ? AND rowid IN (...)` is a second full scan (docs/retro-2026-09-05-keyword-second-match-scan.md)
-- unicode61 tokenizer (non-alphanumeric = separator)
-- tag queries: served from the local replica. Browse (empty query + tag) ranks by `months_old - RECOMMEND_LIFT·ln(1+recommenders)`; text within a tag ranks by the standard BM25 + recency
+## data contracts
 
-## snapshot builder (replica freshness)
-- runs OFF fly since 2026-07-25: prefect deployment `pub-search-snapshot` on heavypad (`my-prefect-server/flows/pub_search_snapshot.py`), daily at 06:40 UTC ahead of the 08:00 UTC adoption window; schedule owned by `my-prefect-server/prefect.heavypad.yaml`
-- trigger a build now: `prefect deployment run 'pub-search-snapshot/pub-search-snapshot' --watch` (against prefect-server.waow.tech, tailnet)
-- channels: `staging` (default) → `staging/builds/…` + `latest.staging.json`; `prod` requires `BUILDER_ALLOW_PROD=1` and writes `builds/…` + `latest.json` (pointer uploaded LAST)
-- gates before publish: doc-count tolerance vs turso, FTS sentinel, quick_check; banned DIDs + bridgy rows excluded at build time (`policy.zig`)
-- transport failures on builder reads (keyset pages, count gates, watermark) retry in-process from the same cursor with 10s/30s/100s backoff (`Client.queryRetrying`); only a page that fails all four attempts exits the binary and falls to the prefect task retry, which restarts the whole build
-- completion signal: `builder: published <id> to <channel> channel` in the flow-run logs; fly promote watcher polls every 5 minutes but adopts during 08:00–08:59 UTC only (`PROMOTE_ADOPT_UTC_HOURS=8`). The overlay carries freshness between daily adoptions; a roughly 24-hour-old serving snapshot is expected before the next window.
-
-## zig dependencies
-- update a dependency hash: `zig fetch --save <url>` (fetches and updates build.zig.zon automatically)
-
-## schema migrations
-- run via [zug](https://tangled.sh/@zzstoatzz.io/zug) — see `docs/migrations.md`
-- list lives in `backend/src/db/migrations.zig`
-- to add: append a new entry with the next 3-digit prefix; **never edit existing migrations** (zug checksums them)
-- `BOOTSTRAP_BASELINE_COUNT` is FROZEN at 10 — don't change it when adding new migrations
-- repair a dirty migration: fix the underlying issue, then `UPDATE zug_migrations SET dirty=0 WHERE id='...'` and redeploy
-
-## MCP server
-- hosted: `claude mcp add-json pub-search '{"type": "http", "url": "https://pub-search-by-zzstoatzz.fastmcp.app/mcp"}'`
-- local dev: `cd pub-search-mcp/server && uv run pytest` for tests
-- the installable project lives in `pub-search-mcp/server/` — nested intentionally to work around a horizon (fastmcp.app's builder) bug where single-segment pyproject paths render as bare-name PyPI lookups instead of path installs (see prefecthq/horizon#3814). Remove the `server/` nesting once that PR lands.
-- deployed on fastmcp.app
-
-## labeler judge
-- the classifier's model-pass reads `REVIEW_PROVIDER` (`anthropic`, default, or `openai`), `REVIEW_MODEL`, `REVIEW_API_URL`, `REVIEW_API_KEY` from fly secrets. default: Anthropic `claude-haiku-5-5` (medium effort, 4096-token budget). `REVIEW_PROVIDER=openai` selects `gpt-5.6-luna` at api.openai.com. re-evaluate a candidate judge with `scripts/judge-eval <model>` before changing it; it must get every known account right on a majority of votes
-- Judge evidence and policy corrections: `docs/judge-evaluation.md`. Prideraiser organizer descriptions and eligundry's original journal entries are composed writing despite templated titles. On the corrected eight-account set, Haiku 5.5 scored 24/24 votes and 8/8 majorities; 4.5 scored 20/24 and 7/8. The prompt is shared in `backend/src/ingest/review_prompt.txt`; do not duplicate it in the evaluator. `JUDGE_MATERIALS` saves/replays identical evidence, and `JUDGE_OUTPUT` records hashes, usage, reasons, and timing. Missing accounts and incorrect majorities fail the gate. The purged Festivus account uses the bounded native-PDS fixture.
-- who reaches the judge: the title heuristic (`score` ≥ THRESHOLD), extreme volume (≥5000 docs), or **velocity** — at the 50-doc floor and every 25 after, an author whose documents per day over their date span is ≥2 is nominated regardless of score (fluent long-form farms score ~0.05). a human backfilling an old blog looks the same, costs one review, and then stays decided. **a rescore never drops a decided author**: LABELED/REJECTED/VETOED rows keep their verdict and only their counters are rebuilt, because serving filters on `author_stats` live (docs/retro-2026-09-05-rescore-label-spill.md)
-- reviews sample current Turso documents, independently of the frozen serving snapshot. Missing/unavailable evidence defers the account for 10 minutes without spending a review or incrementing attempts; other pending accounts continue.
-- reviews are budgeted: `REVIEW_DAILY_BUDGET` (default 10) authors per UTC day, tracked in `classifier_meta` so a restart does not reset it; nominations past the budget stay PENDING and are picked up on later days
-
-## common tasks
-- check indexing: `curl -s https://leaflet-search-backend.fly.dev/api/dashboard | jq`
+- Turso is authoritative. The serving SQLite snapshot is immutable between
+  adoptions; use [overlay serving](docs/overlay-serving.md) for live freshness.
+- Query changes follow [scaling design](docs/scaling-plan.md). Use one FTS `MATCH`
+  per keyword statement; generate snippets from document text in Zig.
+- Migrations are append-only. Keep `BOOTSTRAP_BASELINE_COUNT` fixed at 10 and
+  follow [migration procedures](docs/migrations.md).
+- Judge changes require `scripts/judge-eval <model>` and correct majorities for
+  every known account. Follow [judge evaluation](docs/judge-evaluation.md), reuse
+  the production prompt, and preserve decided authors during rescoring.
+- Preserve durable daily review budgets. Unavailable evidence must defer review
+  without spending a review or increasing attempts.
+- Before changing MCP packaging, check the nested installation constraint in
+  [deployment](docs/deployment.md#mcp-packaging).
