@@ -3,6 +3,34 @@
 how the keyword index gets built, shipped, verified, and adopted — and what
 that design means for editing production data after the fact.
 
+## current operation
+
+The builder runs on HeavyPad through my-prefect-server's `pub-search-snapshot`
+deployment. Its schedule is owned by `prefect.heavypad.yaml`: daily at 06:40 UTC.
+The serving app polls for promotion every five minutes and adopts during
+08:00–08:59 UTC (`PROMOTE_ADOPT_UTC_HOURS=8` in `backend/fly.toml`). The live
+overlay carries freshness between adoptions; an approximately day-old snapshot
+before the next window is expected, not by itself a reason to rebuild.
+
+With the intended Prefect server selected, an operator can trigger
+`prefect deployment run 'pub-search-snapshot/pub-search-snapshot' --watch`.
+Confirm the flow logs contain `builder: published <id> to <channel> channel`,
+then check `/snapshot` after the adoption window. Publication alone is not adoption.
+
+Staging is the builder default. Production needs `BUILDER_ALLOW_PROD=1`; upload
+the channel pointer last, after document-count, FTS and integrity gates.
+Builder reads use `Client.queryRetrying`: retries wait 10, 30 and 100 seconds
+and resume the same cursor. Exhausting all four attempts fails the binary;
+a Prefect task retry restarts the build. Do not replace bounded read retries
+with unbounded whole-build retries.
+
+The original design and scale analysis below retain historical evidence. Their
+hourly freshness estimates and old Fly-builder topology are not the operating
+schedule. Current ownership is the deployment above; current serving behavior
+is documented in [overlay serving](overlay-serving.md).
+
+## design background
+
 shipped 2026-06-11 (`db0241f` builder, `32dca94` promote watcher, `0ef278c`
 the flip). architecture inspired by [typeahead](https://tangled.sh/@zzstoatzz.io/typeahead),
 the same author's 7M-actor autocomplete service, which arrived at the
@@ -45,7 +73,7 @@ the resulting invariants: [scaling-plan.md](scaling-plan.md).
 
 ```
 turso (source of truth)
-  │  hourly, off-box (ephemeral fly machine, BUILDER_MODE=1)
+  │  daily, off-box (HeavyPad, BUILDER_MODE=1)
   ▼
 builder: keyset-paginated read, paced; policy filters
   (banned DIDs + bridgy NEVER enter a snapshot, even though
@@ -91,19 +119,15 @@ key properties, mostly stolen from typeahead:
   `mv local.db.prev local.db.new` + restart. or disable the watcher flag
   and the system freezes on the current snapshot indefinitely.
 
-observability: `GET /snapshot` on the backend returns the live replica's
-manifest (what build is prod actually serving). the builder has a 45-minute
-process deadline; an independent 15-minute guardian stops runs over 50 minutes
-and starts a missed run when snapshot age exceeds 75 minutes. after a builder
-exits, the guardian allows 15 minutes for download and atomic adoption before
-starting another run. the watchdog does *not* alert on raw age — adoption is
-windowed (`PROMOTE_ADOPT_UTC_HOURS`), so a snapshot is legitimately ~24h old
-just before the next window opens. it alerts when an adoption window closes
-without the serving build advancing, deriving that bound from `backend/fly.toml`
-rather than restating it (`scripts/watchdog_checks.py`). see
-[the July 15 stale-snapshot retro](retro-2026-07-15-stale-snapshot-builder-hang.md).
+observability: `GET /snapshot` reports the serving manifest. Evaluate its age
+against the configured adoption window, not the historical hourly cadence.
+The watchdog checks for an adoption window closing without advancement using
+`backend/fly.toml` (`scripts/watchdog_checks.py`). Builder deadlines and guardian
+schedules belong to the owning my-prefect-server deployment; verify its current
+configuration before intervening. [The July 15 retro](retro-2026-07-15-stale-snapshot-builder-hang.md)
+retains the older guardian behavior and the incident that motivated it.
 
-## what happens at arbitrary scale
+## historical scale analysis
 
 the request path does no work proportional to corpus size — that's the
 invariant, and it's what makes 10x boring. what actually grows:
@@ -126,7 +150,7 @@ get excluded (if banned) or included (if legit) by the next build, and
 serving would notice nothing either way. the failure mode that took a
 night of firefighting in june is now a non-event by construction.
 
-## staleness and production surgery
+## historical staleness analysis and production surgery
 
 turso is the source of truth; everything else is a derived view with its
 own refresh cycle. to do surgery, edit the source and know the
