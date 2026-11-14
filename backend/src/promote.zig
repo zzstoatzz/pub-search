@@ -198,6 +198,60 @@ pub fn hoursListContains(raw_opt: ?[]const u8, hour_utc: u64) bool {
     return false;
 }
 
+/// Room the volume keeps beyond the snapshot itself: the read-only verify
+/// writes -wal/-shm beside the .part, and the overlay and cursor keep
+/// writing to the same filesystem during the download.
+const DISK_HEADROOM_BYTES: u64 = 64 << 20;
+
+fn fitsOnDisk(byte_size: u64, free_bytes: u64) bool {
+    return free_bytes >= byte_size +| DISK_HEADROOM_BYTES;
+}
+
+// std has no statvfs binding; the trailing pad absorbs any libc fields
+// this declaration does not name.
+const Statvfs = switch (builtin.os.tag) {
+    .linux => extern struct {
+        bsize: c_ulong,
+        frsize: c_ulong,
+        blocks: c_ulong,
+        bfree: c_ulong,
+        bavail: c_ulong,
+        files: c_ulong,
+        ffree: c_ulong,
+        favail: c_ulong,
+        fsid: c_ulong,
+        flag: c_ulong,
+        namemax: c_ulong,
+        pad: [128]u8,
+    },
+    .macos => extern struct {
+        bsize: c_ulong,
+        frsize: c_ulong,
+        blocks: c_uint,
+        bfree: c_uint,
+        bavail: c_uint,
+        files: c_uint,
+        ffree: c_uint,
+        favail: c_uint,
+        fsid: c_ulong,
+        flag: c_ulong,
+        namemax: c_ulong,
+        pad: [128]u8,
+    },
+    else => void,
+};
+
+extern "c" fn statvfs(path: [*:0]const u8, buf: *Statvfs) c_int;
+
+/// Bytes an unprivileged writer can still use on the filesystem holding
+/// `path`; null when the platform or the call cannot say.
+fn freeBytes(path: [*:0]const u8) ?u64 {
+    if (Statvfs == void) return null;
+    var st = std.mem.zeroes(Statvfs);
+    if (statvfs(path, &st) != 0) return null;
+    return @as(u64, st.bavail) *| @as(u64, st.frsize);
+}
+
 fn currentUtcHour(io: Io) u64 {
     const secs: u64 = @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
     return (secs / 3600) % 24;
@@ -280,6 +334,21 @@ fn checkOnce(allocator: Allocator, io: Io) !void {
     //    final rename must be atomic)
     const part_path = try std.fmt.allocPrint(arena, "{s}.part", .{live});
     unlinkZ(arena, part_path); // stale partials from prior failed attempts
+
+    // the volume holds live + .prev + .part at peak; a download that cannot
+    // fit fails inside rclone, whose stderr never reaches logfire
+    const volume_dir = try std.fmt.allocPrintSentinel(arena, "{s}", .{std.fs.path.dirname(live) orelse "."}, 0);
+    if (freeBytes(volume_dir.ptr)) |free| {
+        if (!fitsOnDisk(m.byte_size, free)) {
+            logfire.err("promote: GATE FAIL disk space: build {s} needs {d}MB plus {d}MB headroom in {s}, {d}MB free — extend the volume", .{
+                m.build_id, m.byte_size >> 20, DISK_HEADROOM_BYTES >> 20, volume_dir, free >> 20,
+            });
+            return error.DiskSpaceGate;
+        }
+    } else {
+        logfire.warn("promote: free space in {s} unreadable — downloading without the disk gate", .{volume_dir});
+    }
+
     try r2.downloadPaced(arena, io, cfg, m.snapshot_key, part_path, downloadBwlimit());
     errdefer unlinkZ(arena, part_path);
 
@@ -525,6 +594,23 @@ test "shrink floor: refuses <50% of serving count, tolerates growth and empty li
     try std.testing.expect(!passesShrinkFloor(29_999, 60_000)); // below half: refused
     try std.testing.expect(!passesShrinkFloor(0, 60_000)); // empty candidate: refused
     try std.testing.expect(passesShrinkFloor(10, 0)); // no live sidecar: allowed
+}
+
+test "disk gate: snapshot must fit with headroom to spare" {
+    const gb: u64 = 1 << 30;
+    try std.testing.expect(fitsOnDisk(gb, 3 * gb));
+    try std.testing.expect(fitsOnDisk(gb, gb + DISK_HEADROOM_BYTES));
+    try std.testing.expect(!fitsOnDisk(gb, gb + DISK_HEADROOM_BYTES - 1));
+    try std.testing.expect(!fitsOnDisk(gb, gb)); // 2026-11-13: 3GB volume, no room for the .part
+    try std.testing.expect(!fitsOnDisk(std.math.maxInt(u64), std.math.maxInt(u64) - 1));
+}
+
+test "free space reads a plausible figure from the real filesystem" {
+    if (Statvfs == void) return error.SkipZigTest;
+    const free = freeBytes("/tmp") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(free > 1 << 20); // a wrong struct layout reads 0 or garbage
+    try std.testing.expect(free < 1 << 50);
+    try std.testing.expect(freeBytes("/no/such/dir/anywhere") == null);
 }
 
 test "adoption window: unset/empty always open, hours list gates by UTC hour" {
