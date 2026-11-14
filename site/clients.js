@@ -14,7 +14,7 @@
   var CLIENTS = [
     { value: 'bsky',     label: 'Bluesky',   profileUrl: function(h) { return 'https://bsky.app/profile/' + h; },          iconUrl: 'https://web-cdn.bsky.app/static/apple-touch-icon.png' },
     { value: 'blacksky', label: 'Blacksky',  profileUrl: function(h) { return 'https://blacksky.community/profile/' + h; }, iconUrl: 'https://blacksky.community/static/apple-touch-icon.png' },
-    { value: 'witchsky', label: 'Witchsky',  profileUrl: function(h) { return 'https://witchsky.app/profile/' + h; },       iconUrl: 'https://witchsky.app/favicon.ico' },
+    { value: 'witchsky', label: 'Witchsky',  profileUrl: function(h) { return 'https://witchsky.app/profile/' + h; },       iconUrl: 'https://witchsky.app/static/favicon.ico' },
     { value: 'reddwarf', label: 'Red Dwarf', profileUrl: function(h) { return 'https://reddwarf.app/profile/' + h; },       iconUrl: 'https://reddwarf.app/redstar.png' },
     { value: 'pdsls',    label: 'PDSls',     profileUrl: function(h) { return 'https://pdsls.dev/at/' + h; },               iconUrl: 'https://pdsls.dev/favicon.ico' },
   ];
