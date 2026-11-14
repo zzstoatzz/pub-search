@@ -179,3 +179,43 @@ def snapshot_age_problem(
             "promote watcher delayed"
         )
     return None
+
+
+# What the GitHub API returns per page of this workflow's failed runs. At the
+# 15-minute cron that is about 25 hours of continuous failure.
+FAILED_RUNS_PAGE_SIZE = 100
+
+
+def should_alert(
+    now: datetime.datetime,
+    earlier_failures: list[datetime.datetime],
+    realert_hours: int,
+    history_truncated: bool = False,
+) -> bool:
+    """Whether a failing run should notify, given when earlier runs failed.
+
+    Failures closer together than `realert_hours` form one episode. The first
+    failure of an episode notifies, and so does the first failure in each
+    later `realert_hours` slice of it, so a stall that outlasts the first
+    notification keeps being reported instead of going quiet.
+
+    `history_truncated` says the list may not reach back to the episode's
+    start; slices are then counted from the epoch, which keeps the cadence
+    without needing the true start.
+    """
+    period = datetime.timedelta(hours=realert_hours)
+    failures = sorted(earlier_failures, reverse=True)
+    if not failures or now - failures[0] >= period:
+        return True
+
+    episode_start = failures[0]
+    reached_start = False
+    for newer, older in zip(failures, failures[1:]):
+        if newer - older >= period:
+            reached_start = True
+            break
+        episode_start = older
+    if history_truncated and not reached_start:
+        episode_start = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
+
+    return (now - episode_start) // period > (failures[0] - episode_start) // period

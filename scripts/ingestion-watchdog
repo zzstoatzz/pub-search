@@ -36,7 +36,8 @@ outage stalls ingest AND eats the alert if the alert rides atproto), and
 deliberately no secondary delivery mechanism: one place to read, one
 place for a digest agent to consume. Repeat-alert dedup reads this
 workflow's own recent run conclusions from the GitHub API (a stall keeps
-the run failing; only the first failure in the window emits).
+the run failing; the first failure emits, then one every --dedup-hours
+for as long as it continues).
 
 Requires: LOGFIRE_TOKEN, TURSO_DB_TOKEN. Optional: GITHUB_TOKEN +
 GITHUB_REPOSITORY (dedup).
@@ -54,7 +55,12 @@ import time
 
 import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from watchdog_checks import read_adoption_policy, snapshot_age_problem
+from watchdog_checks import (
+    FAILED_RUNS_PAGE_SIZE,
+    read_adoption_policy,
+    should_alert,
+    snapshot_age_problem,
+)
 
 ALERT_MARKER = "pub-search ingestion looks stalled"
 BACKEND = "https://leaflet-search-backend.fly.dev"
@@ -247,43 +253,47 @@ def _emit_logfire(detail: str) -> bool:
         return False
 
 
-def _alerted_recently(hours: int) -> bool:
-    """True if this workflow already failed (= alerted) within `hours`.
+def _should_alert(hours: int) -> bool:
+    """False while an earlier failing run has already covered this stall.
 
-    A stall keeps the 15-min cron failing; only the first failure in the
-    window should post. Errs toward posting (False) when anything is
+    A stall keeps the 15-min cron failing; should_alert decides which of
+    those failures post. Errs toward posting (True) when anything is
     uncertain — better a dupe than a missed alert.
     """
     token = os.environ.get("GITHUB_TOKEN", "")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not (token and repo):
-        return False
+        return True
     try:
         r = httpx.get(
             f"https://api.github.com/repos/{repo}/actions/workflows/ingestion-watchdog.yml/runs",
-            params={"status": "failure", "per_page": 10},
+            params={"status": "failure", "per_page": FAILED_RUNS_PAGE_SIZE},
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
         r.raise_for_status()
-        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
         this_run = os.environ.get("GITHUB_RUN_ID", "")
-        for run in r.json().get("workflow_runs", []):
-            if str(run.get("id")) == this_run:
-                continue
-            created = datetime.datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
-            if created > cutoff:
-                return True
+        runs = r.json().get("workflow_runs", [])
+        failures = [
+            datetime.datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+            for run in runs
+            if str(run.get("id")) != this_run
+        ]
+        return should_alert(
+            datetime.datetime.now(datetime.timezone.utc),
+            failures,
+            hours,
+            history_truncated=len(runs) >= FAILED_RUNS_PAGE_SIZE,
+        )
     except Exception:
-        return False
-    return False
+        return True
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="pub-search ingestion watchdog")
     ap.add_argument("--test", action="store_true", help="emit a wiring-test stall event (fires the real alert once)")
     ap.add_argument("--window", type=int, default=0, help="(unused, kept for CLI compat)")
-    ap.add_argument("--dedup-hours", type=int, default=3, help="suppress repeat alerts within this window")
+    ap.add_argument("--dedup-hours", type=int, default=3, help="re-alert at most this often while a stall continues")
     args = ap.parse_args()
 
     if args.test:
@@ -296,7 +306,7 @@ def main() -> None:
     stalled, detail = check(args.window)
     print(detail)
     if stalled:
-        if _alerted_recently(args.dedup_hours):
+        if not _should_alert(args.dedup_hours):
             print(f"stalled, but already alerted within {args.dedup_hours}h — not re-emitting")
         elif _emit_logfire(detail):
             print("ALERT emitted to logfire (alert routes it to discord)")

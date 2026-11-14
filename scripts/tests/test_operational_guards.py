@@ -12,6 +12,7 @@ from watchdog_checks import (  # noqa: E402
     last_closed_adoption_window,
     parse_adopt_utc_hours,
     read_adoption_policy,
+    should_alert,
     snapshot_age_minutes,
     snapshot_age_problem,
 )
@@ -156,6 +157,59 @@ class PolicyEdgeTests(unittest.TestCase):
 
     def test_age_helper_returns_minutes(self):
         self.assertEqual(2.0, snapshot_age_minutes({"created_at": 880.0}, 1_000.0))
+
+
+def at(iso: str) -> datetime.datetime:
+    return datetime.datetime.fromisoformat(iso).replace(tzinfo=datetime.timezone.utc)
+
+
+class RepeatAlertTests(unittest.TestCase):
+    def alerts_for(self, runs: list[str], truncated: bool = False) -> list[str]:
+        """Replay failing runs in order; return the ones that would notify."""
+        fired = []
+        for i, run in enumerate(runs):
+            earlier = [at(r) for r in runs[:i]]
+            if should_alert(at(run), earlier, 3, history_truncated=truncated and i > 0):
+                fired.append(run)
+        return fired
+
+    def test_first_failure_alerts(self):
+        self.assertTrue(should_alert(at("2026-11-13T09:00:52"), [], 3))
+
+    def test_failure_after_a_quiet_gap_starts_a_new_episode(self):
+        earlier = [at("2026-11-13T05:00:00"), at("2026-11-13T04:45:00")]
+        self.assertTrue(should_alert(at("2026-11-13T09:00:52"), earlier, 3))
+
+    def test_continuing_stall_realerts_every_period(self):
+        # the watchdog's failing runs on 2026-11-13: one alert at 09:00 and
+        # then silence until someone looked, six hours later.
+        runs = [
+            "2026-11-13T09:00:52", "2026-11-13T09:18:09", "2026-11-13T09:30:43",
+            "2026-11-13T09:45:22", "2026-11-13T10:00:39", "2026-11-13T10:15:54",
+            "2026-11-13T10:30:38", "2026-11-13T10:45:33", "2026-11-13T11:00:35",
+            "2026-11-13T11:15:24", "2026-11-13T11:30:26", "2026-11-13T11:45:19",
+            "2026-11-13T12:00:52", "2026-11-13T12:21:41", "2026-11-13T12:32:04",
+            "2026-11-13T12:45:31", "2026-11-13T13:00:50", "2026-11-13T13:15:24",
+            "2026-11-13T13:30:35", "2026-11-13T13:45:30", "2026-11-13T14:00:43",
+            "2026-11-13T14:16:51", "2026-11-13T14:30:13", "2026-11-13T14:45:17",
+            "2026-11-13T15:00:38", "2026-11-13T15:15:26",
+        ]
+        self.assertEqual(
+            # 15:00:38 is 14 seconds short of six hours in; cron jitter
+            # defers that alert to the next run
+            ["2026-11-13T09:00:52", "2026-11-13T12:00:52", "2026-11-13T15:15:26"],
+            self.alerts_for(runs),
+        )
+
+    def test_flapping_counts_as_one_episode(self):
+        # successes between failures do not reset the cadence
+        runs = ["2026-11-13T09:00:00", "2026-11-13T09:30:00", "2026-11-13T11:00:00", "2026-11-13T12:15:00"]
+        self.assertEqual(["2026-11-13T09:00:00", "2026-11-13T12:15:00"], self.alerts_for(runs))
+
+    def test_truncated_history_keeps_the_cadence(self):
+        runs = [f"2026-11-13T{h:02d}:{m:02d}:30" for h in range(9, 16) for m in (0, 15, 30, 45)]
+        fired = self.alerts_for(runs, truncated=True)
+        self.assertEqual(["2026-11-13T09:00:30", "2026-11-13T12:00:30", "2026-11-13T15:00:30"], fired)
 
 
 if __name__ == "__main__":

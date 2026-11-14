@@ -5,8 +5,9 @@ name: Ingestion Watchdog
 # pub-search ingestion alerts Discord channel — logfire is the single
 # alerting path (no secondary delivery; a failed emit still fails the run,
 # which is the backstop). Deliberately not bsky, so an atproto outage can't
-# eat its own alert. Dedup: only the first failing run in a 3h window emits
-# (reads this workflow's run history via GITHUB_TOKEN).
+# eat its own alert. Dedup: the first failing run emits, then one every 3h
+# while the stall continues (reads this workflow's run history via
+# GITHUB_TOKEN).
 #
 # Requires repo secrets: LOGFIRE_TOKEN, TURSO_DB_TOKEN. Optional:
 # PREFECT_API_URL + PREFECT_API_AUTH_STRING (builder cause-level check).
