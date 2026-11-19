@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import zlib
 from pathlib import Path
 
 from openai import OpenAI
@@ -239,20 +240,15 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
         result['recommendationSampling'] = {'pool': 'top 250 all-time', 'maxPreferred': 2, 'minimumMembership': 'cluster median', 'counts': recommendations}
         context_key = os.environ.get("TURBOPUFFER_API_KEY", "")
         context_reader = ContextReader(http, context_key, os.environ.get("TURBOPUFFER_NAMESPACE", "leaflet-search")) if context_key else None
-        cache = {}
-        try:
-            cached_response = http.get(CACHE_URL)
-            cached_response.raise_for_status()
-            cached = cached_response.json()
-            cache = summary_cache(cached)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
-            pass
-        try:
-            local = json.loads(atlas_path.with_name("atlas-summaries.json").read_text())
-            if local.get("version") == VERSION:
-                cache.update(summary_cache(local))
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
+        cache = published_cache(http)
+        for name in ("atlas-summaries.json.gz", "atlas-summaries.json"):
+            try:
+                local = parse_sidecar(atlas_path.with_name(name).read_bytes(), name)
+                if local.get("version") == VERSION:
+                    cache.update(summary_cache(local))
+                    break
+            except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError):
+                continue
 
         usage_log = []
 
@@ -345,14 +341,34 @@ def lite(result: dict) -> dict:
             "regions": [slim(entry) for entry in result.get("regions", [])]}
 
 
+def parse_sidecar(content: bytes, name: str) -> dict:
+    sidecar = json.loads(gzip.decompress(content) if name.endswith('.gz') else content)
+    if not isinstance(sidecar, dict):
+        raise ValueError('Expected a summary sidecar object')
+    return sidecar
+
+
+def published_cache(http: httpx.Client) -> dict:
+    for url in (CACHE_URL + '.gz', CACHE_URL):
+        try:
+            response = http.get(url)
+            response.raise_for_status()
+            return summary_cache(parse_sidecar(response.content, url))
+        except (httpx.HTTPError, OSError, EOFError, zlib.error, ValueError, KeyError, TypeError):
+            continue
+    return {}
+
+
 def write_preview(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both") -> None:
-    output = atlas_path.with_name("atlas-summaries.json")
+    output = atlas_path.with_name("atlas-summaries.json.gz")
     try:
         result = generate(atlas_path, api_key, limit, level)
     except Exception as exc:
         print(f"summary preview unavailable ({type(exc).__name__})", flush=True)
         result = {"version": VERSION, "status": "unavailable", "clusters": []}
-    output.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    full = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+    output.write_bytes(gzip.compress(full, mtime=0))
+    atlas_path.with_name("atlas-summaries.json").unlink(missing_ok=True)
     output.with_name("atlas-summaries-lite.json").write_text(json.dumps(lite(result), ensure_ascii=False, separators=(",", ":")))
     print(f"summaries: {len(result['clusters'])} clusters, {len(result.get('regions', []))} regions", flush=True)
 

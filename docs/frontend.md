@@ -56,13 +56,7 @@ Backend releases follow the repository's GitHub workflow; frontend releases use
 `site/deploy.sh`. It regenerates Workbox's content-hashed precache before deploying.
 Never deploy the frontend by calling Wrangler directly.
 
-Before a manual UI release, download the current generated files into `site/`:
-
-```sh
-for f in atlas.json.gz atlas-view.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json atlas-summaries-lite.json; do
-  curl --fail --silent --show-error --output "site/$f" "https://pub-search.waow.tech/$f" || break
-done
-```
+Before a manual UI release, [download the current generated files](deployment.md#frontend).
 
 Stop if any download fails. Check that the gzip opens, each sidecar is JSON, and
 the summary sidecar matches the map before proceeding. Pages' SPA fallback can

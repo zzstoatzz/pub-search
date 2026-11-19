@@ -12,6 +12,7 @@ site/atlas.json
 site/atlas.json.gz
 site/atlas-view.json.gz
 site/atlas-summaries.json
+site/atlas-summaries.json.gz
 site/atlas-summaries-lite.json
 site/atlas-avatar-cache.json
 zig-pkg/

@@ -13,7 +13,9 @@ module.exports = {
   globIgnores: ['sw.js', 'sw-atlas-refresh.js', 'atlas.html', 'workbox-*.js', 'workbox-config.cjs'],
   importScripts: ['sw-atlas-refresh.js'],
   manifestTransforms: [async entries => ({
-    manifest: entries.map(entry => ['atlas.css', 'atlas.js', 'atlas-summaries.js', 'atlas-finder.js', 'atlas-view.js'].includes(entry.url)
+    manifest: entries.map(entry => entry.url === 'atlas-summaries.js'
+      ? { ...entry, url: entry.url + '?build=view-2' }
+      : ['atlas.css', 'atlas.js', 'atlas-finder.js', 'atlas-view.js'].includes(entry.url)
       ? { ...entry, url: entry.url + '?build=view-1' } : entry),
     warnings: [],
   })],

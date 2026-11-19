@@ -15,8 +15,14 @@ import atlas_view
 def archive(atlas_path: Path, database: Path) -> str:
     atlas_raw = gzip.decompress(atlas_path.read_bytes())
     atlas = json.loads(atlas_raw)
-    summary_path = atlas_path.with_name("atlas-summaries.json")
-    summary_raw = summary_path.read_bytes() if summary_path.exists() else b'{"status":"missing","clusters":[],"regions":[]}'
+    summary_gzip = atlas_path.with_name("atlas-summaries.json.gz")
+    summary_json = atlas_path.with_name("atlas-summaries.json")
+    if summary_gzip.exists():
+        summary_raw = gzip.decompress(summary_gzip.read_bytes())
+    elif summary_json.exists():
+        summary_raw = summary_json.read_bytes()
+    else:
+        summary_raw = b'{"status":"missing","clusters":[],"regions":[]}'
     summary = json.loads(summary_raw)
     atlas_hash = hashlib.sha256(atlas_raw).hexdigest()
     summary_hash = hashlib.sha256(summary_raw).hexdigest()

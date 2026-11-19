@@ -70,7 +70,7 @@ class Handler(SimpleHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/summary-states":
             body, kind = (ROOT / "scripts/tests/atlas-summary-states.html").read_bytes(), "text/html"
-        elif path == "/atlas-summaries.json":
+        elif path == "/atlas-summaries.json.gz":
             build = parse_qs(urlsplit(self.path).query).get("build", [""])[0]
             attempt = self.summary_attempts.get(build, 0) + 1
             self.summary_attempts[build] = attempt
@@ -84,7 +84,7 @@ class Handler(SimpleHTTPRequestHandler):
                        "membershipHash": hashlib.sha256(json.dumps(uris, separators=(",", ":")).encode()).hexdigest(),
                        "summary": "Tools inspect files and coordinate changes.", "sources": sources, "sourceIds": [1, 4]}
             body = json.dumps({"version": 2, "atlasGeneratedAt": build, "status": "unavailable" if attempt == 2 else "ready", "clusters": [cluster] if attempt >= 4 else []}).encode()
-            kind = "application/json"
+            body, kind = gzip.compress(body), "application/gzip"
         elif path == "/topics":
             body, kind = (ROOT / "scripts/tests/atlas-topics.html").read_bytes(), "text/html"
         elif path == "/site/atlas-summaries.json":

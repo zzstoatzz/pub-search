@@ -224,9 +224,9 @@ concrete examples, without turning authors' claims into general advice; coverage
 attribution appear in the sources disclosure. Both tiers use the same summary panel. These
 summaries have not undergone independent quality evaluation.
 
-`atlas-summaries.json` is an optional, gitignored sidecar containing membership
+`atlas-summaries.json.gz` is an optional, gitignored sidecar containing membership
 hashes, source URIs and excerpts, cited sources, model, and generation time. The
-excerpts are nearly all of its ~20 MB, so the generator also writes
+excerpts account for nearly all of its uncompressed size, so the generator also writes
 `atlas-summaries-lite.json`: the same entries with source counts in place of the
 sources. Atlas loads the lite file after the map, and fetches the full one only when
 a reader opens a topic's sources (or when the lite file is missing or does not

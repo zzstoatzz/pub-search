@@ -183,11 +183,19 @@
   }
   function fetchSidecar(name) {
     return fetch(name+'?build='+encodeURIComponent(dataset.meta.generatedAt))
-      .then(function(r) { if (!r.ok) throw Error('Summaries could not be loaded. You can still browse the documents.'); return r.json(); });
+      .then(function(r) {
+        if (!r.ok) throw Error('Summaries could not be loaded. You can still browse the documents.');
+        if (name.endsWith('.gz')) return new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).json();
+        return r.json();
+      });
+  }
+  function fetchFullSidecar() {
+    return fetchSidecar('atlas-summaries.json.gz')
+      .catch(function() { return fetchSidecar('atlas-summaries.json'); });
   }
   function loadSources() {
     if (sourcesLoading) return;
-    sourcesLoading=fetchSidecar('atlas-summaries.json').then(function(d) { return validate(d,dataset); })
+    sourcesLoading=fetchFullSidecar().then(function(d) { return validate(d,dataset); })
       .then(function(clusters) { clusters.forEach(function(c) { summaries.set(key(c.id,c.level),c); }); })
       .catch(function() { sourcesError=true; sourcesLoading=null; })
       .then(renderSummary);
@@ -200,7 +208,7 @@
     // the full sidecar is mostly source excerpts; summaries come from the
     // small one, and a deploy that predates it falls back to the full file
     loading=fetchSidecar('atlas-summaries-lite.json').then(function(d) { return validate(d,dataset,true); })
-      .catch(function() { return fetchSidecar('atlas-summaries.json').then(function(d) { return validate(d,dataset); }); })
+      .catch(function() { return fetchFullSidecar().then(function(d) { return validate(d,dataset); }); })
       .then(function(clusters) { summaries=new Map(clusters.map(function(c) { return [key(c.id,c.level),c]; })); loaded=true; loadError=null; markSummaries(); })
       .catch(function(error) { loadError=error instanceof TypeError || error instanceof SyntaxError ? Error('Summaries could not be loaded. You can still browse the documents.') : error; loading=null; renderSummary(); throw error; });
     return loading;

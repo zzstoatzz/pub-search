@@ -9,7 +9,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from atlas_summaries import generate, lite, prepare_evidence, sample_members, validate_answer, write_preview
+from atlas_summaries import CACHE_URL, generate, lite, prepare_evidence, published_cache, sample_members, validate_answer, write_preview
 
 
 def test_crossposts_do_not_count_as_independent_evidence():
@@ -56,7 +56,7 @@ def test_missing_key_and_legacy_dataset_preserve_atlas(tmp_path):
     assert generate(path, 'unused-key')['clusters'] == []
     write_preview(path, '')
     assert path.read_bytes() == raw
-    assert json.loads((tmp_path / 'atlas-summaries.json').read_text())['status'] == 'unavailable'
+    assert json.loads(gzip.decompress((tmp_path / 'atlas-summaries.json.gz').read_bytes()))['status'] == 'unavailable'
     assert json.loads((tmp_path / 'atlas-summaries-lite.json').read_text())['status'] == 'unavailable'
 
 
@@ -81,8 +81,30 @@ def test_failure_removes_stale_preview(tmp_path):
     sidecar = tmp_path / 'atlas-summaries.json'
     sidecar.write_text('{"status":"ready","clusters":[{"id":9}]}')
     write_preview(path, '')
-    assert json.loads(sidecar.read_text())['clusters'] == []
+    assert not sidecar.exists()
+    assert json.loads(gzip.decompress(sidecar.with_suffix('.json.gz').read_bytes()))['clusters'] == []
     assert path.read_bytes() == b'invalid gzip'
+
+
+@pytest.mark.parametrize('gzip_available', [True, False])
+def test_published_cache_accepts_gzip_and_legacy_json(gzip_available):
+    import httpx
+
+    entry = {'evidenceHash': 'known'}
+    data = {'version': 2, 'clusters': [entry]}
+    requests = []
+
+    def handle(request):
+        requests.append(str(request.url))
+        if request.url.path.endswith('.gz'):
+            if gzip_available:
+                return httpx.Response(200, content=gzip.compress(json.dumps(data).encode()))
+            return httpx.Response(200, text='<html>SPA fallback</html>')
+        return httpx.Response(200, json=data)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        assert published_cache(http) == {('fine', 'known'): entry}
+    assert requests == ([CACHE_URL + '.gz'] if gzip_available else [CACHE_URL + '.gz', CACHE_URL])
 
 
 def test_document_reader_recovers_from_real_http_throttling():
@@ -256,7 +278,11 @@ def test_archive_restores_exact_inputs_and_deduplicates(tmp_path):
     database = tmp_path / 'history.sqlite3'
     first = archive(atlas, database)
     assert archive(atlas, database) == first
+    compressed = summary.with_suffix('.json.gz')
+    compressed.write_bytes(gzip.compress(summary.read_bytes()))
     summary.write_text('{"status":"unavailable","clusters":[]}')
+    assert archive(atlas, database) == first
+    compressed.unlink()
     second = archive(atlas, database)
     assert second != first
     with sqlite3.connect(database) as db:

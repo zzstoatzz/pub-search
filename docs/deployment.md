@@ -12,9 +12,11 @@ The script publishes Atlas datasets from disk, so refresh them from production
 before deploying. Run from the repository root and stop if any download fails:
 
 ```sh
-for f in atlas.json.gz atlas-view.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json atlas-summaries-lite.json; do
+for f in atlas.json.gz atlas-view.json.gz atlas-mini.json atlas-avatar-cache.json atlas-theme-cache.json atlas-summaries.json.gz atlas-summaries-lite.json; do
   curl -fsSo "site/$f" "https://pub-search.waow.tech/$f" || exit 1
 done
+gzip -t site/atlas{,-view,-summaries}.json.gz || exit 1
+rm -f site/atlas-summaries.json
 site/deploy.sh
 ```
 
