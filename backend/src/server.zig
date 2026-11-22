@@ -106,7 +106,9 @@ pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
         if (rejectUnframedBody(&request)) return;
         const target = request.head.target;
 
-        const req_span = logfire.span("http.request", .{
+        // the activity feed polls every few seconds and answers from memory; a
+        // span per poll was two thirds of this service's Logfire volume
+        const req_span: ?logfire.Span = if (isActivityPoll(target)) null else logfire.span("http.request", .{
             .target = target,
             .queue_ms = @divTrunc(queue_us, 1000),
             .receive_ms = @divTrunc(recv_us, 1000),
@@ -114,13 +116,26 @@ pub fn handleConnection(stream: Io.net.Stream, io: Io, accepted_at: i64) void {
 
         handleRequest(&server, &request, io) catch |err| {
             logfire.err("request error: {}", .{err});
-            req_span.end();
+            if (req_span) |s| s.end();
             return;
         };
-        req_span.end();
+        if (req_span) |s| s.end();
 
         if (!request.head.keep_alive) return;
     }
+}
+
+fn isActivityPoll(target: []const u8) bool {
+    const path = if (mem.indexOf(u8, target, "?")) |qi| target[0..qi] else target;
+    return mem.eql(u8, path, "/activity");
+}
+
+test "only the activity poll goes untraced" {
+    try std.testing.expect(isActivityPoll("/activity"));
+    try std.testing.expect(isActivityPoll("/activity?since=5"));
+    try std.testing.expect(!isActivityPoll("/activity/feed"));
+    try std.testing.expect(!isActivityPoll("/search?q=activity"));
+    try std.testing.expect(!isActivityPoll("/document"));
 }
 
 /// A POST/PUT/PATCH with neither Content-Length nor Transfer-Encoding trips an
