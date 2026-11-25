@@ -30,6 +30,15 @@ run log, successful Pages publication, and a matching build timestamp in the
 public summary sidecar. See [snapshot pipeline](snapshot-pipeline.md) for the
 local handoff.
 
+For an urgent summary-only release, run the existing Atlas deployment from
+the `my-prefect-server` operator checkout. This reuses the published map from
+the HeavyPad archive and skips the embedding export.
+
+```sh
+just prefect --no-prompt deployment run pub-search-atlas/pub-search-atlas \
+  --param reuse_published_map=true --watch
+```
+
 ## MCP packaging
 
 The installable project is `pub-search-mcp/server/`. This nesting works around a
