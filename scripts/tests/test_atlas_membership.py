@@ -2,15 +2,56 @@
 # requires-python = ">=3.12,<3.14"
 # dependencies = ["pytest", "httpx", "numpy<2.2", "scikit-learn", "hdbscan", "pydantic-settings"]
 # ///
+import base64
+import json
 import runpy
 import sys
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 builder = runpy.run_path(str(Path(__file__).resolve().parents[1] / "build-atlas"))
+
+
+def test_export_builds_the_same_float32_matrix_from_compact_vectors():
+    values = [[-0.0, 1 / 3, -123.125], [1e-30, -1e30, 2.5]]
+    expected = np.array(values, dtype="<f4")
+    encoded = [base64.b64encode(vector.tobytes()).decode() for vector in expected]
+    rows = [
+        {"id": "a", "title": "a title", "vector": encoded[0]},
+        {"id": "b", "vector": None},
+        {"id": "c", "uri": "at://c", "base_path": "example", "vector": encoded[1]},
+    ]
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"rows": rows})
+
+    settings = builder["Settings"](turbopuffer_api_key="unused")
+    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
+        exported = builder["tpuf_export"](client, settings)
+    matrix, metadata = builder["atlas_matrix"](exported)
+
+    assert bodies[0]["vector_encoding"] == "base64"
+    np.testing.assert_array_equal(
+        matrix.view(np.uint32), np.array(values, dtype=np.float32).view(np.uint32)
+    )
+    assert [row["uri"] for row in metadata] == ["a", "at://c"]
+    assert metadata[0]["title"] == "a title"
+    assert metadata[1]["basePath"] == "example"
+
+
+def test_matrix_rejects_a_vector_that_would_broadcast_to_another_dimension():
+    rows = [
+        {"id": "first", "vector": base64.b64encode(np.zeros(2, dtype="<f4").tobytes()).decode()},
+        {"id": "short", "vector": base64.b64encode(np.zeros(1, dtype="<f4").tobytes()).decode()},
+    ]
+    with pytest.raises(ValueError, match="inconsistent vector dimensions for document short"):
+        builder["atlas_matrix"](rows)
 
 
 def test_outliers_remain_unassigned_and_do_not_move_centroids():

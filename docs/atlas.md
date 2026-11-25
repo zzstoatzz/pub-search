@@ -8,7 +8,7 @@
 
 `scripts/build-atlas` is a batch python script (uv inline dependencies) that:
 
-1. **exports vectors** from turbopuffer — paginated query with `rank_by: ["id", "asc"]`, 10k rows/page, fetches all vectors + metadata. the live counts are rendered in the atlas footer; don't hardcode them here.
+1. **exports vectors** from turbopuffer — paginated query with `rank_by: ["id", "asc"]`, 10k rows/page, fetches vectors and metadata. vectors come back as base64-encoded float32 and decode straight into the atlas matrix. the build log records how many response bytes the export downloaded. the live counts are rendered in the atlas footer.
 2. **PCA 1024 → 50** — denoising pass (~50% variance explained at current corpus size)
 3. **UMAP 50 → 2** — cosine metric, `n_neighbors=15`, `min_dist=0.1`, `random_state=42`; coords normalized to [-1, 1]. **display only.**
 4. **UMAP 50 → 10** — a second, separate fit (`n_neighbors=30`, `min_dist=0`) used **only** for clustering
