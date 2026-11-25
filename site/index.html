@@ -1620,6 +1620,7 @@
                 if (!append) {
                     searchBtn.disabled = true;
                     resultsDiv.innerHTML = `<div class="status"><pub-loading>Searching…</pub-loading></div>`;
+                    statsDiv.textContent = "";
                     currentOffset = 0;
                     updateDocTitle(query, tag, platform);
                 }
@@ -1637,25 +1638,26 @@
 
                 try {
                     const res = await fetch(searchUrl);
-                    const rawText = await res.text();
-                    if (requestGeneration !== searchGeneration) return;
-                    let parsed;
-
-                    try {
-                        parsed = JSON.parse(rawText);
-                    } catch (parseErr) {
-                        resultsDiv.innerHTML = `<div class="status error">JSON parse error<pre style="text-align:left;font-size:0.7rem;overflow:auto;max-height:200px">${escapeHtml(rawText)}</pre></div>`;
+                    if (res.status >= 500) {
+                        if (requestGeneration === searchGeneration)
+                            showSearchError();
                         return;
                     }
+                    const parsed = await res.json();
+                    if (requestGeneration !== searchGeneration) return;
 
-                    if (parsed.error) {
-                        resultsDiv.innerHTML = `<div class="status error">${parsed.error}</div>`;
+                    if (typeof parsed?.error === "string") {
+                        showSearchError(parsed.error);
+                        return;
+                    }
+                    if (!res.ok) {
+                        showSearchError();
                         return;
                     }
 
                     const extracted = extractResults(parsed);
                     if (!extracted) {
-                        resultsDiv.innerHTML = `<div class="status error">unexpected response format</div>`;
+                        showSearchError();
                         return;
                     }
 
@@ -1792,13 +1794,22 @@
                     if (!append && results.length > 0 && results[0].uri) {
                         loadRelated(results[0]);
                     }
-                } catch (err) {
+                } catch {
                     if (requestGeneration !== searchGeneration) return;
-                    resultsDiv.innerHTML = `<div class="status error">error: ${err.message}</div>`;
+                    showSearchError();
                 } finally {
                     if (requestGeneration === searchGeneration)
                         searchBtn.disabled = false;
                 }
+            }
+
+            function showSearchError(message = "Search is temporarily unavailable. Try again.") {
+                const status = document.createElement("div");
+                status.className = "status error";
+                status.setAttribute("role", "status");
+                status.textContent = message;
+                resultsDiv.replaceChildren(status);
+                statsDiv.textContent = "";
             }
 
             function loadMore() {
