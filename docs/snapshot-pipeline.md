@@ -17,6 +17,20 @@ With the intended Prefect server selected, an operator can trigger
 Confirm the flow logs contain `builder: published <id> to <channel> channel`,
 then check `/snapshot` after the adoption window. Publication alone is not adoption.
 
+After a successful production publication, the same Prefect task atomically
+renames the verified SQLite file into
+`/home/stoat/prefect-analytics/pub-search-snapshot/replica.db` for Atlas. Both
+workers use the same HeavyPad filesystem, so the handoff needs no extra export,
+download or copy. Atlas opens the file read-only and keeps one snapshot open
+for each summary build. Failed and staging builds leave the last handoff in
+place. Check for `Published local snapshot for Atlas` in the snapshot run and
+`Atlas evidence: local snapshot at` in the next scheduled Atlas run.
+
+The `waow/apps` Logfire rules distinguish `pub-search · watchdog check failed`
+from `pub-search · snapshot rejected` and search latency. Discord shows short
+check names, gate names or a p95 and sample count. Open Explore for full probe
+errors, gate values and trace context.
+
 Staging is the builder default. Production needs `BUILDER_ALLOW_PROD=1`; upload
 the channel pointer last, after document-count, FTS and integrity gates.
 Builder reads use `Client.queryRetrying`: retries wait 10, 30 and 100 seconds

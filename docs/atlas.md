@@ -21,7 +21,7 @@
 
    > **why 10D and not the 2D coords** — clustering in the display projection turns UMAP's own artifacts (tearing, crowding) into cluster boundaries. Scored against PCA-50 cosine space, which neither projection was fit in, the old 2D clustering gave silhouette **+0.004 coarse / −0.067 fine** — the fine tier was structured *worse than chance*. The 10D space gives **+0.033 / +0.017**. `cluster_selection_method="leaf"` and a corpus-scaled `min_cluster_size` were tested at the same time and both made it worse at our thresholds; neither was adopted.
 6. **labels** — c-TF-IDF over assigned document titles per cluster → 3-term keyword seed, then refined into 2-4 word topic names by `claude-haiku-4-5`. Unassigned titles never contribute. Empty-title groups keep a generic keyword fallback. Requires `ANTHROPIC_API_KEY`; without it the c-TF-IDF keywords ship as-is.
-7. **publication centroids** — documents grouped by `basePath` (2+ docs), enriched from turso with name/coverImage, plus author avatars and leaflet theme colors. Both use on-disk caches in `site/` (`atlas-avatar-cache.json`, `atlas-theme-cache.json`) that deploy alongside `atlas.json.gz` — the prefect flow clones fresh each run, so the deployed copy is what it reads on cold start.
+7. **publication centroids** — documents grouped by `basePath` (2+ docs), enriched with names and covers from the local search snapshot, plus author avatars and Leaflet theme colors. Avatar and theme caches deploy alongside `atlas.json.gz`.
 8. **outputs** `site/atlas.json.gz` (gzipped since 2026-08-25; the raw json crossed cloudflare pages' 25 MiB per-file limit at ~83k docs. the page decompresses via `DecompressionStream`), plus `site/atlas-view.json.gz`: the same documents, clusters and publications re-laid as columns by `scripts/atlas_view.py`, about half the bytes. The page downloads the view (`site/atlas-view.js` decodes it back to the `atlas.json` shape) and falls back to `atlas.json.gz` when the view is missing or unsound; `atlas.json.gz` stays the canonical output that the summary and history scripts read
 
 dependencies: `umap-learn`, `hdbscan`, `scikit-learn`, `httpx`, `numpy`, `pydantic-settings`, `anthropic`. Pinned to `numpy<2.2` and python `>=3.12,<3.14` — umap's transitive numba/llvmlite have no wheels outside that window.
@@ -117,12 +117,12 @@ separately from the map.
 
 ## recomputing
 
-automated: the `leaflet-atlas` prefect deployment (`my-prefect-server/flows/atlas.py:rebuild_atlas`) runs **every 6 hours** on heavypad — clones the repo, runs `build-atlas`, runs `build-facts` (best-effort; a failure deploys the committed `facts.json` rather than blocking), generates the optional summary sidecar, archives the map/summary pair, and deploys `site/` to Cloudflare Pages. Pinned to python 3.13 and single-threaded BLAS/numba, since the build OOM'd the pod as the corpus grew.
+The `pub-search-atlas/pub-search-atlas` Prefect deployment runs every six hours on HeavyPad. It clones this repository, builds the map, generates the optional summary sidecar, runs the best-effort facts build, archives the assets, and deploys to Cloudflare Pages. It uses Python 3.13 with single-threaded BLAS and numba to limit memory use.
 
 trigger a rebuild now (against prefect-server.waow.tech, tailnet):
 
 ```bash
-prefect deployment run 'leaflet-atlas/leaflet-atlas' --watch
+prefect deployment run 'pub-search-atlas/pub-search-atlas' --watch
 ```
 
 ### deploy consistency
@@ -218,10 +218,11 @@ the model as authority. A missing leaderboard entry means unknown support, not
 disapproval. Retrieval failure falls back to the original sampler. The pool and
 counts used are saved alongside the summaries for reproducibility. The
 summary task reads the first 3,000 characters of extracted text by URI from
-Turso, with identical excerpts deduplicated before sending them to `gpt-6-luna`.
-The read checks current publication visibility and deletion flags, and applies
-the shared bans and the label policy loaded at the start of the task. Before
-writing the sidecar, the task drops summaries that used newly excluded authors.
+HeavyPad's completed search snapshot, with identical excerpts deduplicated before
+sending them to `gpt-6-luna`. The task pins one immutable SQLite connection and
+checks the snapshot's deletion flags. Shared bans, current author labels and
+publication opt-outs are checked before reading evidence and again before
+writing the sidecar. A revoked source drops the entire affected summary.
 The existing notes opt-in is restricted to the configured repo and publication host.
 The prompt asks for one or two sentences (30–40 words, at most 50) describing the sampled documents and
 concrete examples, without turning authors' claims into general advice; coverage and AI
@@ -241,10 +242,11 @@ request even after a successful but partial response. In every case, the map con
 
 Generation uses at most six concurrent requests and the dedicated
 `pub-search-atlas-openai-api-key` Prefect Secret, injected as `OPENAI_API_KEY`.
-Evidence reads use the flow's existing `TURSO_URL` and `TURSO_TOKEN`. One
-read-only batch of at most 25 URIs can be in flight, with starts paced to one
-per second and bounded retries for throttling and transient gateway failures.
-Missing credentials or unavailable label policy leaves summaries unavailable.
+The daily snapshot flow leaves its completed database on HeavyPad at
+`/home/stoat/prefect-analytics/pub-search-snapshot/replica.db`. Atlas reads this
+file on the same filesystem. The two live Turso requests read publication
+opt-outs only. Missing snapshot or unavailable live policy leaves summaries
+unavailable. The full sidecar and the Prefect log report the evidence watermark.
 SOPS holds its canonical value under `prefect.blocks`; `pub_search_atlas.OPENAI_API_KEY`
 references that block. Cached summaries require matching membership, text, label,
 prompt, model, and retrieved context. The sidecar records per-response input/output
@@ -256,7 +258,7 @@ The sidecar is always rewritten to prevent stale data from surviving a failed ru
 Standalone refresh in the flow's injected environment:
 
 ```sh
-uv run scripts/atlas_summaries.py site/atlas.json.gz
+uv run scripts/atlas_summaries.py site/atlas.json.gz --snapshot /path/to/completed/replica.db
 # Add --limit 4 for a bounded quality check; --limit 0 disables generation.
 ```
 

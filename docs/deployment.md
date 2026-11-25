@@ -23,6 +23,13 @@ site/deploy.sh
 The dataset is `atlas.json.gz`; `/atlas.json` can return the SPA HTML fallback.
 Verify the published site and Atlas after deployment.
 
+Atlas generator changes are picked up by the next scheduled
+`pub-search-atlas/pub-search-atlas` run on HeavyPad. Use that run for routine
+releases to avoid an extra vector export. Verify the evidence watermark in the
+run log, successful Pages publication, and a matching build timestamp in the
+public summary sidecar. See [snapshot pipeline](snapshot-pipeline.md) for the
+local handoff.
+
 ## MCP packaging
 
 The installable project is `pub-search-mcp/server/`. This nesting works around a

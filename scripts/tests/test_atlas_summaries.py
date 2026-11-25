@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from atlas_summaries import CACHE_URL, generate, lite, prepare_evidence, published_cache, sample_members, validate_answer, write_preview
-from atlas_evidence import EvidenceReader
+from atlas_evidence import EvidenceReader, Visibility, open_snapshot
 from atlas_labels import LABELER_SUMMARY_URL
 
 
@@ -111,46 +111,25 @@ def test_published_cache_accepts_gzip_and_legacy_json(gzip_available):
     assert requests == ([CACHE_URL + '.gz'] if gzip_available else [CACHE_URL + '.gz', CACHE_URL])
 
 
-def test_evidence_reader_retries_only_on_turso():
-    requests = []
-
-    def handle(request):
-        if str(request.url) == LABELER_SUMMARY_URL:
-            return httpx.Response(200, json={"counts": {"labeled": 0}})
-        assert request.url == httpx.URL("https://fixture.invalid/v2/pipeline")
-        assert request.method == "POST"
-        requests.append(json.loads(request.content))
-        if len(requests) == 1:
-            return httpx.Response(429, headers={"Retry-After": "0"})
-        return httpx.Response(200, json={"results": [{"type": "ok", "response": {"result": {"rows": []}}}]})
-
-    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
-        reader = EvidenceReader(http, "libsql://fixture.invalid", "test", interval=0)
-        assert reader.read([{"uri": "at://a/x/1"}]) == []
-    assert len(requests) == 2
-    assert requests[0] == requests[1]
+def write_snapshot(path, documents, publications, watermark):
+    with sqlite3.connect(path) as stored:
+        stored.executescript("""
+            CREATE TABLE documents (
+                uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, platform TEXT,
+                base_path TEXT, path TEXT, publication_uri TEXT, is_bridgyfed INTEGER,
+                url_dead INTEGER, content TEXT
+            );
+            CREATE TABLE publications (uri TEXT PRIMARY KEY, did TEXT, base_path TEXT);
+            CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT);
+        """)
+        stored.executemany("INSERT INTO publications VALUES (?, ?, ?)", publications)
+        stored.executemany("INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", documents)
+        stored.execute("INSERT INTO sync_meta VALUES ('source_watermark', ?)", (watermark,))
 
 
-def test_evidence_query_enforces_live_policy_and_projects_only_excerpts():
+def test_evidence_query_enforces_policy_and_projects_only_excerpts(tmp_path):
     from atlas_context import NOTES_DID, NOTES_HOST
 
-    stored = sqlite3.connect(":memory:")
-    stored.executescript("""
-        CREATE TABLE documents (
-            uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, platform TEXT,
-            base_path TEXT, path TEXT, publication_uri TEXT, is_bridgyfed INTEGER,
-            url_dead INTEGER, content TEXT
-        );
-        CREATE TABLE publications (uri TEXT PRIMARY KEY, did TEXT, base_path TEXT, show_in_discover INTEGER);
-        CREATE INDEX publications_did ON publications(did);
-    """)
-    stored.executemany("INSERT INTO publications VALUES (?, ?, ?, ?)", [
-        ("private", "did:plc:private", "private.example", 0),
-        ("owned", NOTES_DID, NOTES_HOST, 0),
-    ])
-    banned = next(line.split("#", 1)[0].strip() for line in
-                  (Path(__file__).resolve().parents[2] / "banned-dids.txt").read_text().splitlines()
-                  if line.split("#", 1)[0].strip())
     fixture = [
         ("visible", "did:plc:writer", "public.example", None, 0, 0),
         ("linked-private", "did:plc:private", "", "private", 0, 0),
@@ -160,41 +139,29 @@ def test_evidence_query_enforces_live_policy_and_projects_only_excerpts():
         ("other-owned", NOTES_DID, "another.example", None, 0, 0),
         ("labeled", "did:plc:labeled", "", None, 0, 0),
         ("kept", "did:plc:kept", "", None, 0, 0),
-        ("banned", banned, "", None, 0, 0),
         ("bridged", "did:plc:writer", "", None, 1, 0),
         ("dead", "did:plc:writer", "", None, 0, 1),
     ]
+    path = tmp_path / "replica.db"
     uris = {key: f"at://{did}/site.standard.document/{key}" for key, did, *_ in fixture}
-    stored.executemany("INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    write_snapshot(path, [
         (uris[key], did, key, key, "leaflet", host, "/post", pub, bridge, dead, "é" * 3100)
         for key, did, host, pub, bridge, dead in fixture
-    ])
-    calls = []
+    ], [("private", "did:plc:private", "private.example"), ("owned", NOTES_DID, NOTES_HOST)], "today")
+    visibility = Visibility(
+        {"did:plc:labeled"}, {"private", "owned"},
+        {("did:plc:private", "private.example"), (NOTES_DID, NOTES_HOST)},
+    )
 
-    def handle(request):
-        calls.append(request.url)
-        if str(request.url) == LABELER_SUMMARY_URL:
-            return httpx.Response(200, json={
-                "counts": {"labeled": 2},
-                "authors": [
-                    {"did": "did:plc:labeled", "state": "labeled", "kept": False},
-                    {"did": "did:plc:kept", "state": "labeled", "kept": True},
-                ],
-            })
-        assert request.url == httpx.URL("https://fixture.invalid/v2/pipeline")
-        stmt = json.loads(request.content)["requests"][0]["stmt"]
-        params = [p["value"] for p in stmt["args"]]
-        plan = [r[3] for r in stored.execute("EXPLAIN QUERY PLAN " + stmt["sql"], params)]
-        assert not any(operation.startswith(("SCAN d", "SCAN hidden")) for operation in plan)
-        rows = [[{"value": value} for value in row] for row in stored.execute(stmt["sql"], params)]
-        return httpx.Response(200, json={"results": [{"type": "ok", "response": {"result": {"rows": rows}}}]})
-
-    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
-        reader = EvidenceReader(http, "https://fixture.invalid", "test", interval=0)
+    with open_snapshot(path) as connection:
+        reader = EvidenceReader(connection, visibility)
+        statements = []
+        connection.set_trace_callback(statements.append)
         public = reader.read([{"uri": uri} for uri in (*uris.values(), uris["visible"])])
-        assert [doc["uri"] for doc in public] == [
-            uris[key] for key in ("visible", "same-host", "other-owned", "kept")
-        ]
+        connection.set_trace_callback(None)
+        plan = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + statements[0])]
+        assert any("SEARCH d USING INDEX" in operation for operation in plan)
+        assert [doc["uri"] for doc in public] == [uris[key] for key in ("visible", "same-host", "other-owned", "kept")]
         assert all(doc["content"] == "é" * 3000 for doc in public)
         assert public[0]["url"] == "https://public.example/post"
         owned = reader.read([{"uri": uris[key]} for key in ("note", "other-owned")], include_undiscoverable=True)
@@ -203,24 +170,31 @@ def test_evidence_query_enforces_live_policy_and_projects_only_excerpts():
             reader.read([{"uri": uris["linked-private"]}], include_undiscoverable=True)
         with pytest.raises(ValueError, match="too many"):
             reader.read([{"uri": f"at://fixture/x/{i}"} for i in range(26)])
-        stored.execute("UPDATE publications SET show_in_discover = 1 WHERE uri = 'private'")
-        assert [doc["uri"] for doc in reader.read([{"uri": uris["path-private"]}])] == [uris["path-private"]]
-    assert len(calls) == 4
-    stored.close()
 
 
-def test_evidence_reader_refuses_to_query_before_policy_load():
-    def handle(request):
-        assert str(request.url) == LABELER_SUMMARY_URL
-        return httpx.Response(200, json={"counts": {"labeled": 1}})
+def test_snapshot_pins_the_open_generation_and_refuses_missing_files(tmp_path):
+    current = tmp_path / "replica.db"
+    successor = tmp_path / "next.db"
+    with pytest.raises(sqlite3.OperationalError):
+        with open_snapshot(current):
+            pytest.fail("missing evidence snapshot opened")
+    assert not current.exists()
+    write_snapshot(current, [], [], "first")
+    write_snapshot(successor, [], [], "second")
+    visibility = Visibility(set(), set(), set())
+    with open_snapshot(current) as connection:
+        reader = EvidenceReader(connection, visibility)
+        assert reader.watermark() == "first"
+        successor.replace(current)
+        assert reader.watermark() == "first"
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            connection.execute("DELETE FROM sync_meta")
+        with open_snapshot(current) as next_connection:
+            assert EvidenceReader(next_connection, visibility).watermark() == "second"
 
-    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
-        with pytest.raises(ValueError, match="every labeled author"):
-            EvidenceReader(http, "https://fixture.invalid", "test")
 
-
-@pytest.mark.parametrize("label_during_build", [False, True])
-def test_summary_build_routes_member_evidence_to_turso(tmp_path, monkeypatch, label_during_build):
+@pytest.mark.parametrize("policy_change", [None, "label", "publication"])
+def test_summary_reads_local_snapshot_and_rechecks_live_policy(tmp_path, monkeypatch, policy_change):
     from contextlib import nullcontext
     import atlas_summaries
 
@@ -234,13 +208,19 @@ def test_summary_build_routes_member_evidence_to_turso(tmp_path, monkeypatch, la
         "points": points,
         "clusters": {"fine": [{"id": 0, "label": "topic", "count": 3}]},
     }).encode()))
+    replica = tmp_path / "replica.db"
+    write_snapshot(replica, [
+        (point["uri"], f"did:plc:author{i}", "record", f"Title {i}", "leaflet",
+         "publication.example", f"/post-{i}", f"publication{i}", 0, 0, f"Unique evidence {i}")
+        for i, point in enumerate(points)
+    ], [], "today")
     urls = []
 
     def handle(request):
         url = str(request.url)
         urls.append(url)
         if url == LABELER_SUMMARY_URL:
-            if label_during_build and urls.count(url) == 2:
+            if policy_change == "label" and urls.count(url) == 2:
                 return httpx.Response(200, json={
                     "counts": {"labeled": 1},
                     "authors": [{"did": "did:plc:author0", "state": "labeled", "kept": False}],
@@ -251,12 +231,11 @@ def test_summary_build_routes_member_evidence_to_turso(tmp_path, monkeypatch, la
         if url == atlas_summaries.CACHE_URL + ".gz":
             return httpx.Response(200, content=gzip.compress(b'{"version":2,"clusters":[]}'))
         assert url == "https://fixture.invalid/v2/pipeline"
-        args = json.loads(request.content)["requests"][0]["stmt"]["args"]
-        assert {arg["value"] for arg in args} == {point["uri"] for point in points}
-        rows = [[{"value": value} for value in (
-            point["uri"], point["uri"].split("/")[2], "record", f"Title {i}",
-            "leaflet", "publication.example", f"/post-{i}", f"Unique evidence {i}",
-        )] for i, point in enumerate(points)]
+        sql = json.loads(request.content)["requests"][0]["stmt"]["sql"]
+        assert "FROM publications" in sql and "documents" not in sql
+        rows = []
+        if policy_change == "publication" and urls.count(url) == 2:
+            rows = [[{"value": value} for value in ("publication0", "did:plc:author0", "publication.example")]]
         return httpx.Response(200, json={"results": [{"type": "ok", "response": {"result": {"rows": rows}}}]})
 
     client = httpx.Client(transport=httpx.MockTransport(handle))
@@ -269,16 +248,19 @@ def test_summary_build_routes_member_evidence_to_turso(tmp_path, monkeypatch, la
     monkeypatch.setenv("TURSO_URL", "libsql://fixture.invalid")
     monkeypatch.setenv("TURSO_TOKEN", "test")
     monkeypatch.delenv("TURBOPUFFER_API_KEY", raising=False)
-    result = generate(path, "test", level="fine")
-    if label_during_build:
+    result = generate(path, "test", level="fine", snapshot=replica)
+    assert result["evidenceWatermark"] == "today"
+    if policy_change:
         assert result["status"] == "unavailable"
         assert result["clusters"] == []
     else:
         assert result["status"] == "ready"
-        assert {source["excerpt"] for source in result["clusters"][0]["sources"]} == {
+        cluster = result["clusters"][0]
+        assert "policyKeys" not in cluster
+        assert {source["excerpt"] for source in cluster["sources"]} == {
             "Unique evidence 0", "Unique evidence 1", "Unique evidence 2",
         }
-    assert len(urls) == 5
+    assert len(urls) == 6
 
 
 @pytest.mark.parametrize('first', ['invalid json', '{"summary":"Topic.","sourceIds":[99]}', '{"summary":"Sample topic repeats the heading.","sourceIds":[1]}'])

@@ -19,7 +19,7 @@ from openai import OpenAI
 import httpx
 
 from atlas_context import ContextReader, MIN_COSINE, is_owned_note
-from atlas_evidence import EvidenceReader, TEXT_LIMIT
+from atlas_evidence import EvidenceReader, TEXT_LIMIT, open_snapshot, read_visibility, snapshot_path
 
 MODEL = "gpt-6-luna"
 OUTPUT_SCHEMA = {
@@ -170,7 +170,7 @@ def summary_cache(data: dict) -> dict:
             for entry in data.get(field, [])}
 
 
-def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both") -> dict:
+def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both", *, snapshot: Path | None = None) -> dict:
     if limit is not None and not 0 <= limit <= 2000:
         raise ValueError("summary limit must be between 0 and 2000")
     if level not in ("fine", "coarse", "both"):
@@ -195,8 +195,12 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
             if point[field] >= 0:
                 members[(tier, point[field])].append(point)
         clusters.extend((tier, c) for c in sorted(atlas["clusters"][tier], key=lambda c: (-c["count"], c["id"]))[:limit])
-    with httpx.Client(timeout=20) as http:
-        reader = EvidenceReader(http, os.environ.get("TURSO_URL", ""), os.environ.get("TURSO_TOKEN", ""))
+    snapshot = snapshot or snapshot_path()
+    with httpx.Client(timeout=20) as http, open_snapshot(snapshot) as connection:
+        reader = EvidenceReader(connection, read_visibility(http))
+        watermark = reader.watermark()
+        result["evidenceWatermark"] = watermark
+        print(f"Atlas evidence: local snapshot at {watermark}", flush=True)
         recommendations = {}
         try:
             response = http.get(RECOMMENDATIONS_API)
@@ -280,6 +284,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
                 return {"level": tier, "id": cluster["id"], "label": cluster["label"], "memberCount": len(actual),
                         "membershipHash": member_hash, "evidenceHash": evidence_hash, "sources": sources,
                         "usage": usage, "cached": bool(previous), "contextStatus": context_status,
+                        "policyKeys": [docs[e["uri"]]["policyKey"] for e in evidence + context],
                         "missingSources": sum(p["uri"] not in docs for p in selected), **answer}
             except Exception as exc:
                 detail = str(exc.response.status_code) if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
@@ -288,11 +293,12 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             built = list(pool.map(build, clusters))
-        entries = [entry for entry in built if entry is not None]
-        if entries:
-            excluded = reader.labeled_authors()
-            entries = [entry for entry in entries
-                       if all(source["uri"].split("/")[2] not in excluded for source in entry["sources"])]
+        entries = []
+        if any(entry is not None for entry in built):
+            visibility = read_visibility(http)
+            for entry in built:
+                if entry is not None and all(visibility.allows(*key) for key in entry.pop("policyKeys")):
+                    entries.append(entry)
     result["clusters"] = [entry for entry in entries if entry["level"] == "fine"]
     result["regions"] = [entry for entry in entries if entry["level"] == "coarse"]
     result["generated"] = sum(not entry["cached"] for entry in entries)
@@ -332,10 +338,10 @@ def published_cache(http: httpx.Client) -> dict:
     return {}
 
 
-def write_preview(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both") -> None:
+def write_preview(atlas_path: Path, api_key: str, limit: int | None = None, level: str = "both", *, snapshot: Path | None = None) -> None:
     output = atlas_path.with_name("atlas-summaries.json.gz")
     try:
-        result = generate(atlas_path, api_key, limit, level)
+        result = generate(atlas_path, api_key, limit, level, snapshot=snapshot)
     except Exception as exc:
         print(f"summary preview unavailable ({type(exc).__name__})", flush=True)
         result = {"version": VERSION, "status": "unavailable", "clusters": []}
@@ -351,5 +357,6 @@ if __name__ == "__main__":
     parser.add_argument("atlas", type=Path)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--level", choices=("fine", "coarse", "both"), default="both")
+    parser.add_argument("--snapshot", type=Path)
     args = parser.parse_args()
-    write_preview(args.atlas, os.environ.get("OPENAI_API_KEY", ""), args.limit, args.level)
+    write_preview(args.atlas, os.environ.get("OPENAI_API_KEY", ""), args.limit, args.level, snapshot=args.snapshot)

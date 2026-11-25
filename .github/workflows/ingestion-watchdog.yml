@@ -1,7 +1,7 @@
 name: Ingestion Watchdog
 
 # Emits a logfire error event if ingestion freshness or serving health
-# fails; the "watchdog: ingestion stalled" logfire alert routes it to the
+# fails; the "pub-search · watchdog check failed" logfire alert routes it to the
 # pub-search ingestion alerts Discord channel — logfire is the single
 # alerting path (no secondary delivery; a failed emit still fails the run,
 # which is the backstop). Deliberately not bsky, so an atproto outage can't

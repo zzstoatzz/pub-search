@@ -25,6 +25,7 @@ import gzip
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 from collections import Counter
@@ -37,6 +38,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+from atlas_evidence import open_snapshot, snapshot_path
 from atlas_labels import LABELER_SUMMARY_URL, excluded_dids, filter_labeled_rows
 import atlas_view
 
@@ -66,8 +68,6 @@ class Settings(BaseSettings):
     turbopuffer_api_key: str
     turbopuffer_namespace: str = "leaflet-search"
     anthropic_api_key: str = ""  # optional: enables LLM-refined cluster labels
-    turso_url: str = ""  # optional: enables publication data (e.g. https://leaf-....turso.io)
-    turso_token: str = ""
     labeler_summary_url: str = LABELER_SUMMARY_URL
 
     @classmethod
@@ -176,60 +176,20 @@ def dedup_republished_rows(rows: list[dict]) -> list[dict]:
     return kept_no_path + list(best.values())
 
 
-def turso_query_publications(settings: Settings) -> dict[str, dict]:
-    """Fetch publication metadata from Turso. Returns basePath → {name, did, coverImage}."""
-    if not settings.turso_url or not settings.turso_token:
-        return {}
-
-    host = settings.turso_url.replace("https://", "").replace("http://", "").replace("libsql://", "")
-    url = f"https://{host}/v3/pipeline"
-    headers = {"Authorization": f"Bearer {settings.turso_token}"}
-
-    body = {
-        "requests": [
-            {
-                "type": "execute",
-                "stmt": {
-                    "sql": (
-                        "SELECT p.name, p.base_path, p.did, c.cover_image "
-                        "FROM publications p "
-                        "LEFT JOIN ("
-                        "  SELECT publication_uri, MIN(cover_image) as cover_image "
-                        "  FROM documents WHERE cover_image IS NOT NULL "
-                        "  GROUP BY publication_uri"
-                        ") c ON c.publication_uri = p.uri"
-                    )
-                },
-            },
-            {"type": "close"},
-        ]
-    }
-
-    try:
-        resp = httpx.post(url, headers=headers, json=body, timeout=30)
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
-        if not results or "response" not in results[0]:
-            return {}
-        rows = results[0]["response"]["result"]["rows"]
-        cols = [c["name"] for c in results[0]["response"]["result"]["cols"]]
-    except httpx.HTTPError as e:
-        log(f"  warning: turso request failed: {e}")
-        return {}
-    except (KeyError, IndexError) as e:
-        log(f"  warning: unexpected turso response: {e}")
-        return {}
-    lookup = {}
-    for row in rows:
-        values = {cols[i]: (row[i]["value"] if row[i]["type"] != "null" else None) for i in range(len(cols))}
-        bp = values.get("base_path")
-        if bp:
-            lookup[bp] = {
-                "name": values.get("name") or bp,
-                "did": values.get("did") or "",
-                "coverImage": values.get("cover_image") or "",
-            }
-    return lookup
+def snapshot_publications(path: Path) -> dict[str, dict]:
+    with open_snapshot(path) as connection:
+        rows = connection.execute("""
+            SELECT p.name, p.base_path, p.did, c.cover_image
+            FROM publications p
+            LEFT JOIN (
+                SELECT publication_uri, MIN(cover_image) AS cover_image
+                FROM documents WHERE cover_image IS NOT NULL
+                GROUP BY publication_uri
+            ) c ON c.publication_uri = p.uri
+            WHERE p.base_path <> ''
+        """)
+        return {base: {"name": name or base, "did": did or "", "coverImage": cover or ""}
+                for name, base, did, cover in rows}
 
 
 def extract_terms(title: str) -> list[str]:
@@ -724,11 +684,12 @@ def main():
 
     # --- step 5: publication centroids ---
     log("computing publication centroids...")
-    pub_lookup = turso_query_publications(settings)
-    if pub_lookup:
-        log(f"  fetched {len(pub_lookup)} publications from turso")
-    else:
-        log("  (no TURSO_URL/TURSO_TOKEN — using basePath grouping only)")
+    try:
+        pub_lookup = snapshot_publications(snapshot_path())
+        log(f"  loaded {len(pub_lookup)} publications from the local snapshot")
+    except (KeyError, sqlite3.Error) as exc:
+        pub_lookup = {}
+        log(f"  publication snapshot unavailable ({type(exc).__name__}); using basePath grouping")
 
     # group documents by basePath → list of 2D positions
     bp_groups: dict[str, list[int]] = {}

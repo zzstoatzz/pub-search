@@ -29,7 +29,7 @@ autostart disabled). The old tap-outbox/cursor checks alerted on a zombie
 machine that fly auto-started whenever this watchdog probed it.
 
 Alerting is consolidated on logfire — the single alerting path: a stall
-emits a logfire error event and the "watchdog: ingestion stalled" logfire
+emits a logfire error event and the "pub-search · watchdog check failed" logfire
 alert routes it to the pub-search ingestion alerts Discord channel, the
 same pipeline every other alert uses. Deliberately NOT bsky (an atproto
 outage stalls ingest AND eats the alert if the alert rides atproto), and
