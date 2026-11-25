@@ -2167,7 +2167,7 @@ fn jsonStr(obj: json.ObjectMap, key: []const u8) []const u8 {
 /// quotes (blog.google/products/search/how-were-improving-search-results-
 /// when-you-use-quotes/): a quoted term is REQUIRED and matched exactly.
 /// - bare words are OR'd together, prefix `*` on last word (recall-first)
-/// - user-quoted terms (`"..."`) are required: AND'd with each other, and
+/// - terms in straight or typographic double quotes are required: AND'd with each other, and
 ///   with the bare-word group if one exists. Quoting a single word also
 ///   disables prefix expansion (Google: quoting disables variant matching).
 /// - punctuation inside quotes tokenizes as spaces (unicode61), matching
@@ -2183,6 +2183,12 @@ fn jsonStr(obj: json.ObjectMap, key: []const u8) []const u8 {
 /// in a 85k-document corpus (2026-09-05), 33s just to rank; `an*` is 5,283
 /// terms. Three letters keeps the fan-out in the hundreds.
 const MIN_PREFIX_LEN: usize = 3;
+
+fn doubleQuoteWidth(text: []const u8) usize {
+    if (std.mem.startsWith(u8, text, "\"")) return 1;
+    if (std.mem.startsWith(u8, text, "“") or std.mem.startsWith(u8, text, "”")) return "“".len;
+    return 0;
+}
 
 pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
     if (query.len == 0) return "";
@@ -2207,13 +2213,14 @@ pub fn buildFtsQuery(alloc: Allocator, query: []const u8) ![]const u8 {
 
     var i: usize = 0;
     while (i < trimmed.len) {
-        if (trimmed[i] == '"') {
+        const opening_width = doubleQuoteWidth(trimmed[i..]);
+        if (opening_width != 0) {
             // quoted phrase: scan to closing quote or end
-            i += 1; // skip opening quote
+            i += opening_width;
             const inner_start = i;
-            while (i < trimmed.len and trimmed[i] != '"') : (i += 1) {}
+            while (i < trimmed.len and doubleQuoteWidth(trimmed[i..]) == 0) : (i += 1) {}
             const inner_end = i;
-            if (i < trimmed.len) i += 1; // skip closing quote
+            i += doubleQuoteWidth(trimmed[i..]);
 
             // only emit if inner text has alphanumeric content
             const inner = trimmed[inner_start..inner_end];
@@ -2338,12 +2345,13 @@ fn firstQueryHit(content: []const u8, query: []const u8) ?usize {
     var i: usize = 0;
     while (i < query.len) {
         var needle: []const u8 = "";
-        if (query[i] == '"') {
-            const open = i + 1;
+        const opening_width = doubleQuoteWidth(query[i..]);
+        if (opening_width != 0) {
+            const open = i + opening_width;
             var close = open;
-            while (close < query.len and query[close] != '"') close += 1;
+            while (close < query.len and doubleQuoteWidth(query[close..]) == 0) close += 1;
             needle = query[open..close];
-            i = if (close < query.len) close + 1 else close;
+            i = close + doubleQuoteWidth(query[close..]);
         } else if (isAlnum(query[i])) {
             const word_start = i;
             while (i < query.len and isAlnum(query[i])) i += 1;
@@ -2361,6 +2369,28 @@ fn firstQueryHit(content: []const u8, query: []const u8) ?usize {
 }
 
 // --- tests ---
+
+test "typographic quotes use phrase matching and phrase snippets" {
+    const phrase = "we live in a space station";
+    const content = "We found a space station. Then we live in a space station.";
+    const spellings = [_][]const u8{ "\"", "“", "”", "" };
+
+    for (spellings[0..3]) |opening| {
+        for (spellings) |closing| {
+            const query = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}{s}", .{ opening, phrase, closing });
+            defer std.testing.allocator.free(query);
+
+            const result = try buildFtsQuery(std.testing.allocator, query);
+            defer std.testing.allocator.free(result);
+            try std.testing.expectEqualStrings("\"" ++ phrase ++ "\"", result);
+            try std.testing.expectEqual(std.mem.indexOf(u8, content, phrase), firstQueryHit(content, query));
+        }
+    }
+
+    const mixed = try buildFtsQuery(std.testing.allocator, "orbit “space station” habitat");
+    defer std.testing.allocator.free(mixed);
+    try std.testing.expectEqualStrings("\"space station\" AND (orbit OR habitat*)", mixed);
+}
 
 test "buildFtsQuery: empty string" {
     const result = try buildFtsQuery(std.testing.allocator, "");
