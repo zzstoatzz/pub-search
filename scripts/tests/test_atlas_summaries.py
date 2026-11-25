@@ -4,12 +4,16 @@
 import gzip
 import json
 from pathlib import Path
+import sqlite3
 import sys
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from atlas_summaries import CACHE_URL, generate, lite, prepare_evidence, published_cache, sample_members, validate_answer, write_preview
+from atlas_evidence import EvidenceReader
+from atlas_labels import LABELER_SUMMARY_URL
 
 
 def test_crossposts_do_not_count_as_independent_evidence():
@@ -107,39 +111,174 @@ def test_published_cache_accepts_gzip_and_legacy_json(gzip_available):
     assert requests == ([CACHE_URL + '.gz'] if gzip_available else [CACHE_URL + '.gz', CACHE_URL])
 
 
-def test_document_reader_recovers_from_real_http_throttling():
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    import threading
-    import httpx
-    from atlas_summaries import DocumentReader
-
+def test_evidence_reader_retries_only_on_turso():
     requests = []
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            requests.append(self.path)
-            self.send_response(429 if len(requests) == 1 else 200)
-            self.send_header('Retry-After', '0')
-            self.end_headers()
-            self.wfile.write(b'{"documents":[],"missing":["at://a/x/1"]}')
+    def handle(request):
+        if str(request.url) == LABELER_SUMMARY_URL:
+            return httpx.Response(200, json={"counts": {"labeled": 0}})
+        assert request.url == httpx.URL("https://fixture.invalid/v2/pipeline")
+        assert request.method == "POST"
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"results": [{"type": "ok", "response": {"result": {"rows": []}}}]})
 
-        def log_message(self, *args):
-            pass
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        reader = EvidenceReader(http, "libsql://fixture.invalid", "test", interval=0)
+        assert reader.read([{"uri": "at://a/x/1"}]) == []
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
 
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        with httpx.Client() as http:
-            reader = DocumentReader(http, f'http://127.0.0.1:{server.server_port}/document', interval=0.01)
-            result = reader.read([{'uri': 'at://a/x/1'}])
-        assert result == {'documents': [], 'missing': ['at://a/x/1']}
-        assert len(requests) == 2
-        assert requests[0] == requests[1]
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+
+def test_evidence_query_enforces_live_policy_and_projects_only_excerpts():
+    from atlas_context import NOTES_DID, NOTES_HOST
+
+    stored = sqlite3.connect(":memory:")
+    stored.executescript("""
+        CREATE TABLE documents (
+            uri TEXT PRIMARY KEY, did TEXT, rkey TEXT, title TEXT, platform TEXT,
+            base_path TEXT, path TEXT, publication_uri TEXT, is_bridgyfed INTEGER,
+            url_dead INTEGER, content TEXT
+        );
+        CREATE TABLE publications (uri TEXT PRIMARY KEY, did TEXT, base_path TEXT, show_in_discover INTEGER);
+        CREATE INDEX publications_did ON publications(did);
+    """)
+    stored.executemany("INSERT INTO publications VALUES (?, ?, ?, ?)", [
+        ("private", "did:plc:private", "private.example", 0),
+        ("owned", NOTES_DID, NOTES_HOST, 0),
+    ])
+    banned = next(line.split("#", 1)[0].strip() for line in
+                  (Path(__file__).resolve().parents[2] / "banned-dids.txt").read_text().splitlines()
+                  if line.split("#", 1)[0].strip())
+    fixture = [
+        ("visible", "did:plc:writer", "public.example", None, 0, 0),
+        ("linked-private", "did:plc:private", "", "private", 0, 0),
+        ("path-private", "did:plc:private", "private.example", None, 0, 0),
+        ("same-host", "did:plc:other", "private.example", None, 0, 0),
+        ("note", NOTES_DID, "", "owned", 0, 0),
+        ("other-owned", NOTES_DID, "another.example", None, 0, 0),
+        ("labeled", "did:plc:labeled", "", None, 0, 0),
+        ("kept", "did:plc:kept", "", None, 0, 0),
+        ("banned", banned, "", None, 0, 0),
+        ("bridged", "did:plc:writer", "", None, 1, 0),
+        ("dead", "did:plc:writer", "", None, 0, 1),
+    ]
+    uris = {key: f"at://{did}/site.standard.document/{key}" for key, did, *_ in fixture}
+    stored.executemany("INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+        (uris[key], did, key, key, "leaflet", host, "/post", pub, bridge, dead, "é" * 3100)
+        for key, did, host, pub, bridge, dead in fixture
+    ])
+    calls = []
+
+    def handle(request):
+        calls.append(request.url)
+        if str(request.url) == LABELER_SUMMARY_URL:
+            return httpx.Response(200, json={
+                "counts": {"labeled": 2},
+                "authors": [
+                    {"did": "did:plc:labeled", "state": "labeled", "kept": False},
+                    {"did": "did:plc:kept", "state": "labeled", "kept": True},
+                ],
+            })
+        assert request.url == httpx.URL("https://fixture.invalid/v2/pipeline")
+        stmt = json.loads(request.content)["requests"][0]["stmt"]
+        params = [p["value"] for p in stmt["args"]]
+        plan = [r[3] for r in stored.execute("EXPLAIN QUERY PLAN " + stmt["sql"], params)]
+        assert not any(operation.startswith(("SCAN d", "SCAN hidden")) for operation in plan)
+        rows = [[{"value": value} for value in row] for row in stored.execute(stmt["sql"], params)]
+        return httpx.Response(200, json={"results": [{"type": "ok", "response": {"result": {"rows": rows}}}]})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        reader = EvidenceReader(http, "https://fixture.invalid", "test", interval=0)
+        public = reader.read([{"uri": uri} for uri in (*uris.values(), uris["visible"])])
+        assert [doc["uri"] for doc in public] == [
+            uris[key] for key in ("visible", "same-host", "other-owned", "kept")
+        ]
+        assert all(doc["content"] == "é" * 3000 for doc in public)
+        assert public[0]["url"] == "https://public.example/post"
+        owned = reader.read([{"uri": uris[key]} for key in ("note", "other-owned")], include_undiscoverable=True)
+        assert [doc["url"] for doc in owned] == [f"https://{NOTES_HOST}/post"]
+        with pytest.raises(ValueError, match="notes repo"):
+            reader.read([{"uri": uris["linked-private"]}], include_undiscoverable=True)
+        with pytest.raises(ValueError, match="too many"):
+            reader.read([{"uri": f"at://fixture/x/{i}"} for i in range(26)])
+        stored.execute("UPDATE publications SET show_in_discover = 1 WHERE uri = 'private'")
+        assert [doc["uri"] for doc in reader.read([{"uri": uris["path-private"]}])] == [uris["path-private"]]
+    assert len(calls) == 4
+    stored.close()
+
+
+def test_evidence_reader_refuses_to_query_before_policy_load():
+    def handle(request):
+        assert str(request.url) == LABELER_SUMMARY_URL
+        return httpx.Response(200, json={"counts": {"labeled": 1}})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        with pytest.raises(ValueError, match="every labeled author"):
+            EvidenceReader(http, "https://fixture.invalid", "test")
+
+
+@pytest.mark.parametrize("label_during_build", [False, True])
+def test_summary_build_routes_member_evidence_to_turso(tmp_path, monkeypatch, label_during_build):
+    from contextlib import nullcontext
+    import atlas_summaries
+
+    points = [
+        {"uri": f"at://did:plc:author{i}/site.standard.document/record", "clusterFine": 0}
+        for i in range(3)
+    ]
+    path = tmp_path / "atlas.json.gz"
+    path.write_bytes(gzip.compress(json.dumps({
+        "meta": {"generatedAt": "today", "membershipVersion": 1},
+        "points": points,
+        "clusters": {"fine": [{"id": 0, "label": "topic", "count": 3}]},
+    }).encode()))
+    urls = []
+
+    def handle(request):
+        url = str(request.url)
+        urls.append(url)
+        if url == LABELER_SUMMARY_URL:
+            if label_during_build and urls.count(url) == 2:
+                return httpx.Response(200, json={
+                    "counts": {"labeled": 1},
+                    "authors": [{"did": "did:plc:author0", "state": "labeled", "kept": False}],
+                })
+            return httpx.Response(200, json={"counts": {"labeled": 0}})
+        if url == atlas_summaries.RECOMMENDATIONS_API:
+            return httpx.Response(200, json=[])
+        if url == atlas_summaries.CACHE_URL + ".gz":
+            return httpx.Response(200, content=gzip.compress(b'{"version":2,"clusters":[]}'))
+        assert url == "https://fixture.invalid/v2/pipeline"
+        args = json.loads(request.content)["requests"][0]["stmt"]["args"]
+        assert {arg["value"] for arg in args} == {point["uri"] for point in points}
+        rows = [[{"value": value} for value in (
+            point["uri"], point["uri"].split("/")[2], "record", f"Title {i}",
+            "leaflet", "publication.example", f"/post-{i}", f"Unique evidence {i}",
+        )] for i, point in enumerate(points)]
+        return httpx.Response(200, json={"results": [{"type": "ok", "response": {"result": {"rows": rows}}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(atlas_summaries.httpx, "Client", lambda **kwargs: client)
+    monkeypatch.setattr(atlas_summaries, "OpenAI", lambda **kwargs: nullcontext())
+    monkeypatch.setattr(atlas_summaries, "request_summary", lambda *args: (
+        {"summary": "These posts describe writing.", "sourceIds": [1]},
+        {"inputTokens": 10, "outputTokens": 5},
+    ))
+    monkeypatch.setenv("TURSO_URL", "libsql://fixture.invalid")
+    monkeypatch.setenv("TURSO_TOKEN", "test")
+    monkeypatch.delenv("TURBOPUFFER_API_KEY", raising=False)
+    result = generate(path, "test", level="fine")
+    if label_during_build:
+        assert result["status"] == "unavailable"
+        assert result["clusters"] == []
+    else:
+        assert result["status"] == "ready"
+        assert {source["excerpt"] for source in result["clusters"][0]["sources"]} == {
+            "Unique evidence 0", "Unique evidence 1", "Unique evidence 2",
+        }
+    assert len(urls) == 5
 
 
 @pytest.mark.parametrize('first', ['invalid json', '{"summary":"Topic.","sourceIds":[99]}', '{"summary":"Sample topic repeats the heading.","sourceIds":[1]}'])

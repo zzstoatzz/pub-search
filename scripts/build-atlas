@@ -37,7 +37,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from atlas_labels import excluded_dids, filter_labeled_rows
+from atlas_labels import LABELER_SUMMARY_URL, excluded_dids, filter_labeled_rows
 import atlas_view
 
 
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""  # optional: enables LLM-refined cluster labels
     turso_url: str = ""  # optional: enables publication data (e.g. https://leaf-....turso.io)
     turso_token: str = ""
-    labeler_summary_url: str = "https://leaflet-search-backend.fly.dev/api/labeler"
+    labeler_summary_url: str = LABELER_SUMMARY_URL
 
     @classmethod
     def settings_customise_sources(cls, settings_cls, **kwargs):

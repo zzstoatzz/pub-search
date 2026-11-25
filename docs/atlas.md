@@ -217,9 +217,13 @@ recommenders, not proof of accuracy; they select evidence and are not presented 
 the model as authority. A missing leaderboard entry means unknown support, not
 disapproval. Retrieval failure falls back to the original sampler. The pool and
 counts used are saved alongside the summaries for reproducibility. The
-document API supplies policy-filtered extracted text; the first 3,000 characters per
-document go to `gpt-6-luna`, with identical excerpts deduplicated. The prompt asks for
-one or two sentences (30–40 words, at most 50) describing the sampled documents and
+summary task reads the first 3,000 characters of extracted text by URI from
+Turso, with identical excerpts deduplicated before sending them to `gpt-6-luna`.
+The read checks current publication visibility and deletion flags, and applies
+the shared bans and the label policy loaded at the start of the task. Before
+writing the sidecar, the task drops summaries that used newly excluded authors.
+The existing notes opt-in is restricted to the configured repo and publication host.
+The prompt asks for one or two sentences (30–40 words, at most 50) describing the sampled documents and
 concrete examples, without turning authors' claims into general advice; coverage and AI
 attribution appear in the sources disclosure. Both tiers use the same summary panel. These
 summaries have not undergone independent quality evaluation.
@@ -237,8 +241,10 @@ request even after a successful but partial response. In every case, the map con
 
 Generation uses at most six concurrent requests and the dedicated
 `pub-search-atlas-openai-api-key` Prefect Secret, injected as `OPENAI_API_KEY`.
-Document hydration is paced to one request per second, with bounded retries for
-429 and transient gateway failures.
+Evidence reads use the flow's existing `TURSO_URL` and `TURSO_TOKEN`. One
+read-only batch of at most 25 URIs can be in flight, with starts paced to one
+per second and bounded retries for throttling and transient gateway failures.
+Missing credentials or unavailable label policy leaves summaries unavailable.
 SOPS holds its canonical value under `prefect.blocks`; `pub_search_atlas.OPENAI_API_KEY`
 references that block. Cached summaries require matching membership, text, label,
 prompt, model, and retrieved context. The sidecar records per-response input/output

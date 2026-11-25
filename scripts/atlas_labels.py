@@ -1,14 +1,26 @@
+LABELER_SUMMARY_URL = "https://leaflet-search-backend.fly.dev/api/labeler"
+
+
 def excluded_dids(summary: dict) -> set[str]:
     authors = summary.get("authors", [])
     labeled = [author for author in authors if author.get("state") == "labeled"]
     expected = summary.get("counts", {}).get("labeled")
-    if not isinstance(expected, int) or len(labeled) != expected:
+    if (
+        type(expected) is not int
+        or len(labeled) != expected
+        or any(
+            not isinstance(author.get("did"), str)
+            or not author["did"].startswith("did:")
+            or type(author.get("kept", False)) is not bool
+            for author in labeled
+        )
+        or len({author["did"] for author in labeled}) != expected
+    ):
         raise ValueError("labeler summary does not contain every labeled author")
     return {
         author["did"]
         for author in labeled
         if not author.get("kept", False)
-        and isinstance(author.get("did"), str)
     }
 
 

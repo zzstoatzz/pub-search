@@ -12,8 +12,6 @@ import hashlib
 import json
 import os
 import re
-import threading
-import time
 import zlib
 from pathlib import Path
 
@@ -21,6 +19,7 @@ from openai import OpenAI
 import httpx
 
 from atlas_context import ContextReader, MIN_COSINE, is_owned_note
+from atlas_evidence import EvidenceReader, TEXT_LIMIT
 
 MODEL = "gpt-6-luna"
 OUTPUT_SCHEMA = {
@@ -30,8 +29,6 @@ OUTPUT_SCHEMA = {
 }
 VERSION = 2
 SAMPLE_SIZE = 10
-TEXT_LIMIT = 3000
-DOCUMENT_API = "https://pub-search.waow.tech/api/document"
 CACHE_URL = "https://pub-search.waow.tech/atlas-summaries.json"
 RECOMMENDATIONS_API = "https://pub-search.waow.tech/api/recommended?since=all&sort=top&limit=250"
 SYSTEM = """Describe the contents of a group of documents on an interactive topic map.
@@ -165,34 +162,6 @@ def request_summary(model: OpenAI, label: str, evidence: list[dict], context: li
     raise RuntimeError("summary retries exhausted")
 
 
-class DocumentReader:
-    def __init__(self, http: httpx.Client, url: str = DOCUMENT_API, interval: float = 1):
-        self.http = http
-        self.url = url
-        self.interval = interval
-        self.lock = threading.Lock()
-        self.next_request = 0.0
-
-    def read(self, selected: list[dict], include_undiscoverable: bool = False) -> dict:
-        for attempt in range(4):
-            with self.lock:
-                time.sleep(max(0, self.next_request - time.monotonic()))
-                self.next_request = time.monotonic() + self.interval
-            params = {"uri": ",".join(p["uri"] for p in selected)}
-            if include_undiscoverable:
-                params["include_undiscoverable"] = "true"
-            response = self.http.get(self.url, params=params)
-            if response.status_code in (429, 502, 503, 504) and attempt < 3:
-                retry = response.headers.get("retry-after", "")
-                delay = min(120, float(retry)) if retry.isdigit() else 5 * 2 ** attempt
-                with self.lock:
-                    self.next_request = max(self.next_request, time.monotonic() + delay)
-                continue
-            response.raise_for_status()
-            return response.json()
-        raise RuntimeError("document retries exhausted")
-
-
 def summary_cache(data: dict) -> dict:
     if data.get("version") != VERSION:
         return {}
@@ -227,7 +196,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
                 members[(tier, point[field])].append(point)
         clusters.extend((tier, c) for c in sorted(atlas["clusters"][tier], key=lambda c: (-c["count"], c["id"]))[:limit])
     with httpx.Client(timeout=20) as http:
-        reader = DocumentReader(http)
+        reader = EvidenceReader(http, os.environ.get("TURSO_URL", ""), os.environ.get("TURSO_TOKEN", ""))
         recommendations = {}
         try:
             response = http.get(RECOMMENDATIONS_API)
@@ -261,7 +230,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
                 for opt_in in (False, True):
                     group = [p for p in selected if is_owned_note(p) == opt_in]
                     if group:
-                        docs.update({d["uri"]: d for d in reader.read(group, opt_in)["documents"]
+                        docs.update({d["uri"]: d for d in reader.read(group, opt_in)
                                      if isinstance(d.get("content"), str) and d["content"].strip()})
                 evidence = prepare_evidence(selected, docs)
                 if len(evidence) < 3:
@@ -275,7 +244,7 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
                         for opt_in in (False, True):
                             group = [p for p in candidates if p["includeUndiscoverable"] == opt_in]
                             if group:
-                                context_docs.update({d["uri"]: d for d in reader.read(group, opt_in)["documents"]
+                                context_docs.update({d["uri"]: d for d in reader.read(group, opt_in)
                                                      if isinstance(d.get("content"), str) and d["content"].strip()})
                         existing_text = {" ".join(e["text"].split()).casefold() for e in evidence}
                         similarities = {p["uri"]: p["cosineSimilarity"] for p in candidates}
@@ -319,7 +288,11 @@ def generate(atlas_path: Path, api_key: str, limit: int | None = None, level: st
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             built = list(pool.map(build, clusters))
-    entries = [entry for entry in built if entry is not None]
+        entries = [entry for entry in built if entry is not None]
+        if entries:
+            excluded = reader.labeled_authors()
+            entries = [entry for entry in entries
+                       if all(source["uri"].split("/")[2] not in excluded for source in entry["sources"])]
     result["clusters"] = [entry for entry in entries if entry["level"] == "fine"]
     result["regions"] = [entry for entry in entries if entry["level"] == "coarse"]
     result["generated"] = sum(not entry["cached"] for entry in entries)
