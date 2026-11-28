@@ -489,6 +489,8 @@ fn createSchema(self: *LocalDb) !void {
     addColumnIfMissing(c, "publications", "indexed_at", "TEXT");
     addColumnIfMissing(c, "publications", "show_in_discover", "INTEGER NOT NULL DEFAULT 1");
 
+    try c.exec("CREATE INDEX IF NOT EXISTS idx_documents_embedded_at ON documents(embedded_at) WHERE embedded_at IS NOT NULL", .{});
+
     // The pre-v5 covering index (idx_documents_search_cover) is obsolete:
     // v5 stores `content` last, so the rowid probes the search SQL now does
     // never read past a body. Pre-v5 snapshots may still carry the index;
@@ -691,6 +693,17 @@ fn unlinkDbFiles(path: [:0]const u8) void {
         const z = std.mem.printSentinel(&b, "{s}{s}", .{ path, sfx }, 0) catch return;
         _ = std.c.unlink(z.ptr);
     }
+}
+
+test "snapshot stats count embeddings with a covering index" {
+    const c = try zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite);
+    defer c.close();
+    var local = LocalDb.init(std.testing.allocator, std.testing.io);
+    local.conn = c;
+    try local.createSchema();
+    const row = (try c.row("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM documents WHERE embedded_at IS NOT NULL", .{})).?;
+    defer row.deinit();
+    try std.testing.expect(std.mem.indexOf(u8, row.text(3), "COVERING INDEX idx_documents_embedded_at") != null);
 }
 
 test "read pool: concurrent nested queries never deadlock and never leak" {
